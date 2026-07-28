@@ -9,7 +9,15 @@ export const rules: Required<ModuleOptions>['rules'] = [
     use: 'node-loader',
   },
   {
+    test: /[/\\]node_modules[/\\]docx[/\\].+\.(m?js|cjs)$/,
+    parser: { amd: false },
+  },
+  {
     test: /[/\\]node_modules[/\\].+\.(m?js|node)$/,
+    // docx is a portable JavaScript bundle. Sending its embedded JSZip loader
+    // through the native-asset relocator makes the dynamic compatibility
+    // require look like a native dependency and fails the Forge build.
+    exclude: /[/\\]node_modules[/\\]docx[/\\]/,
     parser: { amd: false },
     use: {
       loader: '@vercel/webpack-asset-relocator-loader',

@@ -21,7 +21,14 @@ const makeTemporaryDirectory = async (): Promise<string> => {
   return directory;
 };
 
-const writeRuntime = async (resourcesRoot: string): Promise<void> => {
+const writeRuntime = async (
+  resourcesRoot: string,
+  speakerChildPath = path.join(
+    path.dirname(resourcesRoot),
+    'scripts',
+    'speaker-diarization-child.cjs',
+  ),
+): Promise<void> => {
   const sidecarDirectory = path.join(
     resourcesRoot,
     'sidecars',
@@ -29,6 +36,12 @@ const writeRuntime = async (resourcesRoot: string): Promise<void> => {
   );
   await mkdir(sidecarDirectory, { recursive: true });
   await mkdir(path.join(resourcesRoot, 'models'), { recursive: true });
+  await mkdir(path.join(resourcesRoot, 'diarization'), { recursive: true });
+  await mkdir(
+    path.join(resourcesRoot, 'speaker-runtime', 'sherpa-onnx-node'),
+    { recursive: true },
+  );
+  await mkdir(path.dirname(speakerChildPath), { recursive: true });
 
   const whisperPath = path.join(sidecarDirectory, 'whisper-cli');
   const ffmpegPath = path.join(sidecarDirectory, 'ffmpeg');
@@ -40,6 +53,24 @@ const writeRuntime = async (resourcesRoot: string): Promise<void> => {
     path.join(resourcesRoot, 'models', 'ggml-small.en.bin'),
     'model',
   );
+  await writeFile(
+    path.join(resourcesRoot, 'diarization', 'pyannote-segmentation-3.0.onnx'),
+    'speaker segmentation model',
+  );
+  await writeFile(
+    path.join(resourcesRoot, 'diarization', '3dspeaker-eres2net-base.onnx'),
+    'speaker embedding model',
+  );
+  await writeFile(
+    path.join(
+      resourcesRoot,
+      'speaker-runtime',
+      'sherpa-onnx-node',
+      'sherpa-onnx.js',
+    ),
+    'speaker module',
+  );
+  await writeFile(speakerChildPath, 'speaker child process');
 };
 
 afterEach(async () => {
@@ -73,6 +104,25 @@ describe('resolveEngineRuntime', () => {
         'ffmpeg',
       ),
       modelPath: path.join(resourcesRoot, 'models', 'ggml-small.en.bin'),
+      speakerDiarization: {
+        childPath: path.join(appPath, 'scripts', 'speaker-diarization-child.cjs'),
+        embeddingModelPath: path.join(
+          resourcesRoot,
+          'diarization',
+          '3dspeaker-eres2net-base.onnx',
+        ),
+        modulePath: path.join(
+          resourcesRoot,
+          'speaker-runtime',
+          'sherpa-onnx-node',
+          'sherpa-onnx.js',
+        ),
+        segmentationModelPath: path.join(
+          resourcesRoot,
+          'diarization',
+          'pyannote-segmentation-3.0.onnx',
+        ),
+      },
       whisperPath: path.join(
         resourcesRoot,
         'sidecars',
@@ -88,10 +138,18 @@ describe('resolveEngineRuntime', () => {
     const whisperPath = path.join(overridesRoot, 'whisper-cli');
     const ffmpegPath = path.join(overridesRoot, 'ffmpeg');
     const modelPath = path.join(overridesRoot, 'model.bin');
+    const speakerChildPath = path.join(overridesRoot, 'speaker-child.cjs');
+    const speakerEmbeddingModelPath = path.join(overridesRoot, 'embedding.onnx');
+    const speakerModulePath = path.join(overridesRoot, 'sherpa-onnx.js');
+    const speakerSegmentationModelPath = path.join(overridesRoot, 'segmentation.onnx');
     await Promise.all([
       writeFile(whisperPath, 'whisper'),
       writeFile(ffmpegPath, 'ffmpeg'),
       writeFile(modelPath, 'model'),
+      writeFile(speakerChildPath, 'child'),
+      writeFile(speakerEmbeddingModelPath, 'embedding'),
+      writeFile(speakerModulePath, 'module'),
+      writeFile(speakerSegmentationModelPath, 'segmentation'),
     ]);
     await Promise.all([chmod(whisperPath, 0o755), chmod(ffmpegPath, 0o755)]);
 
@@ -104,18 +162,35 @@ describe('resolveEngineRuntime', () => {
         SOTTO_WHISPER_PATH: whisperPath,
         SOTTO_FFMPEG_PATH: ffmpegPath,
         SOTTO_MODEL_PATH: modelPath,
+        SOTTO_SPEAKER_CHILD_PATH: speakerChildPath,
+        SOTTO_SPEAKER_EMBEDDING_MODEL_PATH: speakerEmbeddingModelPath,
+        SOTTO_SPEAKER_MODULE_PATH: speakerModulePath,
+        SOTTO_SPEAKER_SEGMENTATION_MODEL_PATH: speakerSegmentationModelPath,
       },
     });
 
     expect(status.ready).toBe(true);
-    expect(status.runtime).toEqual({ ffmpegPath, modelPath, whisperPath });
+    expect(status.runtime).toEqual({
+      ffmpegPath,
+      modelPath,
+      speakerDiarization: {
+        childPath: speakerChildPath,
+        embeddingModelPath: speakerEmbeddingModelPath,
+        modulePath: speakerModulePath,
+        segmentationModelPath: speakerSegmentationModelPath,
+      },
+      whisperPath,
+    });
     expect(status.components.whisper.source).toBe('override');
   });
 
   it('ignores overrides and uses process resources in packaged mode', async () => {
     const appPath = await makeTemporaryDirectory();
     const resourcesPath = await makeTemporaryDirectory();
-    await writeRuntime(resourcesPath);
+    await writeRuntime(
+      resourcesPath,
+      path.join(resourcesPath, 'speaker-diarization-child.cjs'),
+    );
 
     const status = await resolveEngineRuntime({
       appPath,
@@ -134,6 +209,41 @@ describe('resolveEngineRuntime', () => {
     expect(status.resourcesRoot).toBe(resourcesPath);
     expect(status.components.whisper.source).toBe('bundled');
     expect(status.runtime?.whisperPath.startsWith(resourcesPath)).toBe(true);
+    expect(status.runtime?.speakerDiarization?.childPath).toBe(
+      path.join(resourcesPath, 'speaker-diarization-child.cjs'),
+    );
+  });
+
+  it('keeps Whisper ready when optional speaker resources are unavailable', async () => {
+    const appPath = await makeTemporaryDirectory();
+    const resourcesRoot = path.join(appPath, 'resources');
+    await writeRuntime(resourcesRoot);
+    const embeddingPath = path.join(
+      resourcesRoot,
+      'diarization',
+      '3dspeaker-eres2net-base.onnx',
+    );
+    const modulePath = path.join(
+      resourcesRoot,
+      'speaker-runtime',
+      'sherpa-onnx-node',
+      'sherpa-onnx.js',
+    );
+    await rm(embeddingPath);
+    await chmod(modulePath, 0o000);
+
+    const status = await resolveEngineRuntime({
+      appPath,
+      isPackaged: false,
+      platform: 'darwin',
+      arch: 'arm64',
+      environment: {},
+    });
+
+    expect(status.ready).toBe(true);
+    expect(status.runtime?.speakerDiarization).toBeNull();
+    expect(status.components.speakerEmbeddingModel.state).toBe('missing');
+    expect(status.components.speakerModule.state).toBe('not-readable');
   });
 
   it('reports a relative development override without falling back silently', async () => {

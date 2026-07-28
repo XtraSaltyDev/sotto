@@ -73,7 +73,17 @@ runRuntimeTest(
         mediaKind: 'video',
       });
       expect(records[0].text).toMatch(/ask not what your country can do for you/i);
-      expect(records[0].segments[0]).toMatchObject({ startMs: 0, endMs: 11_000 });
+      expect(records[0].segments.map((segment) => segment.text).join(' ')).toMatch(
+        /ask not what your country can do for you/i,
+      );
+      expect(records[0].segments[0].startMs).toBeGreaterThanOrEqual(0);
+      expect(records[0].segments.at(-1)?.endMs).toBeLessThanOrEqual(
+        records[0].durationMs,
+      );
+      expect(records[0].speakerAnalysis?.speakers).toHaveLength(1);
+      expect(records[0].segments.every((segment) => segment.speakerId !== null)).toBe(
+        true,
+      );
     } finally {
       await service.dispose();
       await rm(temporaryRoot, { force: true, recursive: true });

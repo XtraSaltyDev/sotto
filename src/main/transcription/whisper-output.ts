@@ -3,16 +3,31 @@ import {
   MAX_TRANSCRIPT_OFFSET_MS,
   MAX_TRANSCRIPT_SEGMENTS,
   MAX_TRANSCRIPT_TEXT_CHARACTERS,
-  type TranscriptSegment,
 } from './transcript-types';
 
 export const MAX_WHISPER_JSON_BYTES = 64 * 1_024 * 1_024;
+export const MAX_WHISPER_WORDS = 1_000_000;
+const WHISPER_END_OF_TEXT_TOKEN_ID = 50_256;
+
+export interface WhisperTranscriptSegment {
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface WhisperWord {
+  startMs: number;
+  endMs: number;
+  text: string;
+  segmentIndex: number;
+}
 
 export interface NormalizedWhisperOutput {
   durationMs: number;
   language: string | null;
   text: string;
-  segments: TranscriptSegment[];
+  segments: WhisperTranscriptSegment[];
+  words: WhisperWord[];
 }
 
 export class WhisperOutputValidationError extends Error {
@@ -45,6 +60,20 @@ const normalizeSegmentText = (value: unknown, index: number): string => {
   }
 
   return value.replace(/\s+/gu, ' ').trim();
+};
+
+const readTokenText = (value: unknown, segmentIndex: number, tokenIndex: number): string => {
+  if (
+    typeof value !== 'string' ||
+    value.includes('\0') ||
+    value.length > MAX_SEGMENT_TEXT_CHARACTERS
+  ) {
+    return fail(
+      `transcription[${segmentIndex}].tokens[${tokenIndex}].text is invalid.`,
+    );
+  }
+
+  return value;
 };
 
 const readOffset = (
@@ -112,7 +141,8 @@ export const normalizeWhisperOutput = (value: unknown): NormalizedWhisperOutput 
     );
   }
 
-  const segments: TranscriptSegment[] = [];
+  const segments: WhisperTranscriptSegment[] = [];
+  const words: WhisperWord[] = [];
   let previousEndMs = 0;
   let totalTextCharacters = 0;
   let nonEmptyTextSegments = 0;
@@ -154,6 +184,54 @@ export const normalizeWhisperOutput = (value: unknown): NormalizedWhisperOutput 
     }
 
     segments.push({ startMs, endMs, text });
+
+    if (candidate.tokens !== undefined) {
+      if (!Array.isArray(candidate.tokens)) {
+        return fail(`transcription[${index}].tokens must be an array when present.`);
+      }
+      if (words.length + candidate.tokens.length > MAX_WHISPER_WORDS) {
+        return fail(`Whisper output cannot contain more than ${MAX_WHISPER_WORDS} tokens.`);
+      }
+
+      candidate.tokens.forEach((token, tokenIndex) => {
+        if (!isRecord(token) || !Number.isSafeInteger(token.id)) {
+          return fail(`transcription[${index}].tokens[${tokenIndex}] is invalid.`);
+        }
+
+        const tokenText = readTokenText(token.text, index, tokenIndex);
+        // Whisper token IDs at or above EOT are control or timestamp tokens,
+        // not spoken text. They are validated but never retained.
+        if ((token.id as number) < 0 || (token.id as number) >= WHISPER_END_OF_TEXT_TOKEN_ID) {
+          return;
+        }
+        if (!isRecord(token.offsets)) {
+          return fail(
+            `transcription[${index}].tokens[${tokenIndex}].offsets must be an object.`,
+          );
+        }
+
+        const wordStartMs = readOffset(
+          token.offsets.from,
+          `transcription[${index}].tokens[${tokenIndex}].offsets.from`,
+          startMs,
+        );
+        const wordEndMs = readOffset(
+          token.offsets.to,
+          `transcription[${index}].tokens[${tokenIndex}].offsets.to`,
+          wordStartMs,
+        );
+        if (wordEndMs > endMs) {
+          return fail(`transcription[${index}].tokens[${tokenIndex}] exceeds its segment.`);
+        }
+
+        words.push({
+          startMs: wordStartMs,
+          endMs: wordEndMs,
+          text: tokenText,
+          segmentIndex: index,
+        });
+      });
+    }
     if (text.length > 0) {
       nonEmptyTextSegments += 1;
     }
@@ -168,6 +246,7 @@ export const normalizeWhisperOutput = (value: unknown): NormalizedWhisperOutput 
       .filter((text) => text.length > 0)
       .join(' '),
     segments,
+    words,
   };
 };
 

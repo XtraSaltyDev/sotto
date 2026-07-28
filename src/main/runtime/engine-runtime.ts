@@ -7,12 +7,25 @@ import { resolveWhisperSidecarTarget } from '../sidecars/sidecar-resolver';
 export const ENGINE_OVERRIDE_ENVIRONMENT = {
   ffmpeg: 'SOTTO_FFMPEG_PATH',
   model: 'SOTTO_MODEL_PATH',
+  speakerChild: 'SOTTO_SPEAKER_CHILD_PATH',
+  speakerEmbeddingModel: 'SOTTO_SPEAKER_EMBEDDING_MODEL_PATH',
+  speakerModule: 'SOTTO_SPEAKER_MODULE_PATH',
+  speakerSegmentationModel: 'SOTTO_SPEAKER_SEGMENTATION_MODEL_PATH',
   whisper: 'SOTTO_WHISPER_PATH',
 } as const;
+
+export interface SpeakerDiarizationRuntime {
+  readonly childPath: string;
+  readonly embeddingModelPath: string;
+  readonly modulePath: string;
+  readonly segmentationModelPath: string;
+}
 
 export interface EngineRuntime {
   readonly ffmpegPath: string;
   readonly modelPath: string;
+  /** Speaker labels are an optional enhancement and never gate Whisper. */
+  readonly speakerDiarization: SpeakerDiarizationRuntime | null;
   readonly whisperPath: string;
 }
 
@@ -35,6 +48,10 @@ export interface EngineComponentStatus {
 export interface EngineComponentsStatus {
   readonly ffmpeg: EngineComponentStatus;
   readonly model: EngineComponentStatus;
+  readonly speakerChild: EngineComponentStatus;
+  readonly speakerEmbeddingModel: EngineComponentStatus;
+  readonly speakerModule: EngineComponentStatus;
+  readonly speakerSegmentationModel: EngineComponentStatus;
   readonly whisper: EngineComponentStatus;
 }
 
@@ -210,6 +227,10 @@ export const resolveEngineRuntime = async (
     const components: EngineComponentsStatus = {
       ffmpeg: unavailableComponent('unsupported-platform'),
       model: unavailableComponent('unsupported-platform'),
+      speakerChild: unavailableComponent('unsupported-platform'),
+      speakerEmbeddingModel: unavailableComponent('unsupported-platform'),
+      speakerModule: unavailableComponent('unsupported-platform'),
+      speakerSegmentationModel: unavailableComponent('unsupported-platform'),
       whisper: unavailableComponent('unsupported-platform'),
     };
 
@@ -224,12 +245,31 @@ export const resolveEngineRuntime = async (
   }
 
   const sidecarDirectory = path.join(resourcesRoot, target.resourceDirectory);
-  const bundledPaths: EngineRuntime = {
+  const bundledPaths = {
     ffmpegPath: path.join(
       sidecarDirectory,
       platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg',
     ),
     modelPath: path.join(resourcesRoot, 'models', 'ggml-small.en.bin'),
+    speakerChildPath: options.isPackaged
+      ? path.join(resourcesRoot, 'speaker-diarization-child.cjs')
+      : path.join(options.appPath, 'scripts', 'speaker-diarization-child.cjs'),
+    speakerEmbeddingModelPath: path.join(
+      resourcesRoot,
+      'diarization',
+      '3dspeaker-eres2net-base.onnx',
+    ),
+    speakerModulePath: path.join(
+      resourcesRoot,
+      'speaker-runtime',
+      'sherpa-onnx-node',
+      'sherpa-onnx.js',
+    ),
+    speakerSegmentationModelPath: path.join(
+      resourcesRoot,
+      'diarization',
+      'pyannote-segmentation-3.0.onnx',
+    ),
     whisperPath: path.join(sidecarDirectory, target.executableName),
   };
 
@@ -246,6 +286,30 @@ export const resolveEngineRuntime = async (
       options,
       platform,
     ),
+    speakerChild: resolveCandidate(
+      'speakerChild',
+      bundledPaths.speakerChildPath,
+      options,
+      platform,
+    ),
+    speakerEmbeddingModel: resolveCandidate(
+      'speakerEmbeddingModel',
+      bundledPaths.speakerEmbeddingModelPath,
+      options,
+      platform,
+    ),
+    speakerModule: resolveCandidate(
+      'speakerModule',
+      bundledPaths.speakerModulePath,
+      options,
+      platform,
+    ),
+    speakerSegmentationModel: resolveCandidate(
+      'speakerSegmentationModel',
+      bundledPaths.speakerSegmentationModelPath,
+      options,
+      platform,
+    ),
     whisper: resolveCandidate(
       'whisper',
       bundledPaths.whisperPath,
@@ -254,12 +318,32 @@ export const resolveEngineRuntime = async (
     ),
   } as const;
 
-  const [ffmpeg, model, whisper] = await Promise.all([
+  const [
+    ffmpeg,
+    model,
+    speakerChild,
+    speakerEmbeddingModel,
+    speakerModule,
+    speakerSegmentationModel,
+    whisper,
+  ] = await Promise.all([
     inspectComponent(candidates.ffmpeg, true),
     inspectComponent(candidates.model, false),
+    inspectComponent(candidates.speakerChild, false),
+    inspectComponent(candidates.speakerEmbeddingModel, false),
+    inspectComponent(candidates.speakerModule, false),
+    inspectComponent(candidates.speakerSegmentationModel, false),
     inspectComponent(candidates.whisper, true),
   ]);
-  const components: EngineComponentsStatus = { ffmpeg, model, whisper };
+  const components: EngineComponentsStatus = {
+    ffmpeg,
+    model,
+    speakerChild,
+    speakerEmbeddingModel,
+    speakerModule,
+    speakerSegmentationModel,
+    whisper,
+  };
 
   if (
     ffmpeg.state !== 'ready' ||
@@ -279,6 +363,23 @@ export const resolveEngineRuntime = async (
     };
   }
 
+  const speakerDiarization =
+    speakerChild.state === 'ready' &&
+    speakerEmbeddingModel.state === 'ready' &&
+    speakerModule.state === 'ready' &&
+    speakerSegmentationModel.state === 'ready' &&
+    speakerChild.path !== null &&
+    speakerEmbeddingModel.path !== null &&
+    speakerModule.path !== null &&
+    speakerSegmentationModel.path !== null
+      ? {
+          childPath: speakerChild.path,
+          embeddingModelPath: speakerEmbeddingModel.path,
+          modulePath: speakerModule.path,
+          segmentationModelPath: speakerSegmentationModel.path,
+        }
+      : null;
+
   return {
     ready: true,
     state: 'ready',
@@ -286,6 +387,7 @@ export const resolveEngineRuntime = async (
     runtime: {
       ffmpegPath: ffmpeg.path,
       modelPath: model.path,
+      speakerDiarization,
       whisperPath: whisper.path,
     },
     components,

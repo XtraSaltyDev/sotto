@@ -10,14 +10,26 @@ import {
 import path from 'node:path';
 
 import {
+  isTranscriptSpeakerId,
   isTranscriptId,
+  normalizeSpeakerLabel,
   parseTranscriptRecord,
   TranscriptValidationError,
   type TranscriptId,
   type TranscriptRecord,
+  type TranscriptSpeaker,
+  type TranscriptSpeakerId,
 } from '../transcription/transcript-types';
 
 export const MAX_TRANSCRIPT_RECORD_BYTES = 64 * 1_024 * 1_024;
+
+export type RenameSpeakerLabelResult =
+  | {
+      outcome: 'renamed';
+      record: TranscriptRecord;
+      speaker: TranscriptSpeaker;
+    }
+  | { outcome: 'not-found' };
 
 const isMissingFileError = (error: unknown): boolean =>
   error instanceof Error && 'code' in error && error.code === 'ENOENT';
@@ -34,6 +46,8 @@ const isRecordFile = (entry: Dirent): boolean => {
 };
 
 export class TranscriptRepository {
+  private mutationChain: Promise<void> = Promise.resolve();
+
   constructor(private readonly rootPath: string) {
     if (rootPath.trim().length === 0) {
       throw new TypeError('Transcript repository root path cannot be empty.');
@@ -109,19 +123,88 @@ export class TranscriptRepository {
     return this.readRecord(this.pathForId(id));
   }
 
-  async delete(id: TranscriptId): Promise<boolean> {
-    await this.ensureRoot();
+  /** Reads only after speaker-label or delete work already queued has settled. */
+  getAfterPendingMutations(
+    id: TranscriptId,
+  ): Promise<TranscriptRecord | null> {
+    return this.serializeMutation(() => this.get(id));
+  }
 
-    try {
-      await unlink(this.pathForId(id));
-      return true;
-    } catch (error) {
-      if (isMissingFileError(error)) {
-        return false;
+  async renameSpeakerLabel(
+    transcriptId: TranscriptId,
+    speakerId: TranscriptSpeakerId,
+    label: string,
+  ): Promise<RenameSpeakerLabelResult> {
+    if (!isTranscriptId(transcriptId)) {
+      throw new TranscriptValidationError('Transcript id must be a UUID.');
+    }
+    if (!isTranscriptSpeakerId(speakerId)) {
+      throw new TranscriptValidationError('Speaker id must be a UUID.');
+    }
+
+    const normalizedTranscriptId = transcriptId.toLowerCase();
+    const normalizedSpeakerId = speakerId.toLowerCase();
+    const normalizedLabel = normalizeSpeakerLabel(label);
+
+    return this.serializeMutation(async () => {
+      const current = await this.get(normalizedTranscriptId);
+      const speakerAnalysis = current?.speakerAnalysis;
+      const speakers = speakerAnalysis?.speakers;
+      const speakerIndex = speakers?.findIndex(
+        (speaker) => speaker.id === normalizedSpeakerId,
+      );
+
+      if (
+        !current ||
+        !speakerAnalysis ||
+        !speakers ||
+        speakerIndex === undefined ||
+        speakerIndex < 0
+      ) {
+        return { outcome: 'not-found' };
       }
 
-      throw error;
-    }
+      const speaker: TranscriptSpeaker = {
+        ...speakers[speakerIndex],
+        label: normalizedLabel,
+      };
+
+      if (speakers[speakerIndex].label === normalizedLabel) {
+        return { outcome: 'renamed', record: current, speaker };
+      }
+
+      const nextSpeakers = speakers.map((candidate, index) =>
+        index === speakerIndex ? speaker : candidate,
+      );
+      const record = await this.save({
+        ...current,
+        speakerAnalysis: {
+          ...speakerAnalysis,
+          speakers: nextSpeakers,
+        },
+      });
+
+      return { outcome: 'renamed', record, speaker };
+    });
+  }
+
+  async delete(id: TranscriptId): Promise<boolean> {
+    const recordPath = this.pathForId(id);
+
+    return this.serializeMutation(async () => {
+      await this.ensureRoot();
+
+      try {
+        await unlink(recordPath);
+        return true;
+      } catch (error) {
+        if (isMissingFileError(error)) {
+          return false;
+        }
+
+        throw error;
+      }
+    });
   }
 
   async cleanupTemporaryFiles(): Promise<number> {
@@ -149,6 +232,15 @@ export class TranscriptRepository {
 
   private async ensureRoot(): Promise<void> {
     await mkdir(this.rootPath, { recursive: true, mode: 0o700 });
+  }
+
+  private serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationChain.then(operation, operation);
+    this.mutationChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   private pathForId(id: TranscriptId): string {

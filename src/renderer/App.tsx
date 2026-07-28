@@ -5,9 +5,13 @@ import type {
   LiveRecordingSnapshot,
   SavedRecordingSummary,
   TranscriptDetail,
+  TranscriptExportFormat,
+  TranscriptSpeaker,
   TranscriptSummary,
   TranscriptionJobSnapshot,
 } from '../shared/contracts';
+import { clearSavedSpeakerDraft } from './speaker-drafts';
+import { liveRecordingStartErrorMessage } from './live-recording-errors';
 import {
   ArrowLeftIcon,
   AudioFileIcon,
@@ -234,22 +238,95 @@ const SavedRecordingList = ({
   );
 };
 
+const SpeakerEditor = ({
+  speakers,
+  onRename,
+}: {
+  speakers: TranscriptSpeaker[];
+  onRename: (speakerId: string, label: string) => Promise<string | null>;
+}) => {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <section className="speaker-editor" aria-labelledby="speaker-editor-title">
+      <div>
+        <h2 id="speaker-editor-title">Speakers</h2>
+        <p>These names apply to this transcript only.</p>
+      </div>
+      <div className="speaker-editor__list">
+        {speakers.map((speaker) => (
+          <form
+            className="speaker-editor__row"
+            key={speaker.id}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const label = drafts[speaker.id] ?? '';
+              setSavingId(speaker.id);
+              setError(null);
+              void onRename(speaker.id, label)
+                .then((reason) => {
+                  setSavingId(null);
+                  setError(reason);
+                  if (!reason) {
+                    setDrafts((current) =>
+                      clearSavedSpeakerDraft(current, speaker.id, label),
+                    );
+                  }
+                })
+                .catch(() => {
+                  setSavingId(null);
+                  setError('Sotto could not save that speaker name.');
+                });
+            }}
+          >
+            <label htmlFor={`speaker-${speaker.id}`}>{speaker.label}</label>
+            <input
+              id={`speaker-${speaker.id}`}
+              maxLength={100}
+              onChange={(event) =>
+                setDrafts((current) => ({
+                  ...current,
+                  [speaker.id]: event.target.value,
+                }))
+              }
+              value={drafts[speaker.id] ?? speaker.label}
+            />
+            <button
+              disabled={savingId === speaker.id || !(drafts[speaker.id] ?? '').trim()}
+              type="submit"
+            >
+              {savingId === speaker.id ? 'Saving…' : 'Save'}
+            </button>
+          </form>
+        ))}
+      </div>
+      {error ? <p className="speaker-editor__error" role="alert">{error}</p> : null}
+    </section>
+  );
+};
+
 const TranscriptView = ({
   transcript,
   loading,
+  message,
   onBack,
   onDelete,
   onDeleteRecording,
   onExport,
   onExportRecording,
+  onRenameSpeaker,
 }: {
   transcript: TranscriptDetail | null;
   loading: boolean;
+  message: string | null;
   onBack: () => void;
   onDelete: () => void;
   onDeleteRecording: () => void;
-  onExport: () => void;
+  onExport: (format: TranscriptExportFormat) => void;
   onExportRecording: () => void;
+  onRenameSpeaker: (speakerId: string, label: string) => Promise<string | null>;
 }) => (
   <main className="workspace">
     <header className="topbar topbar--detail">
@@ -265,9 +342,13 @@ const TranscriptView = ({
               <span>Export recording</span>
             </button>
           ) : null}
-          <button className="icon-button" onClick={onExport} type="button">
+          <button className="icon-button" onClick={() => onExport('docx')} type="button">
             <DownloadIcon />
-            <span>Export transcript</span>
+            <span>Export DOCX</span>
+          </button>
+          <button className="icon-button" onClick={() => onExport('txt')} type="button">
+            <DownloadIcon />
+            <span>Export TXT</span>
           </button>
           {transcript.recordingId ? (
             <button
@@ -286,6 +367,9 @@ const TranscriptView = ({
         </div>
       ) : null}
     </header>
+    {message ? (
+      <p className="transcript-message" role="alert">{message}</p>
+    ) : null}
     {loading ? (
       <div className="detail-loading"><SpinnerIcon className="spinner" /> Loading transcript…</div>
     ) : transcript ? (
@@ -300,17 +384,45 @@ const TranscriptView = ({
           <p className="engine-note">
             {transcript.engine.name} {transcript.engine.version} · {transcript.engine.model}
           </p>
+          {transcript.speakerAnalysis ? (
+            <p className="engine-note">
+              Speaker labels: {transcript.speakerAnalysis.engine.name}{' '}
+              {transcript.speakerAnalysis.engine.version}
+            </p>
+          ) : (
+            <p className="engine-note">No reliable speaker labels were found.</p>
+          )}
         </header>
+        {transcript.speakerAnalysis?.speakers.length ? (
+          <SpeakerEditor
+            key={transcript.id}
+            onRename={onRenameSpeaker}
+            speakers={transcript.speakerAnalysis.speakers}
+          />
+        ) : null}
         <div className="segments" aria-label="Transcript text">
           {transcript.segments.length === 0 ? (
             <p className="no-speech">No speech was detected in this recording.</p>
           ) : (
-            transcript.segments.map((segment, index) => (
-              <div className="segment" key={`${segment.startMs}-${index}`}>
+            transcript.segments.map((segment, index) => {
+              const speaker = transcript.speakerAnalysis?.speakers.find(
+                (candidate) => candidate.id === segment.speakerId,
+              );
+              return (
+              <div
+                className={`segment${transcript.speakerAnalysis ? ' segment--with-speaker' : ''}`}
+                key={`${segment.startMs}-${index}`}
+              >
                 <time>{formatDuration(segment.startMs)}</time>
+                {transcript.speakerAnalysis ? (
+                  <span className={`segment__speaker${speaker ? '' : ' segment__speaker--unknown'}`}>
+                    {speaker?.label ?? 'Unclear'}
+                  </span>
+                ) : null}
                 <p>{segment.text}</p>
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </article>
@@ -375,6 +487,7 @@ export const App = () => {
     }
 
     let cancelled = false;
+    setMessage(null);
     setIsLoadingTranscript(true);
     window.sotto
       .getTranscript(selectedId)
@@ -634,13 +747,18 @@ export const App = () => {
       await cleanupCapture();
       recordingIdRef.current = null;
       setMessage(
-        error instanceof Error
-          ? error.message
-          : 'Sotto could not start live meeting capture.',
+        liveRecordingStartErrorMessage(error),
       );
     } finally {
       setIsStartingRecording(false);
     }
+  };
+
+  const handleOpenRecordingSettings = async () => {
+    if (!window.sotto) return;
+    setMessage(null);
+    const result = await window.sotto.openRecordingSettings();
+    if (result.outcome === 'failed') setMessage(result.reason);
   };
 
   const handleImport = async () => {
@@ -663,10 +781,47 @@ export const App = () => {
     if (window.sotto && jobId) await window.sotto.cancelTranscription(jobId);
   };
 
-  const handleExport = async () => {
+  const handleExport = async (format: TranscriptExportFormat) => {
     if (!window.sotto || !selectedId) return;
-    const result = await window.sotto.exportTranscript(selectedId);
-    if (result.outcome === 'failed') setMessage(result.reason);
+    setMessage(null);
+    try {
+      const result = await window.sotto.exportTranscript(selectedId, format);
+      if (result.outcome === 'failed') setMessage(result.reason);
+      if (result.outcome === 'not-found') {
+        setMessage('That transcript is no longer available.');
+      }
+    } catch {
+      setMessage(`Sotto could not export that ${format.toUpperCase()} file.`);
+    }
+  };
+
+  const handleRenameSpeaker = async (
+    speakerId: string,
+    label: string,
+  ): Promise<string | null> => {
+    if (!window.sotto || !selectedId) return 'Sotto could not rename that speaker.';
+    const result = await window.sotto.renameTranscriptSpeaker(
+      selectedId,
+      speakerId,
+      label,
+    );
+    if (result.outcome === 'rejected') return result.reason;
+    if (result.outcome === 'not-found') return 'That speaker is no longer available.';
+
+    setTranscript((current) =>
+      current?.speakerAnalysis
+        ? {
+            ...current,
+            speakerAnalysis: {
+              ...current.speakerAnalysis,
+              speakers: current.speakerAnalysis.speakers.map((speaker) =>
+                speaker.id === result.speaker.id ? result.speaker : speaker,
+              ),
+            },
+          }
+        : current,
+    );
+    return null;
   };
 
   const handleDelete = async () => {
@@ -761,15 +916,20 @@ export const App = () => {
         <Sidebar />
         <TranscriptView
           loading={isLoadingTranscript}
-          onBack={() => setSelectedId(null)}
+          message={message}
+          onBack={() => {
+            setMessage(null);
+            setSelectedId(null);
+          }}
           onDelete={() => void handleDelete()}
           onDeleteRecording={() => {
             if (transcript?.recordingId) void deleteRecording(transcript.recordingId);
           }}
-          onExport={() => void handleExport()}
+          onExport={(format) => void handleExport(format)}
           onExportRecording={() => {
             if (transcript?.recordingId) void exportRecording(transcript.recordingId);
           }}
+          onRenameSpeaker={handleRenameSpeaker}
           transcript={transcript}
         />
       </div>
@@ -862,9 +1022,20 @@ export const App = () => {
               </p>
             )}
             {appState?.recording.capability.state !== 'ready' ? (
-              <p className="import-message import-message--notice">
-                {appState?.recording.capability.message ?? 'Checking live capture support…'}
-              </p>
+              <div className="recording-permission">
+                <p className="import-message import-message--notice">
+                  {appState?.recording.capability.message ?? 'Checking live capture support…'}
+                </p>
+                {appState?.recording.capability.state === 'permission-required' ? (
+                  <button
+                    className="recording-permission__button"
+                    onClick={() => void handleOpenRecordingSettings()}
+                    type="button"
+                  >
+                    Open Screen & System Audio Settings
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             {appState?.recording.storageMessage ? (
               <p className="import-message import-message--error" role="alert">

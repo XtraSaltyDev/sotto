@@ -30,6 +30,12 @@ import {
   WhisperOutputValidationError,
 } from './whisper-output';
 import { createWhisperProgressParser } from './whisper-progress';
+import { alignTranscriptSpeakers } from './speaker-alignment';
+import {
+  runSpeakerDiarization,
+  type RunSpeakerDiarizationOptions,
+  type SpeakerDiarizationSegment,
+} from './speaker-diarization';
 
 const RUNNING_STAGES: ReadonlySet<TranscriptionStage> = new Set([
   'preparing',
@@ -66,6 +72,9 @@ export interface LocalTranscriptionServiceOptions {
   repository: TranscriptRepository;
   onJobChanged: (job: TranscriptionJobSnapshot) => void;
   processRunner?: (options: RunProcessOptions) => Promise<ProcessResult>;
+  speakerDiarizationRunner?: (
+    options: RunSpeakerDiarizationOptions,
+  ) => Promise<SpeakerDiarizationSegment[]>;
 }
 
 const snapshot = (job: TranscriptionJobSnapshot): TranscriptionJobSnapshot => ({
@@ -231,13 +240,45 @@ export class LocalTranscriptionService {
       this.update('transcribing', 0.2, 'Listening locally with whisper.cpp…');
       await this.runWhisper(normalizedPath, outputPrefix, outputJsonPath, signal);
 
-      this.update('saving', 0.94, 'Saving the transcript on this device…');
       const outputStats = await stat(outputJsonPath);
       if (!outputStats.isFile() || outputStats.size > MAX_WHISPER_JSON_BYTES) {
         throw new PipelineError('invalid-output', 'The transcription output was invalid.');
       }
 
       const normalized = parseWhisperOutputJson(await readFile(outputJsonPath, 'utf8'));
+      let diarization: SpeakerDiarizationSegment[] = [];
+      const speakerRuntime = this.options.runtime.speakerDiarization;
+      if (speakerRuntime) {
+        this.update('transcribing', 0.92, 'Separating speakers locally…');
+        try {
+          diarization = await (
+            this.options.speakerDiarizationRunner ?? runSpeakerDiarization
+          )({
+            wavPath: normalizedPath,
+            childPath: speakerRuntime.childPath,
+            segmentationModelPath: speakerRuntime.segmentationModelPath,
+            embeddingModelPath: speakerRuntime.embeddingModelPath,
+            modulePath: speakerRuntime.modulePath,
+            signal,
+          });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          console.warn(
+            '[sotto] Speaker separation was unavailable:',
+            error instanceof Error ? error.message : 'Unknown speaker engine error',
+          );
+          // Speaker separation is an enhancement. Preserve the useful text
+          // transcript if an unusual recording defeats the clustering model.
+          diarization = [];
+        }
+      }
+      const aligned = alignTranscriptSpeakers(
+        normalized.segments,
+        normalized.words,
+        diarization,
+      );
+
+      this.update('saving', 0.96, 'Saving the transcript on this device…');
       const durationMs = Math.max(
         normalized.durationMs,
         Math.round((probe.durationSeconds ?? 0) * 1_000),
@@ -263,8 +304,9 @@ export class LocalTranscriptionService {
           model: MODEL_NAME,
           version: WHISPER_VERSION,
         },
+        speakerAnalysis: aligned.speakerAnalysis,
         text: normalized.text,
-        segments: normalized.segments,
+        segments: aligned.segments,
       };
       try {
         await this.options.repository.save(record);
@@ -322,7 +364,7 @@ export class LocalTranscriptionService {
       normalizedPath,
       '--language',
       'en',
-      '--output-json',
+      '--output-json-full',
       '--output-file',
       outputPrefix,
       '--print-progress',

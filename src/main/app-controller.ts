@@ -10,6 +10,8 @@ import type {
   TranscriptDetail,
   TranscriptSegment as RendererTranscriptSegment,
   TranscriptSummary,
+  RenameTranscriptSpeakerResult,
+  TranscriptExportFormat,
   TranscriptionJobSnapshot,
 } from '../shared/contracts';
 import type { SelectedMedia } from './media/media-import';
@@ -24,6 +26,8 @@ import {
   TranscriptionStartError,
 } from './transcription/transcription-service';
 import type { TranscriptRecord } from './transcription/transcript-types';
+import { TranscriptValidationError } from './transcription/transcript-types';
+import { createTranscriptDocx } from './export/transcript-docx';
 
 type StateListener = (state: AppState) => void;
 
@@ -75,6 +79,12 @@ export const toTranscriptDetail = (record: TranscriptRecord): TranscriptDetail =
   segments: record.segments.map(
     (segment): RendererTranscriptSegment => ({ ...segment }),
   ),
+  speakerAnalysis: record.speakerAnalysis
+    ? {
+        engine: { ...record.speakerAnalysis.engine },
+        speakers: record.speakerAnalysis.speakers.map((speaker) => ({ ...speaker })),
+      }
+    : null,
   engine: { ...record.engine },
 });
 
@@ -100,8 +110,20 @@ export const formatTranscriptForExport = (record: TranscriptRecord): string => {
   if (record.segments.length === 0) {
     lines.push(record.text || 'No speech was detected.');
   } else {
+    const hasSpeakerAnalysis = record.speakerAnalysis !== null;
+    const speakerLabels = new Map(
+      record.speakerAnalysis?.speakers.map((speaker) => [speaker.id, speaker.label]) ?? [],
+    );
     for (const segment of record.segments) {
-      lines.push(`[${formatTimestamp(segment.startMs)}] ${segment.text}`);
+      const speakerLabel = segment.speakerId
+        ? speakerLabels.get(segment.speakerId)
+        : null;
+      const speakerPrefix = hasSpeakerAnalysis
+        ? `${speakerLabel ?? 'Unclear'}: `
+        : '';
+      lines.push(
+        `[${formatTimestamp(segment.startMs)}] ${speakerPrefix}${segment.text}`,
+      );
     }
   }
 
@@ -118,6 +140,7 @@ export class AppController {
   private recordings: SavedRecordingSummary[] = [];
   private recordingStorageMessage: string | null = null;
   private recordingUpdateChain: Promise<void> = Promise.resolve();
+  private transcriptReloadChain: Promise<void> = Promise.resolve();
   private transcripts: TranscriptRecord[] = [];
 
   constructor(
@@ -202,7 +225,9 @@ export class AppController {
   async startLiveRecording(): Promise<LiveRecordingSnapshot> {
     if (this.recordingCapability.state !== 'ready') {
       throw new LiveRecordingError(
-        'unsupported-platform',
+        this.recordingCapability.state === 'permission-required'
+          ? 'permission-denied'
+          : 'unsupported-platform',
         this.recordingCapability.message,
       );
     }
@@ -277,11 +302,45 @@ export class AppController {
       : detail;
   }
 
-  async getTranscriptExport(id: string): Promise<{ title: string; text: string } | null> {
-    const record = await this.repository.get(id);
-    return record
-      ? { title: record.title, text: formatTranscriptForExport(record) }
-      : null;
+  async getTranscriptExport(
+    id: string,
+    format: TranscriptExportFormat,
+  ): Promise<{ title: string; content: string | Buffer } | null> {
+    const record = await this.repository.getAfterPendingMutations(id);
+    if (!record) return null;
+    return {
+      title: record.title,
+      content:
+        format === 'docx'
+          ? await createTranscriptDocx(record)
+          : formatTranscriptForExport(record),
+    };
+  }
+
+  async renameTranscriptSpeaker(
+    transcriptId: string,
+    speakerId: string,
+    label: string,
+  ): Promise<RenameTranscriptSpeakerResult> {
+    try {
+      const result = await this.repository.renameSpeakerLabel(
+        transcriptId,
+        speakerId,
+        label,
+      );
+      if (result.outcome === 'not-found') return result;
+      await this.reloadTranscripts();
+      this.emit();
+      return { outcome: 'renamed', speaker: { ...result.speaker } };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof TranscriptValidationError
+            ? error.message
+            : 'Sotto could not rename that speaker.',
+      };
+    }
   }
 
   async deleteTranscript(id: string): Promise<boolean> {
@@ -293,17 +352,15 @@ export class AppController {
           ? record.recordingId ?? record.id
           : null;
       if (recordingId && (await this.recordingService.has(recordingId))) {
-        try {
+        await this.enqueueRecordingUpdate(async () => {
           await this.recordingService.markReady(
             recordingId,
             'The transcript was deleted. The original recording is ready to transcribe again.',
           );
           this.recordingStorageMessage = null;
-        } catch (error) {
-          this.recordingStorageMessage =
-            error instanceof Error ? error.message : 'Sotto could not update the recording status.';
-        }
-        await this.reloadRecordings();
+          await this.reloadRecordings();
+          this.emit();
+        });
       }
       await this.reloadTranscripts();
       this.emit();
@@ -354,7 +411,7 @@ export class AppController {
       job.recordingId &&
       ['completed', 'failed', 'cancelled'].includes(job.stage)
     ) {
-      this.queueRecordingUpdate(async () => {
+      void this.enqueueRecordingUpdate(async () => {
         if (job.stage === 'completed' && job.transcriptId) {
           await this.recordingService.markTranscriptionCompleted(
             job.recordingId as string,
@@ -392,8 +449,12 @@ export class AppController {
     this.emit();
   }
 
-  private async reloadTranscripts(): Promise<void> {
-    this.transcripts = await this.repository.list();
+  private reloadTranscripts(): Promise<void> {
+    const reload = this.transcriptReloadChain.then(async () => {
+      this.transcripts = await this.repository.list();
+    });
+    this.transcriptReloadChain = reload.catch(() => undefined);
+    return reload;
   }
 
   private async reloadRecordings(): Promise<void> {
@@ -443,17 +504,18 @@ export class AppController {
     }
   }
 
-  private queueRecordingUpdate(update: () => Promise<void>): void {
+  private enqueueRecordingUpdate(update: () => Promise<void>): Promise<void> {
     const next = this.recordingUpdateChain.then(update, update);
-    this.recordingUpdateChain = next.catch((error: unknown) => {
+    const handled = next.catch(async (error: unknown) => {
       this.recordingStorageMessage =
         error instanceof Error
           ? error.message
           : 'Sotto could not save the recording status.';
-      this.reloadRecordings()
-        .then(() => this.emit())
-        .catch(() => undefined);
+      await this.reloadRecordings().catch(() => undefined);
+      this.emit();
     });
+    this.recordingUpdateChain = handled;
+    return handled;
   }
 
   private emit(): void {

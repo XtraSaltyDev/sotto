@@ -19,6 +19,7 @@ import {
 } from '../process/process-runner';
 import { TranscriptRepository } from '../storage/transcript-repository';
 import { LocalTranscriptionService } from './transcription-service';
+import type { SpeakerDiarizationSegment } from './speaker-diarization';
 
 const RECORDING_ID = '32ce6fee-8f3e-4f03-a266-46d6c00ef08c';
 
@@ -40,6 +41,11 @@ const whisperJson = JSON.stringify({
     {
       offsets: { from: 0, to: 1_000 },
       text: 'Durable recording.',
+      tokens: [
+        { id: 20_191, text: ' Durable', offsets: { from: 100, to: 400 } },
+        { id: 5_558, text: ' recording', offsets: { from: 400, to: 850 } },
+        { id: 13, text: '.', offsets: { from: 850, to: 900 } },
+      ],
     },
   ],
 });
@@ -91,6 +97,9 @@ describe('LocalTranscriptionService durable recording behavior', () => {
 
   const setup = async (
     processRunner: (options: RunProcessOptions) => Promise<ProcessResult>,
+    speakerDiarizationRunner: () => Promise<SpeakerDiarizationSegment[]> =
+      async () => [],
+    withSpeakerRuntime = true,
   ) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-transcription-'));
     roots.push(root);
@@ -114,10 +123,19 @@ describe('LocalTranscriptionService durable recording behavior', () => {
         ffmpegPath: path.join(root, 'ffmpeg'),
         whisperPath: path.join(root, 'whisper-cli'),
         modelPath: path.join(root, 'model.bin'),
+        speakerDiarization: withSpeakerRuntime
+          ? {
+              childPath: path.join(root, 'speaker-child.cjs'),
+              embeddingModelPath: path.join(root, 'embedding.onnx'),
+              modulePath: path.join(root, 'sherpa-onnx.js'),
+              segmentationModelPath: path.join(root, 'segmentation.onnx'),
+            }
+          : null,
       },
       jobsRoot,
       repository,
       processRunner,
+      speakerDiarizationRunner,
       onJobChanged: (job) => {
         if (['completed', 'failed', 'cancelled'].includes(job.stage)) {
           terminalResolve?.(job);
@@ -206,5 +224,63 @@ describe('LocalTranscriptionService durable recording behavior', () => {
     );
     await expect.poll(() => readdir(context.jobsRoot)).toEqual([]);
     await expect(context.repository.get(RECORDING_ID)).resolves.toBeNull();
+  });
+
+  it('saves stable speaker references when local clustering succeeds', async () => {
+    const context = await setup(makeRunner(() => false), async () => [
+      { startMs: 0, endMs: 1_000, cluster: 4 },
+    ]);
+    const terminal = context.nextTerminal();
+    await context.service.start(context.media);
+    await expect(terminal).resolves.toMatchObject({ stage: 'completed' });
+
+    const saved = await context.repository.get(RECORDING_ID);
+    expect(saved?.schemaVersion).toBe(2);
+    expect(saved?.speakerAnalysis?.speakers).toEqual([
+      expect.objectContaining({ label: 'Speaker 1' }),
+    ]);
+    expect(saved?.segments).toEqual([
+      expect.objectContaining({
+        text: 'Durable recording.',
+        speakerId: saved?.speakerAnalysis?.speakers[0].id,
+      }),
+    ]);
+  });
+
+  it('saves an unlabeled transcript without invoking an unavailable speaker runtime', async () => {
+    let speakerRunnerCalled = false;
+    const context = await setup(
+      makeRunner(() => false),
+      async () => {
+        speakerRunnerCalled = true;
+        return [{ startMs: 0, endMs: 1_000, cluster: 0 }];
+      },
+      false,
+    );
+    const terminal = context.nextTerminal();
+    await context.service.start(context.media);
+    await expect(terminal).resolves.toMatchObject({ stage: 'completed' });
+
+    expect(speakerRunnerCalled).toBe(false);
+    await expect(context.repository.get(RECORDING_ID)).resolves.toMatchObject({
+      text: 'Durable recording.',
+      speakerAnalysis: null,
+      segments: [expect.objectContaining({ speakerId: null })],
+    });
+  });
+
+  it('keeps completed text when the optional speaker pass fails', async () => {
+    const context = await setup(makeRunner(() => false), async () => {
+      throw new Error('Speaker separation timed out.');
+    });
+    const terminal = context.nextTerminal();
+    await context.service.start(context.media);
+
+    await expect(terminal).resolves.toMatchObject({ stage: 'completed' });
+    await expect(context.repository.get(RECORDING_ID)).resolves.toMatchObject({
+      text: 'Durable recording.',
+      speakerAnalysis: null,
+      segments: [expect.objectContaining({ speakerId: null })],
+    });
   });
 });

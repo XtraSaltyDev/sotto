@@ -46,6 +46,7 @@ describe('normalizeWhisperOutput', () => {
           text: 'This stays on your computer.',
         },
       ],
+      words: [],
     });
   });
 
@@ -59,7 +60,29 @@ describe('normalizeWhisperOutput', () => {
   it('accepts a valid empty transcription', () => {
     expect(
       normalizeWhisperOutput({ result: { language: null }, transcription: [] }),
-    ).toEqual({ durationMs: 0, language: null, text: '', segments: [] });
+    ).toEqual({ durationMs: 0, language: null, text: '', segments: [], words: [] });
+  });
+
+  it('keeps bounded lexical token timings from full JSON and drops control tokens', () => {
+    const output = normalizeWhisperOutput({
+      result: { language: 'en' },
+      transcription: [
+        {
+          offsets: { from: 0, to: 1_000 },
+          text: ' Hello!',
+          tokens: [
+            { id: 50_363, text: '[_BEG_]', offsets: { from: 0, to: 0 } },
+            { id: 18_435, text: ' Hello', offsets: { from: 100, to: 700 } },
+            { id: 0, text: '!', offsets: { from: 700, to: 900 } },
+          ],
+        },
+      ],
+    });
+
+    expect(output.words).toEqual([
+      { startMs: 100, endMs: 700, text: ' Hello', segmentIndex: 0 },
+      { startMs: 700, endMs: 900, text: '!', segmentIndex: 0 },
+    ]);
   });
 
   it.each([

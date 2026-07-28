@@ -97,6 +97,8 @@ out/
 .build/
 resources/models/*.bin
 resources/models/*.part
+resources/diarization/*.onnx
+resources/speaker-runtime/
 resources/sidecars/*/ffmpeg
 resources/sidecars/*/whisper-cli
 resources/sidecars/*/*.exe

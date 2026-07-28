@@ -17,6 +17,17 @@ readonly MODEL_SHA256='c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf
 readonly MODEL_REVISION='c521a4b02f422512d734391fdf08bb08c0862f68'
 readonly MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/${MODEL_REVISION}/${MODEL_NAME}?download=true"
 
+readonly SHERPA_ONNX_VERSION='1.13.4'
+readonly PYANNOTE_ARCHIVE_NAME='sherpa-onnx-pyannote-segmentation-3-0.tar.bz2'
+readonly PYANNOTE_ARCHIVE_SHA256='24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488'
+readonly PYANNOTE_ARCHIVE_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/${PYANNOTE_ARCHIVE_NAME}"
+readonly PYANNOTE_ARCHIVE_MODEL_PATH='sherpa-onnx-pyannote-segmentation-3-0/model.onnx'
+readonly PYANNOTE_MODEL_NAME='pyannote-segmentation-3.0.onnx'
+readonly PYANNOTE_MODEL_SHA256='220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079'
+readonly SPEAKER_EMBEDDING_MODEL_NAME='3dspeaker-eres2net-base.onnx'
+readonly SPEAKER_EMBEDDING_MODEL_SHA256='1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b'
+readonly SPEAKER_EMBEDDING_MODEL_URL='https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx'
+
 readonly MACOS_DEPLOYMENT_TARGET='12.0'
 
 SCRIPT_DIRECTORY="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
@@ -34,10 +45,17 @@ readonly FFMPEG_ARCHIVE_PATH="${DOWNLOAD_DIRECTORY}/ffmpeg-${FFMPEG_VERSION}.tar
 readonly FFMPEG_SOURCE_DIRECTORY="${SOURCE_DIRECTORY}/ffmpeg-${FFMPEG_VERSION}"
 readonly FFMPEG_BUILD_DIRECTORY="${BUILD_DIRECTORY}/ffmpeg-${FFMPEG_VERSION}"
 readonly MODEL_CACHE_PATH="${DOWNLOAD_DIRECTORY}/${MODEL_NAME}"
+readonly PYANNOTE_ARCHIVE_CACHE_PATH="${DOWNLOAD_DIRECTORY}/${PYANNOTE_ARCHIVE_NAME}"
+readonly PYANNOTE_MODEL_CACHE_PATH="${DOWNLOAD_DIRECTORY}/${PYANNOTE_MODEL_NAME}"
+readonly SPEAKER_EMBEDDING_MODEL_CACHE_PATH="${DOWNLOAD_DIRECTORY}/${SPEAKER_EMBEDDING_MODEL_NAME}"
 
 readonly SIDECAR_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/sidecars/darwin-arm64"
 readonly MODEL_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/models"
 readonly MODEL_STAGE_PATH="${MODEL_STAGE_DIRECTORY}/${MODEL_NAME}"
+readonly DIARIZATION_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/diarization"
+readonly PYANNOTE_MODEL_STAGE_PATH="${DIARIZATION_STAGE_DIRECTORY}/${PYANNOTE_MODEL_NAME}"
+readonly SPEAKER_EMBEDDING_MODEL_STAGE_PATH="${DIARIZATION_STAGE_DIRECTORY}/${SPEAKER_EMBEDDING_MODEL_NAME}"
+readonly SPEAKER_RUNTIME_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/speaker-runtime"
 readonly LICENSE_STAGE_DIRECTORY="${SIDECAR_STAGE_DIRECTORY}/licenses"
 readonly RUNTIME_MANIFEST_PATH="${SIDECAR_STAGE_DIRECTORY}/runtime-manifest.json"
 
@@ -59,7 +77,7 @@ cleanup() {
     [[ -e "${temporary_path}" ]] || continue
 
     case "${temporary_path}" in
-      "${RUNTIME_BUILD_ROOT}"/temporary/* | "${SIDECAR_STAGE_DIRECTORY}"/.stage-* | "${MODEL_STAGE_DIRECTORY}"/.stage-*)
+      "${RUNTIME_BUILD_ROOT}"/temporary/* | "${SIDECAR_STAGE_DIRECTORY}"/.stage-* | "${MODEL_STAGE_DIRECTORY}"/.stage-* | "${DIARIZATION_STAGE_DIRECTORY}"/.stage-*)
         rm -rf -- "${temporary_path}"
         ;;
       *)
@@ -389,6 +407,64 @@ stage_model() {
   verify_sha256 "${MODEL_STAGE_PATH}" "${MODEL_SHA256}" "staged ${MODEL_NAME} model"
 }
 
+stage_speaker_models() {
+  local temporary_model
+
+  download_verified_file \
+    "${PYANNOTE_ARCHIVE_URL}" \
+    "${PYANNOTE_ARCHIVE_SHA256}" \
+    "${PYANNOTE_ARCHIVE_CACHE_PATH}" \
+    'Pyannote speaker-segmentation archive'
+
+  if [[ ! -e "${PYANNOTE_MODEL_CACHE_PATH}" ]]; then
+    temporary_model="$(mktemp "${RUNTIME_BUILD_ROOT}/temporary/pyannote-model.XXXXXX")"
+    TEMPORARY_PATHS+=("${temporary_model}")
+    tar -xOf "${PYANNOTE_ARCHIVE_CACHE_PATH}" "${PYANNOTE_ARCHIVE_MODEL_PATH}" >"${temporary_model}"
+    verify_sha256 "${temporary_model}" "${PYANNOTE_MODEL_SHA256}" 'extracted Pyannote model'
+    mv -- "${temporary_model}" "${PYANNOTE_MODEL_CACHE_PATH}"
+  fi
+
+  download_verified_file \
+    "${SPEAKER_EMBEDDING_MODEL_URL}" \
+    "${SPEAKER_EMBEDDING_MODEL_SHA256}" \
+    "${SPEAKER_EMBEDDING_MODEL_CACHE_PATH}" \
+    '3D-Speaker embedding model'
+
+  stage_file "${PYANNOTE_MODEL_CACHE_PATH}" "${PYANNOTE_MODEL_STAGE_PATH}" 0644
+  stage_file \
+    "${SPEAKER_EMBEDDING_MODEL_CACHE_PATH}" \
+    "${SPEAKER_EMBEDDING_MODEL_STAGE_PATH}" \
+    0644
+  verify_sha256 "${PYANNOTE_MODEL_STAGE_PATH}" "${PYANNOTE_MODEL_SHA256}" 'staged Pyannote model'
+  verify_sha256 \
+    "${SPEAKER_EMBEDDING_MODEL_STAGE_PATH}" \
+    "${SPEAKER_EMBEDDING_MODEL_SHA256}" \
+    'staged 3D-Speaker model'
+}
+
+stage_speaker_runtime() {
+  local node_package="${REPOSITORY_ROOT}/node_modules/sherpa-onnx-node"
+  local native_package="${REPOSITORY_ROOT}/node_modules/sherpa-onnx-darwin-arm64"
+  local temporary_runtime
+
+  [[ -f "${node_package}/sherpa-onnx.js" ]] || fail 'Run npm install before staging the speaker runtime.'
+  [[ -f "${native_package}/sherpa-onnx.node" ]] || fail 'The arm64 sherpa-onnx optional package is missing.'
+  grep -Fq "\"version\": \"${SHERPA_ONNX_VERSION}\"" "${node_package}/package.json" || fail \
+    'The installed sherpa-onnx-node version does not match the pinned runtime version.'
+  grep -Fq "\"version\": \"${SHERPA_ONNX_VERSION}\"" "${native_package}/package.json" || fail \
+    'The installed native sherpa-onnx version does not match the pinned runtime version.'
+
+  temporary_runtime="$(mktemp -d "${RUNTIME_BUILD_ROOT}/temporary/speaker-runtime.XXXXXX")"
+  TEMPORARY_PATHS+=("${temporary_runtime}")
+  cp -R "${node_package}" "${temporary_runtime}/sherpa-onnx-node"
+  cp -R "${native_package}" "${temporary_runtime}/sherpa-onnx-darwin-arm64"
+
+  rm -rf -- "${SPEAKER_RUNTIME_STAGE_DIRECTORY}"
+  mv -- "${temporary_runtime}" "${SPEAKER_RUNTIME_STAGE_DIRECTORY}"
+  [[ "$(lipo -archs "${SPEAKER_RUNTIME_STAGE_DIRECTORY}/sherpa-onnx-darwin-arm64/sherpa-onnx.node")" == 'arm64' ]] || fail \
+    'The staged sherpa-onnx native addon is not arm64.'
+}
+
 write_runtime_manifest() {
   local whisper_binary_sha256
   local ffmpeg_binary_sha256
@@ -430,6 +506,15 @@ write_runtime_manifest() {
     "file": "../../models/${MODEL_NAME}",
     "sha256": "${MODEL_SHA256}",
     "language": "English"
+  },
+  "speakerDiarization": {
+    "runtime": "sherpa-onnx-node",
+    "version": "${SHERPA_ONNX_VERSION}",
+    "segmentationModel": "../../diarization/${PYANNOTE_MODEL_NAME}",
+    "segmentationModelSha256": "${PYANNOTE_MODEL_SHA256}",
+    "embeddingModel": "../../diarization/${SPEAKER_EMBEDDING_MODEL_NAME}",
+    "embeddingModelSha256": "${SPEAKER_EMBEDDING_MODEL_SHA256}",
+    "minimumMacOSVersion": "15.5"
   }
 }
 EOF
@@ -510,6 +595,15 @@ verify_staged_runtime() {
   verify_whisper_runtime_identity "${SIDECAR_STAGE_DIRECTORY}/whisper-cli"
   verify_ffmpeg_runtime_identity "${SIDECAR_STAGE_DIRECTORY}/ffmpeg"
   verify_sha256 "${MODEL_STAGE_PATH}" "${MODEL_SHA256}" "staged ${MODEL_NAME} model"
+  verify_sha256 "${PYANNOTE_MODEL_STAGE_PATH}" "${PYANNOTE_MODEL_SHA256}" 'staged Pyannote model'
+  verify_sha256 \
+    "${SPEAKER_EMBEDDING_MODEL_STAGE_PATH}" \
+    "${SPEAKER_EMBEDDING_MODEL_SHA256}" \
+    'staged 3D-Speaker model'
+  [[ "$(lipo -archs "${SPEAKER_RUNTIME_STAGE_DIRECTORY}/sherpa-onnx-darwin-arm64/sherpa-onnx.node")" == 'arm64' ]] || fail \
+    'The staged sherpa-onnx native addon is not arm64.'
+  [[ -f "${SPEAKER_RUNTIME_STAGE_DIRECTORY}/sherpa-onnx-node/sherpa-onnx.js" ]] || fail \
+    'The staged sherpa-onnx JavaScript module is missing.'
 
   whisper_sha256="$(sha256_file "${SIDECAR_STAGE_DIRECTORY}/whisper-cli")"
   ffmpeg_sha256="$(sha256_file "${SIDECAR_STAGE_DIRECTORY}/ffmpeg")"
@@ -527,11 +621,17 @@ verify_staged_runtime() {
     "The runtime manifest FFmpeg checksum does not match the staged executable."
   grep -Fq "\"sha256\": \"${MODEL_SHA256}\"" "${RUNTIME_MANIFEST_PATH}" || fail \
     "The runtime manifest model checksum is incorrect."
+  grep -Fq "\"segmentationModelSha256\": \"${PYANNOTE_MODEL_SHA256}\"" "${RUNTIME_MANIFEST_PATH}" || fail \
+    'The runtime manifest Pyannote checksum is incorrect.'
+  grep -Fq "\"embeddingModelSha256\": \"${SPEAKER_EMBEDDING_MODEL_SHA256}\"" "${RUNTIME_MANIFEST_PATH}" || fail \
+    'The runtime manifest 3D-Speaker checksum is incorrect.'
 
   log "Verified the staged runtime without modifying it."
   log "  whisper-cli SHA-256: ${whisper_sha256}"
   log "  ffmpeg SHA-256:       ${ffmpeg_sha256}"
   log "  model SHA-256:        ${MODEL_SHA256}"
+  log "  Pyannote SHA-256:     ${PYANNOTE_MODEL_SHA256}"
+  log "  3D-Speaker SHA-256:   ${SPEAKER_EMBEDDING_MODEL_SHA256}"
 }
 
 main() {
@@ -567,6 +667,7 @@ main() {
     "${RUNTIME_BUILD_ROOT}/temporary" \
     "${SIDECAR_STAGE_DIRECTORY}" \
     "${MODEL_STAGE_DIRECTORY}" \
+    "${DIARIZATION_STAGE_DIRECTORY}" \
     "${LICENSE_STAGE_DIRECTORY}"
 
   prepare_whisper_source
@@ -574,6 +675,8 @@ main() {
   build_whisper_cli
   build_ffmpeg
   stage_model
+  stage_speaker_models
+  stage_speaker_runtime
 
   log "Staging verified runtime executables and license material."
   stage_file "${WHISPER_BUILD_DIRECTORY}/bin/whisper-cli" "${SIDECAR_STAGE_DIRECTORY}/whisper-cli" 0755
@@ -585,6 +688,10 @@ main() {
   stage_file \
     "${REPOSITORY_ROOT}/resources/sidecars/licenses/openai-whisper-model.LICENSE" \
     "${LICENSE_STAGE_DIRECTORY}/openai-whisper-model.LICENSE" \
+    0644
+  stage_file \
+    "${REPOSITORY_ROOT}/resources/sidecars/licenses/pyannote-segmentation-3.0.LICENSE" \
+    "${LICENSE_STAGE_DIRECTORY}/pyannote-segmentation-3.0.LICENSE" \
     0644
 
   verify_sha256 "${MODEL_STAGE_PATH}" "${MODEL_SHA256}" "staged ${MODEL_NAME} model"
@@ -598,6 +705,8 @@ main() {
   log "  whisper-cli: ${SIDECAR_STAGE_DIRECTORY}/whisper-cli"
   log "  ffmpeg:       ${SIDECAR_STAGE_DIRECTORY}/ffmpeg"
   log "  model:        ${MODEL_STAGE_PATH}"
+  log "  speaker models: ${DIARIZATION_STAGE_DIRECTORY}"
+  log "  speaker runtime: ${SPEAKER_RUNTIME_STAGE_DIRECTORY}"
   log "  manifest:     ${RUNTIME_MANIFEST_PATH}"
 }
 

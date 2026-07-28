@@ -43,3 +43,25 @@ records documented in [PROVENANCE.md](PROVENANCE.md).
 The OpenAI Whisper MIT license is committed at
 `licenses/openai-whisper-model.LICENSE` and copied into the target runtime's
 license directory during provisioning.
+
+## sherpa-onnx and speaker models
+
+- Runtime: `sherpa-onnx-node` 1.13.4
+- Source: <https://github.com/k2-fsa/sherpa-onnx>
+- License: Apache-2.0
+- Segmentation model: Pyannote Segmentation 3.0, MIT
+- Embedding model: 3D-Speaker ERes2Net base, Apache-2.0
+
+The exact download URLs and SHA-256 hashes are recorded in `sources.json`.
+The Pyannote model's upstream MIT text is committed at
+`licenses/pyannote-segmentation-3.0.LICENSE`. The native npm package and both
+models are staged as local, offline runtime resources; no model service is
+contacted while Sotto is running.
+
+## docx
+
+- Project: `docx` 9.7.1
+- Source: <https://github.com/dolanmiu/docx>
+- License: MIT
+
+Sotto uses this library only to create Word-compatible transcript exports.

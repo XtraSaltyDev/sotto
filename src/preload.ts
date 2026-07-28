@@ -27,14 +27,27 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.deleteRecording, recordingId),
   exportRecording: (recordingId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.exportRecording, recordingId),
+  openRecordingSettings: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.openRecordingSettings),
   cancelTranscription: (jobId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.cancelTranscription, jobId),
   getTranscript: (transcriptId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.getTranscript, transcriptId),
+  renameTranscriptSpeaker: (
+    transcriptId: string,
+    speakerId: string,
+    label: string,
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.renameTranscriptSpeaker,
+      transcriptId,
+      speakerId,
+      label,
+    ),
   deleteTranscript: (transcriptId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.deleteTranscript, transcriptId),
-  exportTranscript: (transcriptId: string) =>
-    ipcRenderer.invoke(IPC_CHANNELS.exportTranscript, transcriptId),
+  exportTranscript: (transcriptId: string, format: 'txt' | 'docx') =>
+    ipcRenderer.invoke(IPC_CHANNELS.exportTranscript, transcriptId, format),
   onAppStateChanged: (listener: (state: AppState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: AppState) => listener(state);
     ipcRenderer.on(IPC_CHANNELS.stateChanged, wrapped);

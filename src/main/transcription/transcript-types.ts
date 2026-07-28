@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-export const TRANSCRIPT_SCHEMA_VERSION = 1 as const;
+export const LEGACY_TRANSCRIPT_SCHEMA_VERSION = 1 as const;
+export const TRANSCRIPT_SCHEMA_VERSION = 2 as const;
 
 // These limits are deliberately generous enough for day-long recordings while
 // still bounding data that originated in an external process or a local file.
@@ -12,8 +13,11 @@ export const MAX_TRANSCRIPT_TITLE_CHARACTERS = 300;
 export const MAX_SOURCE_NAME_CHARACTERS = 512;
 export const MAX_ENGINE_FIELD_CHARACTERS = 512;
 export const MAX_SOURCE_FILE_BYTES = 16 * 1_024 * 1_024 * 1_024 * 1_024;
+export const MAX_TRANSCRIPT_SPEAKERS = 256;
+export const MAX_SPEAKER_LABEL_CHARACTERS = 100;
 
 export type TranscriptId = string;
+export type TranscriptSpeakerId = string;
 export type TranscriptSourceType = 'imported-file' | 'recording';
 export type TranscriptMediaKind = 'audio' | 'video';
 
@@ -31,10 +35,21 @@ export interface TranscriptEngineMetadata {
   version: string;
 }
 
+export interface TranscriptSpeaker {
+  id: TranscriptSpeakerId;
+  label: string;
+}
+
+export interface TranscriptSpeakerAnalysis {
+  engine: TranscriptEngineMetadata;
+  speakers: TranscriptSpeaker[];
+}
+
 export interface TranscriptSegment {
   startMs: number;
   endMs: number;
   text: string;
+  speakerId: TranscriptSpeakerId | null;
 }
 
 export interface TranscriptRecord {
@@ -49,6 +64,7 @@ export interface TranscriptRecord {
   durationMs: number;
   language: string | null;
   engine: TranscriptEngineMetadata;
+  speakerAnalysis: TranscriptSpeakerAnalysis | null;
   text: string;
   segments: TranscriptSegment[];
 }
@@ -124,7 +140,32 @@ const looksLikeAbsolutePath = (value: string): boolean => {
 export const isTranscriptId = (value: unknown): value is TranscriptId =>
   typeof value === 'string' && UUID_PATTERN.test(value);
 
+export const isTranscriptSpeakerId = (
+  value: unknown,
+): value is TranscriptSpeakerId =>
+  typeof value === 'string' && UUID_PATTERN.test(value);
+
 export const createTranscriptId = (): TranscriptId => randomUUID();
+export const createTranscriptSpeakerId = (): TranscriptSpeakerId => randomUUID();
+
+export const normalizeSpeakerLabel = (value: unknown): string => {
+  const label = readBoundedString(
+    value,
+    'speaker label',
+    MAX_SPEAKER_LABEL_CHARACTERS,
+  );
+
+  if (
+    Array.from(label).some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 31 || codePoint === 127;
+    })
+  ) {
+    return fail('speaker label cannot contain control characters.');
+  }
+
+  return label.trim();
+};
 
 const parseDateTime = (value: unknown, field: string): string => {
   const dateTime = readBoundedString(value, field, 64);
@@ -181,31 +222,87 @@ const parseSource = (value: unknown): TranscriptSourceMetadata => {
   };
 };
 
-const parseEngine = (value: unknown): TranscriptEngineMetadata => {
+const parseEngine = (
+  value: unknown,
+  field = 'engine',
+): TranscriptEngineMetadata => {
   if (!isRecord(value)) {
-    return fail('engine must be an object.');
+    return fail(`${field} must be an object.`);
   }
 
   return {
     name: readBoundedString(
       value.name,
-      'engine.name',
+      `${field}.name`,
       MAX_ENGINE_FIELD_CHARACTERS,
     ),
     model: readBoundedString(
       value.model,
-      'engine.model',
+      `${field}.model`,
       MAX_ENGINE_FIELD_CHARACTERS,
     ),
     version: readBoundedString(
       value.version,
-      'engine.version',
+      `${field}.version`,
       MAX_ENGINE_FIELD_CHARACTERS,
     ),
   };
 };
 
-const parseSegments = (value: unknown): TranscriptSegment[] => {
+const parseSpeakerAnalysis = (
+  value: unknown,
+): TranscriptSpeakerAnalysis | null => {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    return fail('speakerAnalysis must be an object or null.');
+  }
+
+  if (!Array.isArray(value.speakers)) {
+    return fail('speakerAnalysis.speakers must be an array.');
+  }
+
+  if (value.speakers.length > MAX_TRANSCRIPT_SPEAKERS) {
+    return fail(
+      `speakerAnalysis.speakers cannot contain more than ${MAX_TRANSCRIPT_SPEAKERS} items.`,
+    );
+  }
+
+  const seenIds = new Set<TranscriptSpeakerId>();
+  const speakers = value.speakers.map((candidate, index): TranscriptSpeaker => {
+    if (!isRecord(candidate)) {
+      return fail(`speakerAnalysis.speakers[${index}] must be an object.`);
+    }
+
+    if (!isTranscriptSpeakerId(candidate.id)) {
+      return fail(`speakerAnalysis.speakers[${index}].id must be a UUID.`);
+    }
+
+    const id = candidate.id.toLowerCase();
+    if (seenIds.has(id)) {
+      return fail('speakerAnalysis.speakers must have unique ids.');
+    }
+    seenIds.add(id);
+
+    return {
+      id,
+      label: normalizeSpeakerLabel(candidate.label),
+    };
+  });
+
+  return {
+    engine: parseEngine(value.engine, 'speakerAnalysis.engine'),
+    speakers,
+  };
+};
+
+const parseSegments = (
+  value: unknown,
+  schemaVersion: 1 | typeof TRANSCRIPT_SCHEMA_VERSION,
+  speakerIds: ReadonlySet<TranscriptSpeakerId>,
+): TranscriptSegment[] => {
   if (!Array.isArray(value)) {
     return fail('segments must be an array.');
   }
@@ -250,25 +347,43 @@ const parseSegments = (value: unknown): TranscriptSegment[] => {
       return fail('Combined segment text exceeds the transcript text limit.');
     }
 
+    const speakerId =
+      schemaVersion === LEGACY_TRANSCRIPT_SCHEMA_VERSION
+        ? null
+        : candidate.speakerId === null
+          ? null
+          : isTranscriptSpeakerId(candidate.speakerId)
+            ? candidate.speakerId.toLowerCase()
+            : fail(`segments[${index}].speakerId must be a UUID or null.`);
+
+    if (speakerId !== null && !speakerIds.has(speakerId)) {
+      return fail(`segments[${index}].speakerId must reference a declared speaker.`);
+    }
+
     previousEndMs = endMs;
 
-    return { startMs, endMs, text };
+    return { startMs, endMs, text, speakerId };
   });
 };
 
 /**
- * Validates and returns a sanitized schema-v1 record. Unknown properties are
- * intentionally discarded so future or hostile input cannot persist paths or
- * other undeclared metadata.
+ * Validates and returns a sanitized canonical record. Schema-v1 files are
+ * migrated in memory without being rewritten merely because they were read.
+ * Unknown properties are intentionally discarded so future or hostile input
+ * cannot persist paths or other undeclared metadata.
  */
 export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
   if (!isRecord(value)) {
     return fail('Transcript record must be an object.');
   }
 
-  if (value.schemaVersion !== TRANSCRIPT_SCHEMA_VERSION) {
+  if (
+    value.schemaVersion !== LEGACY_TRANSCRIPT_SCHEMA_VERSION &&
+    value.schemaVersion !== TRANSCRIPT_SCHEMA_VERSION
+  ) {
     return fail(`Unsupported transcript schema version: ${String(value.schemaVersion)}.`);
   }
+  const sourceSchemaVersion = value.schemaVersion;
 
   if (!isTranscriptId(value.id)) {
     return fail('id must be a UUID.');
@@ -310,7 +425,18 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
       : isTranscriptId(value.recordingId)
         ? value.recordingId.toLowerCase()
         : fail('recordingId must be a UUID.');
-  const segments = parseSegments(value.segments);
+  const speakerAnalysis =
+    sourceSchemaVersion === LEGACY_TRANSCRIPT_SCHEMA_VERSION
+      ? null
+      : parseSpeakerAnalysis(value.speakerAnalysis);
+  const speakerIds = new Set(
+    speakerAnalysis?.speakers.map((speaker) => speaker.id) ?? [],
+  );
+  const segments = parseSegments(
+    value.segments,
+    sourceSchemaVersion,
+    speakerIds,
+  );
   const createdAt = parseDateTime(value.createdAt, 'createdAt');
   const completedAt = parseDateTime(value.completedAt, 'completedAt');
 
@@ -333,6 +459,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     durationMs,
     language,
     engine: parseEngine(value.engine),
+    speakerAnalysis,
     text,
     segments,
   };

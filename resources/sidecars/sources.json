@@ -33,5 +33,27 @@
     "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
     "language": "English",
     "license": "MIT"
+  },
+  "speakerDiarization": {
+    "runtime": {
+      "name": "sherpa-onnx-node",
+      "version": "1.13.4",
+      "repository": "https://github.com/k2-fsa/sherpa-onnx",
+      "license": "Apache-2.0",
+      "minimumMacOSVersion": "15.5"
+    },
+    "segmentationModel": {
+      "name": "pyannote-segmentation-3.0",
+      "archive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+      "archiveSha256": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+      "modelSha256": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+      "license": "MIT"
+    },
+    "embeddingModel": {
+      "name": "3D-Speaker ERes2Net base",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+      "license": "Apache-2.0"
+    }
   }
 }

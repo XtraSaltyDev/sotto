@@ -1,12 +1,24 @@
 import path from 'node:path';
 
-import { app, BrowserWindow, desktopCapturer, session } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  session,
+  shell,
+  systemPreferences,
+} from 'electron';
 import started from 'electron-squirrel-startup';
 
 import type { LiveRecordingCapability } from './shared/contracts';
 
 import { AppController } from './main/app-controller';
 import { registerDesktopIpc } from './main/ipc/register-desktop-ipc';
+import {
+  configureMacDesktopAudioFallback,
+  MACOS_SCREEN_RECORDING_SETTINGS_URLS,
+  resolveLiveRecordingCapability,
+} from './main/recording/desktop-audio-capture';
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
 import { TranscriptRepository } from './main/storage/transcript-repository';
 
@@ -26,6 +38,11 @@ if (!hasInstanceLock) app.quit();
 
 app.enableSandbox();
 
+// Electron 39+ defaults to Core Audio Tap for macOS desktop loopback audio.
+// Apply the documented Screen & System Audio Recording fallback after other
+// Electron startup switches are configured, but before app.whenReady().
+configureMacDesktopAudioFallback(process.platform, app.commandLine);
+
 const isAllowedNavigation = (url: string): boolean => {
   try {
     const requested = new URL(url);
@@ -41,35 +58,18 @@ const isAllowedNavigation = (url: string): boolean => {
 };
 
 const liveRecordingCapability = (): LiveRecordingCapability => {
-  if (process.platform === 'win32') {
-    return {
-      state: 'ready',
-      message: 'Live meeting capture can record system audio and microphone input.',
-    };
-  }
-
-  if (process.platform === 'darwin') {
-    const systemVersion = (
-      process as NodeJS.Process & { getSystemVersion?: () => string }
-    ).getSystemVersion?.() ?? '0';
-    const majorVersion = Number.parseInt(systemVersion.split('.')[0] ?? '', 10);
-    if (Number.isFinite(majorVersion) && majorVersion >= 13) {
-      return {
-        state: 'ready',
-        message: 'Live meeting capture can record system audio and microphone input.',
-      };
-    }
-
-    return {
-      state: 'unsupported',
-      message: 'Live meeting capture requires macOS 13 or newer for desktop audio capture.',
-    };
-  }
-
-  return {
-    state: 'unsupported',
-    message: 'Live meeting capture is only supported on macOS and Windows.',
-  };
+  const systemVersion = (
+    process as NodeJS.Process & { getSystemVersion?: () => string }
+  ).getSystemVersion?.() ?? '0';
+  const screenAccessStatus =
+    process.platform === 'darwin'
+      ? systemPreferences.getMediaAccessStatus('screen')
+      : 'unknown';
+  return resolveLiveRecordingCapability(
+    process.platform,
+    systemVersion,
+    screenAccessStatus,
+  );
 };
 
 const configureDesktopAudioCapture = (): void => {
@@ -79,12 +79,16 @@ const configureDesktopAudioCapture = (): void => {
     void desktopCapturer
       .getSources({
         fetchWindowIcons: false,
-        thumbnailSize: { height: 0, width: 0 },
+        // A non-zero thumbnail makes macOS request Screen & System Audio
+        // Recording access before Chromium tries to open the display stream.
+        // One pixel is sufficient and avoids retaining a useful screen image.
+        thumbnailSize: { height: 1, width: 1 },
         types: ['screen'],
       })
       .then((sources) => {
         const source = sources[0];
         if (!source) {
+          console.warn('Sotto could not find a macOS desktop capture source.');
           callback({});
           return;
         }
@@ -94,7 +98,10 @@ const configureDesktopAudioCapture = (): void => {
           video: request.videoRequested ? source : undefined,
         });
       })
-      .catch(() => callback({}));
+      .catch((error: unknown) => {
+        console.error('Sotto could not enumerate desktop capture sources.', error);
+        callback({});
+      });
   });
 };
 
@@ -176,6 +183,20 @@ const initialize = async (): Promise<void> => {
   removeIpcHandlers = registerDesktopIpc({
     controller,
     getMainWindow: () => mainWindow,
+    openRecordingSettings: async () => {
+      let lastError: unknown = new Error(
+        'No macOS screen recording settings route was available.',
+      );
+      for (const url of MACOS_SCREEN_RECORDING_SETTINGS_URLS) {
+        try {
+          await shell.openExternal(url, { activate: true });
+          return;
+        } catch (error: unknown) {
+          lastError = error;
+        }
+      }
+      throw lastError;
+    },
   });
   createWindow();
 };

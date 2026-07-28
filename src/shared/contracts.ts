@@ -8,8 +8,10 @@ export const IPC_CHANNELS = {
   retryRecording: 'sotto:recording:retry',
   deleteRecording: 'sotto:recording:delete',
   exportRecording: 'sotto:recording:export',
+  openRecordingSettings: 'sotto:recording:settings',
   cancelTranscription: 'sotto:transcription:cancel',
   getTranscript: 'sotto:transcript:get',
+  renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
   deleteTranscript: 'sotto:transcript:delete',
   exportTranscript: 'sotto:transcript:export',
   stateChanged: 'sotto:state:changed',
@@ -52,7 +54,7 @@ export type LiveRecordingErrorCode =
   | 'engine-unavailable';
 
 export interface LiveRecordingCapability {
-  state: 'ready' | 'unsupported';
+  state: 'permission-required' | 'ready' | 'unsupported';
   message: string;
 }
 
@@ -115,12 +117,26 @@ export interface TranscriptSegment {
   startMs: number;
   endMs: number;
   text: string;
+  speakerId: string | null;
+}
+
+export interface TranscriptSpeaker {
+  id: string;
+  label: string;
 }
 
 export interface TranscriptDetail extends TranscriptSummary {
   completedAt: string;
   text: string;
   segments: TranscriptSegment[];
+  speakerAnalysis: {
+    engine: {
+      name: string;
+      version: string;
+      model: string;
+    };
+    speakers: TranscriptSpeaker[];
+  } | null;
   recordingId?: string;
   engine: {
     name: string;
@@ -183,6 +199,10 @@ export type ExportRecordingResult =
   | { outcome: 'not-found' }
   | { outcome: 'failed'; reason: string };
 
+export type OpenRecordingSettingsResult =
+  | { outcome: 'opened' }
+  | { outcome: 'failed'; reason: string };
+
 export type CancelTranscriptionResult =
   | { outcome: 'cancelled' }
   | { outcome: 'not-found' };
@@ -197,6 +217,13 @@ export type ExportTranscriptResult =
   | { outcome: 'not-found' }
   | { outcome: 'failed'; reason: string };
 
+export type TranscriptExportFormat = 'txt' | 'docx';
+
+export type RenameTranscriptSpeakerResult =
+  | { outcome: 'renamed'; speaker: TranscriptSpeaker }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
 export interface SottoDesktopApi {
   getAppState(): Promise<AppState>;
   importMedia(): Promise<ImportMediaResult>;
@@ -210,9 +237,18 @@ export interface SottoDesktopApi {
   retryRecording(recordingId: string): Promise<RetryRecordingResult>;
   deleteRecording(recordingId: string): Promise<DeleteRecordingResult>;
   exportRecording(recordingId: string): Promise<ExportRecordingResult>;
+  openRecordingSettings(): Promise<OpenRecordingSettingsResult>;
   cancelTranscription(jobId: string): Promise<CancelTranscriptionResult>;
   getTranscript(transcriptId: string): Promise<TranscriptDetail | null>;
+  renameTranscriptSpeaker(
+    transcriptId: string,
+    speakerId: string,
+    label: string,
+  ): Promise<RenameTranscriptSpeakerResult>;
   deleteTranscript(transcriptId: string): Promise<DeleteTranscriptResult>;
-  exportTranscript(transcriptId: string): Promise<ExportTranscriptResult>;
+  exportTranscript(
+    transcriptId: string,
+    format: TranscriptExportFormat,
+  ): Promise<ExportTranscriptResult>;
   onAppStateChanged(listener: (state: AppState) => void): () => void;
 }

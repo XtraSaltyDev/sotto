@@ -1,4 +1,4 @@
-import { lstat, writeFile } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 
 import {
   BrowserWindow,
@@ -17,8 +17,11 @@ import {
   type ExportTranscriptResult,
   type FinishLiveRecordingResult,
   type ImportMediaResult,
+  type OpenRecordingSettingsResult,
   type RetryRecordingResult,
+  type RenameTranscriptSpeakerResult,
   type StartLiveRecordingResult,
+  type TranscriptExportFormat,
 } from '../../shared/contracts';
 import { AppController } from '../app-controller';
 import {
@@ -27,16 +30,22 @@ import {
   validateSelectedMedia,
 } from '../media/media-import';
 import { TranscriptionStartError } from '../transcription/transcription-service';
-import { isTranscriptId } from '../transcription/transcript-types';
+import {
+  isTranscriptId,
+  isTranscriptSpeakerId,
+  MAX_SPEAKER_LABEL_CHARACTERS,
+} from '../transcription/transcript-types';
 import {
   LiveRecordingError,
   MAX_LIVE_RECORDING_CHUNK_BYTES,
 } from '../recording/live-recording-service';
 import { copyRecordingForExport } from '../recording/recording-export';
+import { writeTranscriptExport } from '../export/transcript-export';
 
 export interface DesktopIpcOptions {
   controller: AppController;
   getMainWindow: () => BrowserWindow | null;
+  openRecordingSettings: () => Promise<void>;
 }
 
 const assertTrustedSender = (
@@ -57,7 +66,10 @@ const assertTrustedSender = (
   return window;
 };
 
-const exportFileName = (title: string): string => {
+const exportFileName = (
+  title: string,
+  format: TranscriptExportFormat,
+): string => {
   const withoutControls = Array.from(title, (character) =>
     character.charCodeAt(0) < 32 ? '-' : character,
   ).join('');
@@ -66,7 +78,7 @@ const exportFileName = (title: string): string => {
     .replace(/[. ]+$/gu, '')
     .trim()
     .slice(0, 120);
-  return `${safeTitle || 'Sotto transcript'}.txt`;
+  return `${safeTitle || 'Sotto transcript'}.${format}`;
 };
 
 const recordingExportFileName = (sourceName: string): string => {
@@ -98,6 +110,7 @@ const asChunk = (value: unknown): Uint8Array | null => {
 export const registerDesktopIpc = ({
   controller,
   getMainWindow,
+  openRecordingSettings,
 }: DesktopIpcOptions): (() => void) => {
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
     assertTrustedSender(event, getMainWindow);
@@ -106,6 +119,23 @@ export const registerDesktopIpc = ({
     trust(event);
     return controller.getState();
   });
+
+  ipcMain.handle(
+    IPC_CHANNELS.openRecordingSettings,
+    async (event): Promise<OpenRecordingSettingsResult> => {
+      trust(event);
+      try {
+        await openRecordingSettings();
+        return { outcome: 'opened' };
+      } catch {
+        return {
+          outcome: 'failed',
+          reason:
+            'Open System Settings → Privacy & Security → Screen & System Audio Recording.',
+        };
+      }
+    },
+  );
 
   ipcMain.handle(
     IPC_CHANNELS.importMedia,
@@ -352,6 +382,32 @@ export const registerDesktopIpc = ({
   });
 
   ipcMain.handle(
+    IPC_CHANNELS.renameTranscriptSpeaker,
+    async (
+      event,
+      transcriptId: unknown,
+      speakerId: unknown,
+      label: unknown,
+    ): Promise<RenameTranscriptSpeakerResult> => {
+      trust(event);
+      if (!isTranscriptId(transcriptId) || !isTranscriptSpeakerId(speakerId)) {
+        return { outcome: 'not-found' };
+      }
+      if (
+        typeof label !== 'string' ||
+        label.length === 0 ||
+        label.length > MAX_SPEAKER_LABEL_CHARACTERS
+      ) {
+        return {
+          outcome: 'rejected',
+          reason: `Speaker names must be 1–${MAX_SPEAKER_LABEL_CHARACTERS} characters.`,
+        };
+      }
+      return controller.renameTranscriptSpeaker(transcriptId, speakerId, label);
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.deleteTranscript,
     async (event, id: unknown): Promise<DeleteTranscriptResult> => {
       trust(event);
@@ -363,31 +419,49 @@ export const registerDesktopIpc = ({
 
   ipcMain.handle(
     IPC_CHANNELS.exportTranscript,
-    async (event, id: unknown): Promise<ExportTranscriptResult> => {
+    async (
+      event,
+      id: unknown,
+      format: unknown,
+    ): Promise<ExportTranscriptResult> => {
       const window = trust(event);
-      if (!isTranscriptId(id)) return { outcome: 'not-found' };
+      if (!isTranscriptId(id) || (format !== 'txt' && format !== 'docx')) {
+        return { outcome: 'not-found' };
+      }
 
-      const transcript = await controller.getTranscriptExport(id);
+      let transcript: Awaited<ReturnType<AppController['getTranscriptExport']>>;
+      try {
+        transcript = await controller.getTranscriptExport(id, format);
+      } catch {
+        return {
+          outcome: 'failed',
+          reason: 'Sotto could not prepare the transcript for export.',
+        };
+      }
       if (!transcript) return { outcome: 'not-found' };
+      const fileName = exportFileName(transcript.title, format);
 
       const selection = await dialog.showSaveDialog(window, {
         buttonLabel: 'Export Transcript',
-        defaultPath: exportFileName(transcript.title),
-        filters: [{ name: 'Plain text', extensions: ['txt'] }],
+        defaultPath: fileName,
+        filters: [
+          format === 'docx'
+            ? { name: 'Microsoft Word document', extensions: ['docx'] }
+            : { name: 'Plain text', extensions: ['txt'] },
+        ],
         title: 'Export Sotto Transcript',
       });
       if (selection.canceled || !selection.filePath) return { outcome: 'cancelled' };
 
       try {
-        await writeFile(selection.filePath, transcript.text, {
-          encoding: 'utf8',
-          mode: 0o600,
-        });
-        return { outcome: 'saved', fileName: exportFileName(transcript.title) };
-      } catch {
+        await writeTranscriptExport(selection.filePath, transcript.content);
+        return { outcome: 'saved', fileName };
+      } catch (error) {
         return {
           outcome: 'failed',
-          reason: 'Sotto could not write the transcript to that location.',
+          reason: isDiskFullError(error)
+            ? 'That location ran out of space before the transcript export completed.'
+            : 'Sotto could not write the transcript to that location.',
         };
       }
     },
@@ -412,8 +486,10 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.retryRecording,
       IPC_CHANNELS.deleteRecording,
       IPC_CHANNELS.exportRecording,
+      IPC_CHANNELS.openRecordingSettings,
       IPC_CHANNELS.cancelTranscription,
       IPC_CHANNELS.getTranscript,
+      IPC_CHANNELS.renameTranscriptSpeaker,
       IPC_CHANNELS.deleteTranscript,
       IPC_CHANNELS.exportTranscript,
     ]) {

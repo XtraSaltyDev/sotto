@@ -5,6 +5,8 @@ Forge, React, and TypeScript. The current macOS Apple Silicon build can import
 real audio and video recordings—including downloaded Microsoft Teams MP4s—then
 extract audio, transcribe it with a bundled `whisper.cpp` engine, save the
 result locally, display timestamped text, and export a plain-text transcript.
+It also clusters voices into transcript-local speaker labels that can be
+renamed, and exports Microsoft Word (`.docx`) transcripts.
 On macOS 13 or newer it can also record a live Teams meeting's desktop audio
 and your microphone, then transcribe that capture when you stop.
 
@@ -19,13 +21,17 @@ automatic summarization, or cloud capture.
 - Audio-track detection and duration probing
 - Offline conversion to mono 16 kHz PCM with a minimal, network-disabled FFmpeg
 - English transcription with `whisper.cpp` 1.9.1 and the `small.en` model
+- Local speaker clustering with generic Speaker 1, Speaker 2, and similar
+  labels, plus per-transcript renaming (macOS 15.5+ for the current native
+  speaker runtime)
 - Live preparing/transcribing/saving progress, cancellation, and CPU fallback
   if Metal cannot initialize
 - Atomic transcript persistence plus durable original WebM retention for live
   recordings
 - Recoverable failed/cancelled live transcriptions with Retry Transcription,
   Export Recording, and intentional Delete Recording actions
-- Recent, timestamped transcript detail, delete, and plain-text export views
+- Recent, timestamped transcript detail, delete, speaker rename, plain-text
+  export, and Microsoft Word export views
 - One active job at a time, bounded diagnostics, abandoned-job cleanup, and no
   persisted source paths
 - A sandboxed renderer and narrow typed IPC boundary
@@ -39,7 +45,8 @@ atomically renames that file to a durable `recording.webm` before transcription
 starts. The completed original is kept if transcription succeeds, fails, is
 cancelled, or the app restarts. Sotto does not join Teams, inspect Teams APIs,
 or upload the call. The Record button is disabled on macOS 12, unsupported
-platforms, and builds without the local engine.
+platforms, builds without the local engine, and macOS app copies that have not
+been granted Screen & System Audio Recording access.
 
 Sotto does not use recordings or transcripts for model training and does not
 collect or infer training consent. Any future training use would require a
@@ -53,9 +60,13 @@ AAC, ALAC, FLAC, MP3, Opus, Vorbis, WMA, WavPack, and PCM audio tracks found in
 those containers. A video without a supported audio track fails with an
 actionable error and is never modified.
 
-The current model is English-only and does not provide reliable speaker names
-or diarization. It produces timestamped speech segments, not meeting summaries
-or action items.
+The transcription model is English-only. Sotto separates voices locally, but
+it cannot read participant names from Teams: labels begin as `Speaker 1`,
+`Speaker 2`, and so on, and apply only within that transcript. Rename them after
+the meeting if desired. Sotto stores no reusable voiceprints. Overlapping
+speech, very short turns, music, and noisy mixed audio can remain labeled
+`Unclear`; Sotto does not guess when timing is ambiguous. It produces
+timestamped speech, not meeting summaries or action items.
 
 ## Use the current macOS build
 
@@ -65,6 +76,7 @@ Build the unpacked app:
 ```bash
 npm install
 npm run package
+npm run make
 ```
 
 Then open:
@@ -73,15 +85,40 @@ Then open:
 out/Sotto-darwin-arm64/Sotto.app
 ```
 
+For the normal macOS download, use the generated disk image:
+
+```text
+out/make/Sotto-0.1.0-arm64.dmg
+```
+
+Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
+available as an alternate artifact and for static-file update workflows.
+
+Local packages use an ad-hoc signature without Hardened Runtime. That is
+intentional: on macOS 26, a hardened process cannot load Electron components
+that were separately ad-hoc signed because they do not share an Apple Team ID.
+Set `SOTTO_MAC_SIGNING_IDENTITY` to a valid Developer ID Application identity
+when producing a hardened distribution build.
+
+For an ad-hoc local build, open the DMG and drag `Sotto.app` to
+**Applications** before setting up live recording. If Sotto shows **Open System
+Settings**, use that button and,
+under **Privacy & Security → Screen & System Audio Recording**, click **+**,
+choose the exact `Sotto.app` copy in Applications, and turn it on. Choose
+**Quit & Reopen** when macOS asks. Because an ad-hoc identity changes when the
+app is rebuilt, repeat this step after replacing Sotto with a newer build.
+
 Click **Import Recording**, choose a local audio/video file, and leave the
 source file in place until the job completes. The source is read-only. Sotto
 deletes only its derived normalized WAV and temporary engine output after each
 terminal job.
 
-For a live Teams call on macOS 13+, click **Record live meeting** before the
-call begins. Approve the macOS screen/system-audio and microphone prompts. Keep
-the Teams call playing through the Mac's normal audio output; Sotto captures
-that desktop mix and your microphone without joining or controlling Teams.
+For a live Teams call on macOS 13+, complete the Screen & System Audio
+Recording setup above, then click **Record live meeting** before the call
+begins. Approve the microphone prompt if you want your side of the conversation
+included. Keep the Teams call playing through the Mac's normal audio output;
+Sotto captures that desktop mix and your microphone without joining or
+controlling Teams.
 Click **Stop recording** when the call ends. Sotto closes and promotes the local
 WebM file, records its job/transcript link in private metadata, and starts
 transcription automatically. If transcription fails or is cancelled, the saved
@@ -95,13 +132,16 @@ per-user application-data directory:
 ```text
 macOS:   ~/Library/Application Support/Sotto/transcripts/
          ~/Library/Application Support/Sotto/recordings/
+         ~/Library/Application Support/Sotto/jobs/       (temporary only)
 Windows: %APPDATA%\Sotto\transcripts\
          %APPDATA%\Sotto\recordings\
 ```
 
 Each transcript is one schema-validated JSON file with display-only source
-metadata, text, timestamps, duration, language, and engine provenance. Exported
-`.txt` files go only to the location selected in the native save dialog.
+metadata, text, timestamps, transcript-local speaker labels, duration,
+language, and engine provenance. Exported `.txt` and `.docx` files go only to
+the location selected in the native save dialog. Imported media stays in its
+original location and is not copied into Sotto.
 
 Each saved live recording has its own private directory containing
 `recording.webm` and atomic, schema-validated `metadata.json`. Directories use
@@ -129,6 +169,14 @@ Prerequisites for rebuilding the macOS arm64 runtime:
 - Xcode command-line tools with the Metal compiler
 - CMake, Git, curl, make, and tar/xz support
 
+The current `sherpa-onnx` speaker runtime uses a native ONNX Runtime build that
+requires macOS 15.5 or newer. On macOS 13–15.4, Sotto can still record and
+transcribe, but saves the transcript without speaker labels if that native pass
+cannot start. Missing or unreadable speaker resources are handled the same way:
+Whisper remains available and the transcript is saved without labels. The
+native speaker pass runs in a separate utility process so a native crash cannot
+take down Electron or discard the completed Whisper text.
+
 Install, provision, and start:
 
 ```bash
@@ -140,7 +188,8 @@ npm start
 `setup:runtime:mac` downloads pinned source/model inputs, verifies their hashes,
 builds the two native executables, stages complete license material, and writes
 `resources/sidecars/darwin-arm64/runtime-manifest.json`. The model is about
-465 MB. Native binaries and model files are intentionally ignored by Git.
+465 MB, and the two speaker models add about 45 MB. Native binaries and model
+files are intentionally ignored by Git.
 
 To verify an already staged runtime without network, builds, or writes:
 
@@ -178,11 +227,17 @@ src/
 │   ├── recording/                   partial capture, durable store, recovery
 │   ├── runtime/                     packaged/dev engine resolution
 │   ├── storage/                     atomic transcript repository
-│   └── transcription/               job orchestration and whisper parsers
+│   ├── export/                      DOCX generation
+│   └── transcription/               job orchestration, text, speaker alignment
 └── renderer/                        React shell, progress, list, detail
 
+scripts/
+└── speaker-diarization-child.cjs    isolated native speaker-process entry
+
 resources/
-├── models/                          staged model outside the ASAR
+├── diarization/                     staged speaker models outside the ASAR
+├── models/                          staged Whisper model outside the ASAR
+├── speaker-runtime/                 staged native speaker engine
 └── sidecars/<platform-arch>/        executables, manifest, and licenses
 ```
 
@@ -195,8 +250,9 @@ native file selection or user-started desktop/system-audio capture
   → atomic promotion to a durable original WebM (live mode only)
   → first-audio-stream probe
   → private temporary 16 kHz WAV
-  → whisper.cpp JSON output
+  → whisper.cpp full JSON output with word timing
   → strict output normalization
+  → crash-isolated local speaker segmentation, clustering, and bounded word alignment
   → atomic transcript save
   → Recent/detail state update
 ```
@@ -242,15 +298,19 @@ disabled. See `resources/sidecars/PROVENANCE.md`, `sources.json`, and
 
 `npm run package` has been qualified on macOS arm64 and copies the runtime,
 model, manifests, and license files outside the ASAR. The local bundle is ad-hoc
-signed by the packaging toolchain, which is enough for local testing but not a
-public release. Live capture is qualified for the Electron desktop-capture path
-on macOS 13+; macOS 12 remains import-only because Chromium cannot capture
-desktop audio there without a virtual audio device.
+signed without Hardened Runtime by the packaging toolchain, which is enough for
+local testing but not a public release. A hardened ad-hoc Electron bundle is
+rejected at launch by macOS 26 library validation because its nested components
+do not share a Developer ID Team ID. Live capture is qualified for the Electron
+desktop-capture path on macOS 13+; macOS 12 remains import-only because Chromium
+cannot capture desktop audio there without a virtual audio device.
 
-Distribution still requires an owned Apple Developer ID identity, hardened
-runtime signing for the app and sidecars, notarization, stapling, final icons,
-and a decision between ZIP and DMG delivery. Intel (`darwin-x64`) has a folder
-contract but no built or qualified runtime yet.
+Distribution still requires an owned Apple Developer ID identity supplied as
+`SOTTO_MAC_SIGNING_IDENTITY`, hardened runtime signing for the app and sidecars,
+notarization, stapling, and a final Sotto app icon. The DMG is the primary
+macOS delivery format; the ZIP remains available for alternate and update
+workflows.
+Intel (`darwin-x64`) has a folder contract but no built or qualified runtime yet.
 
 ### Windows
 
@@ -268,8 +328,8 @@ can substitute for that platform qualification.
 2. Add macOS Intel only if there is a real deployment need.
 3. Add an explicit multilingual model choice if non-English meetings are in
    scope.
-4. Evaluate speaker diarization separately; `whisper.cpp` timestamps alone do
-   not identify meeting participants reliably.
+4. Evaluate speaker-label quality on representative multi-person Teams meetings
+   and rebuild the native speaker runtime for older macOS versions if needed.
 
 Cloud sync, accounts, an updater, and automatic summarization remain
 intentionally out of scope.
