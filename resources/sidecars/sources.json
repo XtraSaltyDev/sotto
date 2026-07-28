@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "target": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "minimumMacOSVersion": "12.0"
+  },
+  "whisperCpp": {
+    "version": "v1.9.1",
+    "repository": "https://github.com/ggml-org/whisper.cpp.git",
+    "commit": "f049fff95a089aa9969deb009cdd4892b3e74916",
+    "license": "MIT",
+    "build": {
+      "sharedLibraries": false,
+      "ggmlBlas": false,
+      "metal": true,
+      "metalLibraryEmbedded": true,
+      "nativeHostTuning": false
+    }
+  },
+  "ffmpeg": {
+    "version": "8.1.2",
+    "sourceArchive": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+    "sourceArchiveSha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+    "license": "LGPL-2.1-or-later",
+    "network": false
+  },
+  "model": {
+    "name": "ggml-small.en",
+    "file": "ggml-small.en.bin",
+    "revision": "c521a4b02f422512d734391fdf08bb08c0862f68",
+    "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.en.bin?download=true",
+    "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+    "language": "English",
+    "license": "MIT"
+  }
+}

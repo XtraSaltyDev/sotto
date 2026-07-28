@@ -1,0 +1,61 @@
+{
+  "name": "sotto",
+  "productName": "Sotto",
+  "version": "0.1.0",
+  "description": "Private, local-first desktop transcription.",
+  "main": ".webpack/main",
+  "private": true,
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "eslint --ext .ts,.tsx .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:runtime:mac": "SOTTO_RUNTIME_INTEGRATION=1 vitest run src/main/transcription/runtime.integration.test.ts",
+    "test:watch": "vitest",
+    "setup:runtime:mac": "bash scripts/provision-darwin-arm64.sh"
+  },
+  "keywords": [
+    "transcription",
+    "local-first",
+    "electron"
+  ],
+  "author": {
+    "name": "memion01",
+    "email": "116808225+XtraSaltyDev@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-deb": "^7.11.2",
+    "@electron-forge/maker-rpm": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+    "@electron-forge/plugin-fuses": "^7.11.2",
+    "@electron-forge/plugin-webpack": "^7.11.2",
+    "@electron/fuses": "^1.8.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@typescript-eslint/eslint-plugin": "^8.65.0",
+    "@typescript-eslint/parser": "^8.65.0",
+    "@vercel/webpack-asset-relocator-loader": "^1.7.3",
+    "css-loader": "^6.11.0",
+    "electron": "43.2.0",
+    "eslint": "^8.57.1",
+    "eslint-plugin-import": "^2.32.0",
+    "fork-ts-checker-webpack-plugin": "^7.3.0",
+    "node-loader": "^2.1.0",
+    "style-loader": "^3.3.4",
+    "ts-loader": "^9.6.2",
+    "typescript": "~6.0.0",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
+}

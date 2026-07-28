@@ -1,0 +1,220 @@
+import path from 'node:path';
+
+import { app, BrowserWindow, desktopCapturer, session } from 'electron';
+import started from 'electron-squirrel-startup';
+
+import type { LiveRecordingCapability } from './shared/contracts';
+
+import { AppController } from './main/app-controller';
+import { registerDesktopIpc } from './main/ipc/register-desktop-ipc';
+import { resolveEngineRuntime } from './main/runtime/engine-runtime';
+import { TranscriptRepository } from './main/storage/transcript-repository';
+
+declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
+declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+
+let mainWindow: BrowserWindow | null = null;
+let controller: AppController | null = null;
+let removeIpcHandlers: (() => void) | null = null;
+let shutdownStarted = false;
+let readyToQuit = false;
+
+if (started) app.quit();
+
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) app.quit();
+
+app.enableSandbox();
+
+const isAllowedNavigation = (url: string): boolean => {
+  try {
+    const requested = new URL(url);
+    const entry = new URL(MAIN_WINDOW_WEBPACK_ENTRY);
+    return (
+      requested.protocol === entry.protocol &&
+      requested.host === entry.host &&
+      requested.pathname === entry.pathname
+    );
+  } catch {
+    return false;
+  }
+};
+
+const liveRecordingCapability = (): LiveRecordingCapability => {
+  if (process.platform === 'win32') {
+    return {
+      state: 'ready',
+      message: 'Live meeting capture can record system audio and microphone input.',
+    };
+  }
+
+  if (process.platform === 'darwin') {
+    const systemVersion = (
+      process as NodeJS.Process & { getSystemVersion?: () => string }
+    ).getSystemVersion?.() ?? '0';
+    const majorVersion = Number.parseInt(systemVersion.split('.')[0] ?? '', 10);
+    if (Number.isFinite(majorVersion) && majorVersion >= 13) {
+      return {
+        state: 'ready',
+        message: 'Live meeting capture can record system audio and microphone input.',
+      };
+    }
+
+    return {
+      state: 'unsupported',
+      message: 'Live meeting capture requires macOS 13 or newer for desktop audio capture.',
+    };
+  }
+
+  return {
+    state: 'unsupported',
+    message: 'Live meeting capture is only supported on macOS and Windows.',
+  };
+};
+
+const configureDesktopAudioCapture = (): void => {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return;
+
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    void desktopCapturer
+      .getSources({
+        fetchWindowIcons: false,
+        thumbnailSize: { height: 0, width: 0 },
+        types: ['screen'],
+      })
+      .then((sources) => {
+        const source = sources[0];
+        if (!source) {
+          callback({});
+          return;
+        }
+
+        callback({
+          audio: request.audioRequested ? 'loopback' : undefined,
+          video: request.videoRequested ? source : undefined,
+        });
+      })
+      .catch(() => callback({}));
+  });
+};
+
+const isTrustedMediaRequester = (
+  webContents: Electron.WebContents | null,
+): boolean =>
+  webContents !== null &&
+  mainWindow !== null &&
+  !mainWindow.isDestroyed() &&
+  webContents === mainWindow.webContents &&
+  isAllowedNavigation(webContents.getURL());
+
+const createWindow = (): BrowserWindow => {
+  const window = new BrowserWindow({
+    title: 'Sotto',
+    backgroundColor: '#f7f5f1',
+    height: 800,
+    minHeight: 680,
+    minWidth: 920,
+    show: false,
+    width: 1240,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      sandbox: true,
+      // MediaRecorder must continue emitting chunks while Sotto is
+      // minimized during a Teams call.
+      backgroundThrottling: false,
+      webSecurity: true,
+    },
+  });
+
+  mainWindow = window;
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedNavigation(url)) event.preventDefault();
+  });
+  window.once('ready-to-show', () => window.show());
+  window.once('closed', () => {
+    if (mainWindow === window) mainWindow = null;
+  });
+  void window.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+  return window;
+};
+
+const initialize = async (): Promise<void> => {
+  configureDesktopAudioCapture();
+  session.defaultSession.setPermissionRequestHandler(
+    (webContents, permission, callback) => {
+      const trusted =
+        isTrustedMediaRequester(webContents) &&
+        (permission === 'media' || String(permission) === 'display-capture');
+      callback(trusted);
+    },
+  );
+  session.defaultSession.setPermissionCheckHandler(
+    (webContents, permission) =>
+      isTrustedMediaRequester(webContents) &&
+      (permission === 'media' || String(permission) === 'display-capture'),
+  );
+
+  const runtimeStatus = await resolveEngineRuntime({
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+  });
+  const repository = new TranscriptRepository(
+    path.join(app.getPath('userData'), 'transcripts'),
+  );
+  controller = new AppController(
+    repository,
+    runtimeStatus,
+    path.join(app.getPath('userData'), 'jobs'),
+    liveRecordingCapability(),
+  );
+  await controller.initialize();
+
+  removeIpcHandlers = registerDesktopIpc({
+    controller,
+    getMainWindow: () => mainWindow,
+  });
+  createWindow();
+};
+
+const shutdown = async (): Promise<void> => {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  removeIpcHandlers?.();
+  removeIpcHandlers = null;
+  await controller?.dispose();
+};
+
+if (hasInstanceLock && !started) {
+  void app.whenReady().then(initialize).catch((error: unknown) => {
+    console.error('Sotto failed to initialize its local runtime.', error);
+    app.quit();
+  });
+}
+
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0 && controller) createWindow();
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', (event) => {
+  if (readyToQuit || !controller) return;
+  event.preventDefault();
+  void shutdown().finally(() => {
+    readyToQuit = true;
+    app.exit(0);
+  });
+});
