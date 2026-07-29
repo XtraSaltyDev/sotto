@@ -78,6 +78,13 @@ export const DownloadIcon = (props: IconProps) => (
   </svg>
 );
 
+export const CopyIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <rect x="8" y="8" width="12" height="12" rx="2" />
+    <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+  </svg>
+);
+
 export const TrashIcon = (props: IconProps) => (
   <svg {...iconDefaults} {...props}>
     <path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" />

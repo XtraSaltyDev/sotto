@@ -6,12 +6,12 @@ builds can import real audio and video recordings—including downloaded
 Microsoft Teams MP4s—then
 extract audio, transcribe it with a bundled `whisper.cpp` engine, save the
 result locally, display synchronized timestamped text, play retained audio, and
-export a plain-text transcript. Saved transcript segments can be corrected
+export transcripts, subtitles, portable data, and meeting minutes. Saved transcript segments can be corrected
 without changing their timing or speaker assignment. The local Transcript
 Library searches titles, transcript text, speaker names, tags, and meeting
 summary content without sending a query or transcript off the device.
 It also clusters voices into transcript-local speaker labels that can be
-renamed, and exports Microsoft Word (`.docx`) transcripts.
+renamed, and exports Microsoft Word (`.docx`) transcripts and meeting minutes.
 On macOS 13 or newer and Windows 11 x64 it can also record a live Teams
 meeting's desktop audio and your microphone, then transcribe that capture when
 you stop.
@@ -41,8 +41,8 @@ transcript and links every listed point back to its timestamp.
   Export Recording, and intentional Delete Recording actions
 - A local Transcript Library with full-text search, date/speaker/tag filters,
   editable titles, simple tags, timestamped detail, segment correction,
-  transcript search, delete, speaker rename, plain-text export, and Microsoft
-  Word export views
+  transcript search, delete, speaker rename, TXT/DOCX transcript export,
+  SRT/WebVTT subtitles, portable JSON, and meeting-minutes export views
 - Local meeting-summary drafts with an overview, key points, decisions, action
   items, and transcript-linked timestamps
 - Synchronized local playback with clickable segment timestamps, clickable
@@ -112,7 +112,7 @@ out/Sotto-darwin-arm64/Sotto.app
 For local DMG validation, use the generated disk image:
 
 ```text
-out/make/Sotto-0.1.6-arm64.dmg
+out/make/Sotto-0.1.7-arm64.dmg
 ```
 
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
@@ -215,9 +215,13 @@ have no clickable word timing. The next transcript, segment, speaker, title, or
 tag edit writes the current schema atomically. On Unix-like systems, the
 transcript directory is owner-only (`0700`) and each JSON file is owner-private
 (`0600`).
-Exported `.txt` and `.docx` files go only to the location selected in the native
-save dialog. Imported originals stay in their original location and are never
-copied into Sotto; only Sotto's audio-only playback derivative is retained.
+Exported `.txt`, `.docx`, `.srt`, `.vtt`, and `.json` files go only to the
+location selected in the native save dialog. Sotto writes a private temporary
+file beside the selected destination, flushes it, and then replaces the
+destination in one rename; a failed write removes the temporary file and does
+not truncate an existing export. Imported originals stay in their original
+location and are never copied into Sotto; only Sotto's audio-only playback
+derivative is retained.
 
 Use **Transcript Library** to search every saved transcript. Search covers
 manual titles, full transcript text and segments, transcript-local speaker
@@ -274,6 +278,62 @@ reference, so available playback can jump to the supporting audio. This is an
 extractive aid, not a generative model: it does not invent missing context, and
 the user should review the linked transcript before relying on it. TXT and DOCX
 exports include the same summary.
+
+### Useful output
+
+The transcript detail toolbar keeps output actions in two keyboard-accessible
+menus. **Export** opens the native save dialog. **Copy** writes the selected
+plain text to the operating-system clipboard and reports success or failure
+without logging the copied transcript content.
+
+The export formats are:
+
+- **Full transcript (TXT)**: title, completion date, duration, language, the
+  current local meeting summary, and timestamped transcript segments.
+- **Full transcript (DOCX)**: a formatted Word document with transcript
+  metadata, the current local meeting summary, timestamps, stored speaker
+  labels, and the complete transcript.
+- **Subtitles (SRT)**: numbered cues with `HH:MM:SS,mmm` timing. Cues use saved
+  segment timing and stored speaker labels. When speaker analysis ran but a
+  segment could not be assigned, the cue says `Unclear`; Sotto does not invent
+  a participant name.
+- **Subtitles (WebVTT)**: a valid `WEBVTT` document with numbered cues and
+  `HH:MM:SS.mmm` timing. It follows the same timing and speaker rules as SRT and
+  escapes cue-text markup characters.
+- **Portable transcript data (JSON)**: deterministic UTF-8 JSON with
+  `format: "sotto-portable-transcript"` and `formatVersion: 1`. It contains the
+  transcript ID, title, tags, dates, duration, language, display-only source
+  name/type/media kind, transcription engine, stored speakers, full text,
+  segments, word timing arrays, and the current local meeting summary. It does
+  not contain raw filesystem paths, playback or private app URLs, recording
+  links, file sizes, temporary jobs, permission state, or unrelated storage
+  metadata.
+- **Meeting minutes (DOCX)**: a focused Word document with the transcript title
+  and date, overview, key points, decisions, action items, stored speaker labels
+  where available, and timestamp references. It does not duplicate the full
+  transcript and does not use a generative model.
+
+The Copy menu provides **Overview**, **Key points**, **Decisions**, **Action
+items**, and **Complete meeting minutes**. List items use reusable plain-text
+bullets with `HH:MM:SS` references and stored speaker labels when available.
+Complete minutes include the title, ISO completion date, and all four summary
+sections. Empty sections say that no item was found instead of claiming a fact.
+
+Subtitle export works for schema-v1 and schema-v2 transcripts when segment
+timing exists; word timing is not required. Blank segments are omitted. Cue
+text is flattened to clean single-line text, and text longer than 240
+characters is split at a sensible word boundary with its saved segment time
+distributed deterministically. Zero-length cues are extended to at least one
+millisecond, and malformed or overlapping inputs are ordered and moved forward
+so the exported cues remain valid. These repairs do not alter the saved
+transcript. Older transcripts expose empty word arrays in portable JSON.
+
+The summary and minutes remain extractive: short transcripts may have a sparse
+overview, and decisions or action items appear only when the saved wording
+matches Sotto's local rules. Timestamp references point to the start of the
+supporting transcript sentence, not a new factual claim. Export stays on the
+device, but anything copied to the operating-system clipboard can be read by
+other local applications according to the operating system's clipboard rules.
 
 Each saved live recording has its own private directory containing
 `recording.webm` and atomic, schema-validated `metadata.json`. Directories use
@@ -386,7 +446,7 @@ src/
 │   ├── recording/                   partial capture, durable store, recovery
 │   ├── runtime/                     packaged/dev engine resolution
 │   ├── storage/                     atomic transcript repository
-│   ├── export/                      DOCX generation
+│   ├── export/                      DOCX, subtitle, JSON, and copy formatting
 │   └── transcription/               job orchestration, text, speaker alignment
 └── renderer/                        React shell, progress, list, detail
 
@@ -424,7 +484,7 @@ processes are invoked directly with `shell: false`; loader-injection and Node
 runtime environment variables are removed. The renderer has
 `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true`. Its
 preload exposes only state, import, live-recording chunks, retry/cancel,
-recording and transcript delete/export, validated segment correction, speaker
+recording and transcript delete/export, fixed local copy targets, validated segment correction, speaker
 rename, transcript metadata updates, local library search, record lookup, and
 state-change methods. Playback uses a
 separate `sotto-media` transport that accepts only a

@@ -5,6 +5,8 @@ import {
   type AppState,
   type RecordingKind,
   type SottoDesktopApi,
+  type TranscriptCopyKind,
+  type TranscriptExportFormat,
   type TranscriptLibraryQuery,
 } from './shared/contracts';
 
@@ -74,8 +76,10 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.deleteTranscript, transcriptId),
   deletePlayback: (transcriptId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.deletePlayback, transcriptId),
-  exportTranscript: (transcriptId: string, format: 'txt' | 'docx') =>
+  exportTranscript: (transcriptId: string, format: TranscriptExportFormat) =>
     ipcRenderer.invoke(IPC_CHANNELS.exportTranscript, transcriptId, format),
+  copyTranscriptOutput: (transcriptId: string, kind: TranscriptCopyKind) =>
+    ipcRenderer.invoke(IPC_CHANNELS.copyTranscriptOutput, transcriptId, kind),
   onDictationShortcut: (listener: () => void) => {
     const wrapped = () => listener();
     ipcRenderer.on(IPC_CHANNELS.dictationShortcut, wrapped);

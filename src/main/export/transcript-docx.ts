@@ -590,60 +590,175 @@ const transcriptBody = (
   ];
 };
 
+const minutesItemParagraphs = (
+  title: string,
+  items: MeetingSummary['keyPoints'],
+  emptyText: string,
+  speakerLabelsById: ReadonlyMap<string, string>,
+): Paragraph[] => [
+  new Paragraph({
+    children: [new TextRun(title)],
+    heading: HeadingLevel.HEADING_1,
+  }),
+  ...(items.length > 0
+    ? items.map((item) => {
+        const speaker = item.speakerId
+          ? speakerLabelsById.get(item.speakerId)
+          : null;
+        return new Paragraph({
+          bullet: { level: 0 },
+          children: [
+            new TextRun({
+              color: STYLE.metadata.color,
+              text: `${formatTimestamp(item.startMs)}  `,
+            }),
+            ...(speaker
+              ? [new TextRun({ bold: true, text: `${speaker}: ` })]
+              : []),
+            ...segmentTextRuns(item.text),
+          ],
+        });
+      })
+    : [
+        new Paragraph({
+          children: [new TextRun(emptyText)],
+          style: 'SottoTranscriptEmpty',
+        }),
+      ]),
+];
+
+const meetingMinutesBody = (
+  record: TranscriptDocxRecord,
+  summary: MeetingSummary | null,
+): Paragraph[] => {
+  const speakerLabelsById = buildSpeakerLabelsById(record);
+  const overview = normalizeInlineText(summary?.overview ?? '') ||
+    'No overview was extracted from this transcript.';
+
+  return [
+    new Paragraph({
+      children: [new TextRun('Sotto')],
+      style: 'SottoKicker',
+    }),
+    new Paragraph({
+      children: [new TextRun(normalizeInlineText(record.title))],
+      heading: HeadingLevel.TITLE,
+    }),
+    new Paragraph({
+      children: [new TextRun('Meeting minutes')],
+      style: 'SottoTranscriptSubtitle',
+    }),
+    metadataParagraph([
+      ['Date', formatUtcDateTime(record.completedAt)],
+      ['Duration', formatTimestamp(record.durationMs)],
+    ]),
+    new Paragraph({
+      children: [
+        new TextRun(
+          'Extracted locally from the saved transcript. Review each item against its timestamp.',
+        ),
+      ],
+      style: 'SottoTranscriptEmpty',
+    }),
+    new Paragraph({
+      children: [new TextRun('Overview')],
+      heading: HeadingLevel.HEADING_1,
+    }),
+    new Paragraph({ children: segmentTextRuns(overview) }),
+    ...minutesItemParagraphs(
+      'Key points',
+      summary?.keyPoints ?? [],
+      'No key points were found.',
+      speakerLabelsById,
+    ),
+    ...minutesItemParagraphs(
+      'Decisions',
+      summary?.decisions ?? [],
+      'No decisions were found.',
+      speakerLabelsById,
+    ),
+    ...minutesItemParagraphs(
+      'Action items',
+      summary?.actionItems ?? [],
+      'No action items were found.',
+      speakerLabelsById,
+    ),
+  ];
+};
+
+const createDocument = (
+  record: TranscriptDocxRecord,
+  children: Paragraph[],
+  subject: string,
+  footerLabel: string,
+): Document => new Document({
+  compatabilityModeVersion: 15,
+  creator: 'Sotto',
+  defaultTabStop: 720,
+  lastModifiedBy: 'Sotto',
+  revision: 1,
+  sections: [
+    {
+      children,
+      footers: {
+        default: new Footer({
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun(footerLabel),
+                new TextRun({ children: [new Tab(), PageNumber.CURRENT] }),
+              ],
+              style: 'SottoFooter',
+            }),
+          ],
+        }),
+      },
+      properties: {
+        grid: { linePitch: 360 },
+        page: {
+          margin: {
+            bottom: STYLE.page.margin,
+            footer: STYLE.page.footer,
+            gutter: 0,
+            header: STYLE.page.header,
+            left: STYLE.page.margin,
+            right: STYLE.page.margin,
+            top: STYLE.page.margin,
+          },
+          size: {
+            height: STYLE.page.height,
+            orientation: PageOrientation.PORTRAIT,
+            width: STYLE.page.width,
+          },
+        },
+      },
+    },
+  ],
+  styles: createStyles(),
+  subject,
+  title: normalizeInlineText(record.title),
+});
+
 /** Generates a professional transcript as an in-memory Word document. */
 export const createTranscriptDocx = async (
   record: TranscriptDocxRecord,
   summary: MeetingSummary | null = null,
 ): Promise<Buffer> => {
-  const document = new Document({
-    compatabilityModeVersion: 15,
-    creator: 'Sotto',
-    defaultTabStop: 720,
-    lastModifiedBy: 'Sotto',
-    revision: 1,
-    sections: [
-      {
-        children: transcriptBody(record, summary),
-        footers: {
-          default: new Footer({
-            children: [
-              new Paragraph({
-                children: [
-                  new TextRun('Sotto transcript'),
-                  new TextRun({
-                    children: [new Tab(), PageNumber.CURRENT],
-                  }),
-                ],
-                style: 'SottoFooter',
-              }),
-            ],
-          }),
-        },
-        properties: {
-          grid: { linePitch: 360 },
-          page: {
-            margin: {
-              bottom: STYLE.page.margin,
-              footer: STYLE.page.footer,
-              gutter: 0,
-              header: STYLE.page.header,
-              left: STYLE.page.margin,
-              right: STYLE.page.margin,
-              top: STYLE.page.margin,
-            },
-            size: {
-              height: STYLE.page.height,
-              orientation: PageOrientation.PORTRAIT,
-              width: STYLE.page.width,
-            },
-          },
-        },
-      },
-    ],
-    styles: createStyles(),
-    subject: 'Meeting transcript',
-    title: normalizeInlineText(record.title),
-  });
-
-  return Packer.toBuffer(document);
+  return Packer.toBuffer(createDocument(
+    record,
+    transcriptBody(record, summary),
+    'Meeting transcript',
+    'Sotto transcript',
+  ));
 };
+
+/** Generates meeting minutes without duplicating the full transcript body. */
+export const createMeetingMinutesDocx = async (
+  record: TranscriptDocxRecord,
+  summary: MeetingSummary | null,
+): Promise<Buffer> => Packer.toBuffer(createDocument(
+  record,
+  meetingMinutesBody(record, summary),
+  'Meeting minutes',
+  'Sotto meeting minutes',
+));

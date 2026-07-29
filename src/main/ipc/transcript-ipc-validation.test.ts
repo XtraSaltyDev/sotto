@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isTranscriptCopyKind,
+  isTranscriptExportFormat,
   parseTranscriptLibraryQuery,
   parseTranscriptMetadataUpdate,
 } from './transcript-ipc-validation';
@@ -54,5 +56,28 @@ describe('Transcript Library IPC validation', () => {
     expect(() =>
       parseTranscriptMetadataUpdate({ tags: ['x'.repeat(49)] }),
     ).toThrow('48 characters');
+  });
+
+  it('accepts only the fixed local output formats and copy targets', () => {
+    expect([
+      'txt',
+      'docx',
+      'srt',
+      'vtt',
+      'json',
+      'minutes-docx',
+    ].every(isTranscriptExportFormat)).toBe(true);
+    expect(isTranscriptExportFormat('pdf')).toBe(false);
+    expect(isTranscriptExportFormat({ format: 'srt' })).toBe(false);
+
+    expect([
+      'overview',
+      'key-points',
+      'decisions',
+      'action-items',
+      'meeting-minutes',
+    ].every(isTranscriptCopyKind)).toBe(true);
+    expect(isTranscriptCopyKind('transcript')).toBe(false);
+    expect(isTranscriptCopyKind('/private/meeting.txt')).toBe(false);
   });
 });

@@ -396,6 +396,24 @@ describe('transcript presentation', () => {
     const docx = await controller.getTranscriptExport(record.id, 'docx');
     expect(Buffer.isBuffer(docx?.content)).toBe(true);
     expect((docx?.content as Buffer).subarray(0, 2).toString('ascii')).toBe('PK');
+    await expect(controller.getTranscriptExport(record.id, 'srt')).resolves.toMatchObject({
+      content: expect.stringContaining('Morgan: First item.'),
+    });
+    await expect(controller.getTranscriptExport(record.id, 'vtt')).resolves.toMatchObject({
+      content: expect.stringContaining('WEBVTT'),
+    });
+    const portable = await controller.getTranscriptExport(record.id, 'json');
+    expect(JSON.parse(portable?.content as string)).toMatchObject({
+      format: 'sotto-portable-transcript',
+      transcript: { speakers: [{ label: 'Morgan' }] },
+    });
+    const minutes = await controller.getTranscriptExport(record.id, 'minutes-docx');
+    expect(Buffer.isBuffer(minutes?.content)).toBe(true);
+    expect((minutes?.content as Buffer).subarray(0, 2).toString('ascii')).toBe('PK');
+    await expect(
+      controller.getTranscriptCopyText(record.id, 'meeting-minutes'),
+    ).resolves.toContain('Teams planning meeting');
+    await controller.dispose();
   });
 
   it('updates transcript text, cached preview, and later exports together', async () => {

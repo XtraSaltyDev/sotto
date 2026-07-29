@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { TRANSCRIPT_SCHEMA_VERSION } from '../transcription/transcript-types';
 import {
+  createMeetingMinutesDocx,
   createTranscriptDocx,
   TRANSCRIPT_DOCX_MIME_TYPE,
   type TranscriptDocxRecord,
@@ -255,5 +256,57 @@ describe('createTranscriptDocx', () => {
 
     expect(documentXml).toContain('Text only transcript.');
     expect(documentXml).not.toContain('Unclear: ');
+  });
+});
+
+describe('createMeetingMinutesDocx', () => {
+  it('builds focused minutes with title, date, overview, every group, speakers, and timestamps', async () => {
+    const documentXml = readXml(
+      extractZipEntries(await createMeetingMinutesDocx(createRecord(), {
+        overview: 'The team reviewed launch readiness.',
+        keyPoints: [
+          {
+            text: 'Security review is nearly complete.',
+            startMs: 1_000,
+            speakerId: 'speaker-1',
+          },
+        ],
+        decisions: [
+          {
+            text: 'We decided to launch Tuesday.',
+            startMs: 60_000,
+            speakerId: 'speaker-2',
+          },
+        ],
+        actionItems: [],
+      })),
+      'word/document.xml',
+    );
+
+    expect(documentXml).toContain('R&amp;D &lt;weekly sync&gt;');
+    expect(documentXml).toContain('Meeting minutes');
+    expect(documentXml).toContain('2026-07-27 12:02 UTC');
+    expect(documentXml).toContain('Overview');
+    expect(documentXml).toContain('The team reviewed launch readiness.');
+    expect(documentXml).toContain('Key points');
+    expect(documentXml).toContain('Me &amp; &lt;Team&gt;: ');
+    expect(documentXml).toContain('00:00:01');
+    expect(documentXml).toContain('Decisions');
+    expect(documentXml).toContain('Action items');
+    expect(documentXml).toContain('No action items were found.');
+    expect(documentXml).not.toContain('Meeting transcript');
+    expect(documentXml).not.toContain('No owner yet.');
+  });
+
+  it('describes empty extractive output without claiming facts', async () => {
+    const documentXml = readXml(
+      extractZipEntries(await createMeetingMinutesDocx(createRecord(), null)),
+      'word/document.xml',
+    );
+
+    expect(documentXml).toContain('No overview was extracted from this transcript.');
+    expect(documentXml).toContain('No key points were found.');
+    expect(documentXml).toContain('No decisions were found.');
+    expect(documentXml).toContain('No action items were found.');
   });
 });

@@ -18,6 +18,7 @@ export const IPC_CHANNELS = {
   renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
   deleteTranscript: 'sotto:transcript:delete',
   exportTranscript: 'sotto:transcript:export',
+  copyTranscriptOutput: 'sotto:transcript:copy-output',
   deletePlayback: 'sotto:playback:delete',
   stateChanged: 'sotto:state:changed',
   dictationShortcut: 'sotto:dictation:shortcut',
@@ -286,7 +287,25 @@ export type ExportTranscriptResult =
   | { outcome: 'not-found' }
   | { outcome: 'failed'; reason: string };
 
-export type TranscriptExportFormat = 'txt' | 'docx';
+export type TranscriptExportFormat =
+  | 'txt'
+  | 'docx'
+  | 'srt'
+  | 'vtt'
+  | 'json'
+  | 'minutes-docx';
+
+export type TranscriptCopyKind =
+  | 'overview'
+  | 'key-points'
+  | 'decisions'
+  | 'action-items'
+  | 'meeting-minutes';
+
+export type CopyTranscriptOutputResult =
+  | { outcome: 'copied' }
+  | { outcome: 'not-found' }
+  | { outcome: 'failed'; reason: string };
 
 export type RenameTranscriptSpeakerResult =
   | { outcome: 'renamed'; speaker: TranscriptSpeaker }
@@ -349,6 +368,10 @@ export interface SottoDesktopApi {
     transcriptId: string,
     format: TranscriptExportFormat,
   ): Promise<ExportTranscriptResult>;
+  copyTranscriptOutput(
+    transcriptId: string,
+    kind: TranscriptCopyKind,
+  ): Promise<CopyTranscriptOutputResult>;
   onDictationShortcut(listener: () => void): () => void;
   onAppStateChanged(listener: (state: AppState) => void): () => void;
 }

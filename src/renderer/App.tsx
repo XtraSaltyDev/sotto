@@ -15,6 +15,7 @@ import type {
   SavedRecordingSummary,
   StartLiveRecordingResult,
   TranscriptDetail,
+  TranscriptCopyKind,
   TranscriptExportFormat,
   TranscriptLibraryResult,
   TranscriptSpeaker,
@@ -46,6 +47,7 @@ import {
   AudioFileIcon,
   BrandIcon,
   CancelIcon,
+  CopyIcon,
   DocumentIcon,
   DownloadIcon,
   FolderIcon,
@@ -55,6 +57,12 @@ import {
   SpinnerIcon,
   TrashIcon,
 } from './icons';
+import {
+  TRANSCRIPT_COPY_OPTIONS,
+  TRANSCRIPT_EXPORT_OPTIONS,
+  transcriptCopySuccessMessage,
+  transcriptExportFailureLabel,
+} from './transcript-output-actions';
 
 const formatDuration = (durationMs: number): string => {
   const totalSeconds = Math.max(0, Math.round(durationMs / 1_000));
@@ -770,6 +778,76 @@ const MeetingSummaryView = ({
   );
 };
 
+const closeOutputMenu = (target: HTMLElement): void => {
+  target.closest('details')?.removeAttribute('open');
+};
+
+export const TranscriptOutputMenus = ({
+  hasRecording,
+  onCopy,
+  onExport,
+  onExportRecording,
+}: {
+  hasRecording: boolean;
+  onCopy: (kind: TranscriptCopyKind) => void;
+  onExport: (format: TranscriptExportFormat) => void;
+  onExportRecording: () => void;
+}) => (
+  <>
+    <details className="output-menu">
+      <summary className="icon-button" aria-label="Open transcript export options">
+        <DownloadIcon />
+        <span>Export</span>
+      </summary>
+      <div className="output-menu__panel" aria-label="Transcript export options">
+        {hasRecording ? (
+          <button
+            onClick={(event) => {
+              closeOutputMenu(event.currentTarget);
+              onExportRecording();
+            }}
+            type="button"
+          >
+            Original recording
+          </button>
+        ) : null}
+        {TRANSCRIPT_EXPORT_OPTIONS.map((option) => (
+          <button
+            key={option.format}
+            onClick={(event) => {
+              closeOutputMenu(event.currentTarget);
+              onExport(option.format);
+            }}
+            type="button"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </details>
+    <details className="output-menu">
+      <summary className="icon-button" aria-label="Open meeting copy options">
+        <CopyIcon />
+        <span>Copy</span>
+      </summary>
+      <div className="output-menu__panel" aria-label="Meeting copy options">
+        {TRANSCRIPT_COPY_OPTIONS.map((option) => (
+          <button
+            key={option.kind}
+            onClick={(event) => {
+              closeOutputMenu(event.currentTarget);
+              onCopy(option.kind);
+            }}
+            type="button"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </details>
+  </>
+);
+
 const TranscriptView = ({
   transcript,
   loading,
@@ -777,6 +855,7 @@ const TranscriptView = ({
   onBack,
   onDelete,
   onDeletePlayback,
+  onCopy,
   onExport,
   onExportRecording,
   onRenameSpeaker,
@@ -789,6 +868,7 @@ const TranscriptView = ({
   onBack: () => void;
   onDelete: () => void;
   onDeletePlayback: () => void;
+  onCopy: (kind: TranscriptCopyKind) => void;
   onExport: (format: TranscriptExportFormat) => void;
   onExportRecording: () => void;
   onRenameSpeaker: (speakerId: string, label: string) => Promise<string | null>;
@@ -922,20 +1002,12 @@ const TranscriptView = ({
       </button>
       {transcript ? (
         <div className="detail-actions">
-          {transcript.recordingId ? (
-            <button className="icon-button" onClick={onExportRecording} type="button">
-              <DownloadIcon />
-              <span>Export recording</span>
-            </button>
-          ) : null}
-          <button className="icon-button" onClick={() => onExport('docx')} type="button">
-            <DownloadIcon />
-            <span>Export DOCX</span>
-          </button>
-          <button className="icon-button" onClick={() => onExport('txt')} type="button">
-            <DownloadIcon />
-            <span>Export TXT</span>
-          </button>
+          <TranscriptOutputMenus
+            hasRecording={Boolean(transcript.recordingId)}
+            onCopy={onCopy}
+            onExport={onExport}
+            onExportRecording={onExportRecording}
+          />
           <button className="icon-button icon-button--danger" onClick={onDelete} type="button">
             <TrashIcon />
             <span>Delete transcript</span>
@@ -944,7 +1016,7 @@ const TranscriptView = ({
       ) : null}
     </header>
     {message ? (
-      <p className="transcript-message" role="alert">{message}</p>
+      <p className="transcript-message" role="status" aria-live="polite">{message}</p>
     ) : null}
     {loading ? (
       <div className="detail-loading"><SpinnerIcon className="spinner" /> Loading transcript…</div>
@@ -1760,8 +1832,30 @@ export const App = () => {
       if (result.outcome === 'not-found') {
         setMessage('That transcript is no longer available.');
       }
+      if (result.outcome === 'saved') {
+        setMessage(`${result.fileName} was saved.`);
+      }
     } catch {
-      setMessage(`Sotto could not export that ${format.toUpperCase()} file.`);
+      setMessage(
+        `Sotto could not export ${transcriptExportFailureLabel(format)}.`,
+      );
+    }
+  };
+
+  const handleCopyOutput = async (kind: TranscriptCopyKind) => {
+    if (!window.sotto || !selectedId) return;
+    setMessage(null);
+    try {
+      const result = await window.sotto.copyTranscriptOutput(selectedId, kind);
+      if (result.outcome === 'copied') {
+        setMessage(transcriptCopySuccessMessage(kind));
+      } else if (result.outcome === 'not-found') {
+        setMessage('That transcript is no longer available.');
+      } else {
+        setMessage(result.reason);
+      }
+    } catch {
+      setMessage('Sotto could not copy that meeting output.');
     }
   };
 
@@ -1993,6 +2087,7 @@ export const App = () => {
           }}
           onDelete={() => void handleDelete()}
           onDeletePlayback={() => void handleDeletePlayback()}
+          onCopy={(kind) => void handleCopyOutput(kind)}
           onExport={(format) => void handleExport(format)}
           onExportRecording={() => {
             if (transcript?.recordingId) void exportRecording(transcript.recordingId);

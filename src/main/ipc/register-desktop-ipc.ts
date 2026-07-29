@@ -2,6 +2,7 @@ import { lstat } from 'node:fs/promises';
 
 import {
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   type IpcMainInvokeEvent,
@@ -11,6 +12,7 @@ import {
   IPC_CHANNELS,
   type AppendLiveRecordingChunkResult,
   type CancelLiveRecordingResult,
+  type CopyTranscriptOutputResult,
   type DeleteRecordingResult,
   type DeletePlaybackResult,
   type DeleteTranscriptResult,
@@ -51,6 +53,8 @@ import {
 import { copyRecordingForExport } from '../recording/recording-export';
 import { writeTranscriptExport } from '../export/transcript-export';
 import {
+  isTranscriptCopyKind,
+  isTranscriptExportFormat,
   parseTranscriptLibraryQuery,
   parseTranscriptMetadataUpdate,
 } from './transcript-ipc-validation';
@@ -80,6 +84,57 @@ const assertTrustedSender = (
   return window;
 };
 
+const TRANSCRIPT_EXPORT_DETAILS = {
+  txt: {
+    buttonLabel: 'Export Transcript',
+    extension: 'txt',
+    filterName: 'Plain text',
+    suffix: '.txt',
+    title: 'Export Sotto Transcript',
+  },
+  docx: {
+    buttonLabel: 'Export Transcript',
+    extension: 'docx',
+    filterName: 'Microsoft Word document',
+    suffix: '.docx',
+    title: 'Export Sotto Transcript',
+  },
+  srt: {
+    buttonLabel: 'Export Subtitles',
+    extension: 'srt',
+    filterName: 'SubRip subtitles',
+    suffix: '.srt',
+    title: 'Export Sotto Subtitles',
+  },
+  vtt: {
+    buttonLabel: 'Export Subtitles',
+    extension: 'vtt',
+    filterName: 'WebVTT subtitles',
+    suffix: '.vtt',
+    title: 'Export Sotto Subtitles',
+  },
+  json: {
+    buttonLabel: 'Export Transcript Data',
+    extension: 'json',
+    filterName: 'Sotto portable transcript',
+    suffix: '.json',
+    title: 'Export Sotto Transcript Data',
+  },
+  'minutes-docx': {
+    buttonLabel: 'Export Meeting Minutes',
+    extension: 'docx',
+    filterName: 'Microsoft Word document',
+    suffix: ' - meeting minutes.docx',
+    title: 'Export Sotto Meeting Minutes',
+  },
+} as const satisfies Record<TranscriptExportFormat, {
+  buttonLabel: string;
+  extension: string;
+  filterName: string;
+  suffix: string;
+  title: string;
+}>;
+
 const exportFileName = (
   title: string,
   format: TranscriptExportFormat,
@@ -92,7 +147,7 @@ const exportFileName = (
     .replace(/[. ]+$/gu, '')
     .trim()
     .slice(0, 120);
-  return `${safeTitle || 'Sotto transcript'}.${format}`;
+  return `${safeTitle || 'Sotto transcript'}${TRANSCRIPT_EXPORT_DETAILS[format].suffix}`;
 };
 
 const recordingExportFileName = (sourceName: string): string => {
@@ -571,7 +626,7 @@ export const registerDesktopIpc = ({
       format: unknown,
     ): Promise<ExportTranscriptResult> => {
       const window = trust(event);
-      if (!isTranscriptId(id) || (format !== 'txt' && format !== 'docx')) {
+      if (!isTranscriptId(id) || !isTranscriptExportFormat(format)) {
         return { outcome: 'not-found' };
       }
 
@@ -586,16 +641,15 @@ export const registerDesktopIpc = ({
       }
       if (!transcript) return { outcome: 'not-found' };
       const fileName = exportFileName(transcript.title, format);
+      const details = TRANSCRIPT_EXPORT_DETAILS[format];
 
       const selection = await dialog.showSaveDialog(window, {
-        buttonLabel: 'Export Transcript',
+        buttonLabel: details.buttonLabel,
         defaultPath: fileName,
         filters: [
-          format === 'docx'
-            ? { name: 'Microsoft Word document', extensions: ['docx'] }
-            : { name: 'Plain text', extensions: ['txt'] },
+          { name: details.filterName, extensions: [details.extension] },
         ],
-        title: 'Export Sotto Transcript',
+        title: details.title,
       });
       if (selection.canceled || !selection.filePath) return { outcome: 'cancelled' };
 
@@ -608,6 +662,32 @@ export const registerDesktopIpc = ({
           reason: isDiskFullError(error)
             ? 'That location ran out of space before the transcript export completed.'
             : 'Sotto could not write the transcript to that location.',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.copyTranscriptOutput,
+    async (
+      event,
+      id: unknown,
+      kind: unknown,
+    ): Promise<CopyTranscriptOutputResult> => {
+      trust(event);
+      if (!isTranscriptId(id) || !isTranscriptCopyKind(kind)) {
+        return { outcome: 'not-found' };
+      }
+
+      try {
+        const text = await controller.getTranscriptCopyText(id, kind);
+        if (text === null) return { outcome: 'not-found' };
+        clipboard.writeText(text);
+        return { outcome: 'copied' };
+      } catch {
+        return {
+          outcome: 'failed',
+          reason: 'Sotto could not copy that meeting output.',
         };
       }
     },
@@ -643,6 +723,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.deleteTranscript,
       IPC_CHANNELS.deletePlayback,
       IPC_CHANNELS.exportTranscript,
+      IPC_CHANNELS.copyTranscriptOutput,
     ]) {
       ipcMain.removeHandler(channel);
     }

@@ -1,5 +1,7 @@
 import {
   MAX_TRANSCRIPT_LIBRARY_QUERY_CHARACTERS,
+  type TranscriptCopyKind,
+  type TranscriptExportFormat,
   type TranscriptLibraryQuery,
 } from '../../shared/contracts';
 import {
@@ -14,6 +16,35 @@ import {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const TRANSCRIPT_EXPORT_FORMATS = new Set<TranscriptExportFormat>([
+  'txt',
+  'docx',
+  'srt',
+  'vtt',
+  'json',
+  'minutes-docx',
+]);
+
+const TRANSCRIPT_COPY_KINDS = new Set<TranscriptCopyKind>([
+  'overview',
+  'key-points',
+  'decisions',
+  'action-items',
+  'meeting-minutes',
+]);
+
+export const isTranscriptExportFormat = (
+  value: unknown,
+): value is TranscriptExportFormat =>
+  typeof value === 'string' &&
+  TRANSCRIPT_EXPORT_FORMATS.has(value as TranscriptExportFormat);
+
+export const isTranscriptCopyKind = (
+  value: unknown,
+): value is TranscriptCopyKind =>
+  typeof value === 'string' &&
+  TRANSCRIPT_COPY_KINDS.has(value as TranscriptCopyKind);
 
 export const parseTranscriptLibraryQuery = (
   value: unknown,

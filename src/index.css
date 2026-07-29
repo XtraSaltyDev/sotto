@@ -967,6 +967,59 @@ textarea:focus-visible {
   gap: 4px;
 }
 
+.output-menu {
+  position: relative;
+}
+
+.output-menu > summary {
+  list-style: none;
+}
+
+.output-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.output-menu[open] > summary,
+.output-menu > summary:focus-visible {
+  background: var(--background-deep);
+  color: var(--ink);
+  outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  outline-offset: 1px;
+}
+
+.output-menu__panel {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 4;
+  display: grid;
+  min-width: 235px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgb(24 23 21 / 13%);
+}
+
+.output-menu__panel button {
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.output-menu__panel button:hover,
+.output-menu__panel button:focus-visible {
+  background: var(--background-deep);
+  outline: none;
+}
+
 .detail-loading {
   display: flex;
   align-items: center;
@@ -992,10 +1045,10 @@ textarea:focus-visible {
   width: min(100% - 72px, 820px);
   margin: 24px auto -20px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--danger) 7%, transparent);
-  color: var(--danger);
+  background: var(--surface);
+  color: var(--ink);
   font-size: 12px;
   line-height: 1.45;
 }

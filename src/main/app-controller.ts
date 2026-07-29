@@ -9,6 +9,7 @@ import type {
   SavedRecordingSummary,
   EngineStatus as RendererEngineStatus,
   TranscriptDetail,
+  TranscriptCopyKind,
   TranscriptLibraryQuery,
   TranscriptLibraryResult,
   TranscriptSegment as RendererTranscriptSegment,
@@ -34,7 +35,16 @@ import {
 } from './transcription/transcription-service';
 import type { TranscriptRecord } from './transcription/transcript-types';
 import { TranscriptValidationError } from './transcription/transcript-types';
-import { createTranscriptDocx } from './export/transcript-docx';
+import {
+  createMeetingMinutesDocx,
+  createTranscriptDocx,
+} from './export/transcript-docx';
+import {
+  formatTranscriptAsSrt,
+  formatTranscriptAsWebVtt,
+  formatTranscriptCopyText,
+  serializePortableTranscript,
+} from './export/transcript-useful-output';
 import { buildMeetingSummary } from './summarization/meeting-summary';
 import { MAX_RELIABLE_AUTOMATIC_SPEAKERS } from './transcription/speaker-alignment';
 
@@ -504,16 +514,46 @@ export class AppController {
     const record = await this.repository.getAfterPendingMutations(id);
     if (!record) return null;
     const presented = withReliableSpeakerPresentation(record);
+    const summary = buildMeetingSummary(presented);
+    let content: string | Buffer;
+    switch (format) {
+      case 'docx':
+        content = await createTranscriptDocx(presented, summary);
+        break;
+      case 'srt':
+        content = formatTranscriptAsSrt(presented);
+        break;
+      case 'vtt':
+        content = formatTranscriptAsWebVtt(presented);
+        break;
+      case 'json':
+        content = serializePortableTranscript(presented, summary);
+        break;
+      case 'minutes-docx':
+        content = await createMeetingMinutesDocx(presented, summary);
+        break;
+      case 'txt':
+        content = formatTranscriptForExport(presented);
+        break;
+    }
     return {
       title: presented.title,
-      content:
-        format === 'docx'
-          ? await createTranscriptDocx(
-              presented,
-              buildMeetingSummary(presented),
-            )
-          : formatTranscriptForExport(presented),
+      content,
     };
+  }
+
+  async getTranscriptCopyText(
+    id: string,
+    kind: TranscriptCopyKind,
+  ): Promise<string | null> {
+    const record = await this.repository.getAfterPendingMutations(id);
+    if (!record) return null;
+    const presented = withReliableSpeakerPresentation(record);
+    return formatTranscriptCopyText(
+      presented,
+      buildMeetingSummary(presented),
+      kind,
+    );
   }
 
   async renameTranscriptSpeaker(
