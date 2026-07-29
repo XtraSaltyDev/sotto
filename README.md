@@ -149,28 +149,26 @@ separate release step.
 
 The first Developer-ID-signed release cannot inherit permission that was
 granted to an older ad-hoc build because the old grant names that build's exact
-code hash. That transition may need one final approval. Use **Clear old entry
-and open Settings** when Sotto detects a stale recording decision. After
-explicit confirmation, Sotto runs Apple's `tccutil` only for
-`com.sotto.desktop` and the ScreenCapture, AudioCapture, and Microphone services,
-then opens Apple's Screen & System Audio Recording page. It never runs this
-reset automatically and cannot authenticate, add itself, or grant permission.
-In System Settings, click **Add**, use Touch ID or enter the Mac password, choose
-`/Applications/Sotto.app`, turn it on, and choose **Quit & Reopen** if macOS
-asks. After the Developer ID transition,
+code hash. That transition may need one final approval. Use **Request access for
+this Sotto** when Sotto detects a stale recording decision. That button calls
+Apple's screen-capture consent API from a bundled native helper and keeps any
+existing permission entry intact. Approve Apple's prompt with Touch ID or the
+Mac password. Sotto never makes this request without the user's repair action.
+After the Developer ID transition,
 replacing Sotto with later releases signed by the same Apple team should keep
 the existing permission.
 
 For an ad-hoc local build, open the DMG and drag `Sotto.app` to
 **Applications** before setting up live recording. If Sotto reports a stale
-permission after an upgrade, click **Clear old entry and open Settings**,
-confirm the Sotto-only reset, and complete the protected add/enable steps in
-System Settings. Because an ad-hoc identity changes
+permission after an upgrade, click **Request access for this Sotto**. Because an
+ad-hoc identity changes
 when the app is rebuilt, repeat this approval after replacing Sotto with a newer
-build. If Apple's reset command fails, use **Open System Settings** and,
-under **Privacy & Security → Screen & System Audio Recording**, remove the old
-Sotto entry, click **+**, choose the current `/Applications/Sotto.app`, and turn
-it on. Choose **Quit & Reopen** when macOS asks.
+build. If macOS does not show the native prompt, Sotto opens System Settings as
+a fallback without removing the existing entry. Under **Privacy & Security →
+Screen & System Audio Recording**, turn Sotto on. Do not remove the entry: on
+current macOS Tahoe releases, removing it can prevent Apple's native request
+from returning until the Mac is restarted. Choose **Quit & Reopen** when macOS
+asks.
 If macOS has never asked for access, Sotto instead enables **Set up live
 recording** so a user click can start the system permission request.
 

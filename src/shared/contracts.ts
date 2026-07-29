@@ -9,7 +9,7 @@ export const IPC_CHANNELS = {
   deleteRecording: 'sotto:recording:delete',
   exportRecording: 'sotto:recording:export',
   openRecordingSettings: 'sotto:recording:settings',
-  resetRecordingPermissions: 'sotto:recording:permissions:reset',
+  requestRecordingPermissions: 'sotto:recording:permissions:request',
   cancelTranscription: 'sotto:transcription:cancel',
   searchTranscriptLibrary: 'sotto:transcript:library:search',
   getTranscript: 'sotto:transcript:get',
@@ -264,8 +264,9 @@ export type OpenRecordingSettingsResult =
   | { outcome: 'opened' }
   | { outcome: 'failed'; reason: string };
 
-export type ResetRecordingPermissionsResult =
-  | { outcome: 'reset' }
+export type RequestRecordingPermissionsResult =
+  | { outcome: 'requested' }
+  | { outcome: 'settings-opened' }
   | { outcome: 'failed'; reason: string };
 
 export type CancelTranscriptionResult =
@@ -342,7 +343,7 @@ export interface SottoDesktopApi {
   deleteRecording(recordingId: string): Promise<DeleteRecordingResult>;
   exportRecording(recordingId: string): Promise<ExportRecordingResult>;
   openRecordingSettings(): Promise<OpenRecordingSettingsResult>;
-  resetRecordingPermissions(): Promise<ResetRecordingPermissionsResult>;
+  requestRecordingPermissions(): Promise<RequestRecordingPermissionsResult>;
   cancelTranscription(jobId: string): Promise<CancelTranscriptionResult>;
   searchTranscriptLibrary(
     query: TranscriptLibraryQuery,

@@ -24,7 +24,7 @@ import {
   MACOS_SCREEN_RECORDING_SETTINGS_URLS,
   resolveLiveRecordingCapability,
 } from './main/recording/desktop-audio-capture';
-import { repairSottoRecordingPermissions } from './main/recording/recording-permission-reset';
+import { requestMacScreenRecordingAccess } from './main/recording/macos-screen-recording-access';
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
 import { TranscriptRepository } from './main/storage/transcript-repository';
 import { createPlaybackResponse } from './main/media/playback-response';
@@ -92,19 +92,21 @@ const liveRecordingCapability = (): LiveRecordingCapability => {
   );
 };
 
+const enumerateDesktopCaptureSources = () =>
+  desktopCapturer.getSources({
+    fetchWindowIcons: false,
+    // A non-zero thumbnail makes macOS request Screen & System Audio
+    // Recording access before Chromium tries to open the display stream.
+    // One pixel is sufficient and avoids retaining a useful screen image.
+    thumbnailSize: { height: 1, width: 1 },
+    types: ['screen'],
+  });
+
 const configureDesktopAudioCapture = (): void => {
   if (process.platform !== 'darwin' && process.platform !== 'win32') return;
 
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-    void desktopCapturer
-      .getSources({
-        fetchWindowIcons: false,
-        // A non-zero thumbnail makes macOS request Screen & System Audio
-        // Recording access before Chromium tries to open the display stream.
-        // One pixel is sufficient and avoids retaining a useful screen image.
-        thumbnailSize: { height: 1, width: 1 },
-        types: ['screen'],
-      })
+    void enumerateDesktopCaptureSources()
       .then((sources) => {
         const source = sources[0];
         if (!source) {
@@ -245,10 +247,22 @@ const initialize = async (): Promise<void> => {
     controller,
     getMainWindow: () => mainWindow,
     openRecordingSettings,
-    resetRecordingPermissions: async () => {
-      await repairSottoRecordingPermissions({
-        openSettings: openRecordingSettings,
+    requestRecordingPermissions: async () => {
+      const granted = await requestMacScreenRecordingAccess({
+        appPath: app.getAppPath(),
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
       });
+      if (!granted) {
+        await openRecordingSettings();
+        return 'settings-opened';
+      }
+
+      setTimeout(() => {
+        app.relaunch({ args: process.argv.slice(1) });
+        app.quit();
+      }, 500);
+      return 'native-requested';
     },
   });
   createWindow();

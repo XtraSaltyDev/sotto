@@ -1781,25 +1781,21 @@ export const App = () => {
 
   const handleRepairRecordingPermissions = async () => {
     if (!window.sotto || isRepairingPermissions) return;
-    if (!window.confirm(
-      'Clear Sotto’s old recording permissions and open System Settings? In Settings, click Add, authenticate, choose /Applications/Sotto.app, and turn it on. macOS requires you to complete those protected steps.',
-    )) {
-      return;
-    }
-
     setMessage(null);
     setIsRepairingPermissions(true);
     try {
-      const result = await window.sotto.resetRecordingPermissions();
+      const result = await window.sotto.requestRecordingPermissions();
       if (result.outcome === 'failed') {
         setMessage(result.reason);
         setIsRepairingPermissions(false);
-      } else {
-        setMessage('Old Sotto permissions were cleared. In System Settings, click Add, authenticate, choose /Applications/Sotto.app, turn it on, then choose Quit & Reopen if macOS asks.');
+      } else if (result.outcome === 'settings-opened') {
+        setMessage('macOS did not show its approval prompt. Your existing entry was left untouched; System Settings is open as a fallback.');
         setIsRepairingPermissions(false);
+      } else {
+        setMessage('Access was approved. Sotto is reopening…');
       }
     } catch {
-      setMessage('Sotto could not clear its old macOS recording permission.');
+      setMessage('Sotto could not request macOS recording permission.');
       setIsRepairingPermissions(false);
     }
   };
@@ -2222,7 +2218,7 @@ export const App = () => {
                         onClick={() => void handleRepairRecordingPermissions()}
                         type="button"
                       >
-                        {isRepairingPermissions ? 'Opening System Settings…' : 'Clear old entry and open Settings'}
+                        {isRepairingPermissions ? 'Requesting access…' : 'Request access for this Sotto'}
                       </button>
                       <button
                         className="recording-permission__button"

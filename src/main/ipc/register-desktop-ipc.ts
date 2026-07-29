@@ -23,7 +23,7 @@ import {
   type OpenRecordingSettingsResult,
   type RecordingKind,
   type RetryRecordingResult,
-  type ResetRecordingPermissionsResult,
+  type RequestRecordingPermissionsResult,
   type RenameTranscriptSpeakerResult,
   type StartLiveRecordingResult,
   type TranscriptLibraryResult,
@@ -63,7 +63,9 @@ export interface DesktopIpcOptions {
   controller: AppController;
   getMainWindow: () => BrowserWindow | null;
   openRecordingSettings: () => Promise<void>;
-  resetRecordingPermissions: () => Promise<void>;
+  requestRecordingPermissions: () => Promise<
+    'native-requested' | 'settings-opened'
+  >;
 }
 
 const assertTrustedSender = (
@@ -180,7 +182,7 @@ export const registerDesktopIpc = ({
   controller,
   getMainWindow,
   openRecordingSettings,
-  resetRecordingPermissions,
+  requestRecordingPermissions,
 }: DesktopIpcOptions): (() => void) => {
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
     assertTrustedSender(event, getMainWindow);
@@ -208,19 +210,24 @@ export const registerDesktopIpc = ({
   );
 
   ipcMain.handle(
-    IPC_CHANNELS.resetRecordingPermissions,
-    async (event): Promise<ResetRecordingPermissionsResult> => {
+    IPC_CHANNELS.requestRecordingPermissions,
+    async (event): Promise<RequestRecordingPermissionsResult> => {
       trust(event);
       try {
-        await resetRecordingPermissions();
-        return { outcome: 'reset' };
+        const outcome = await requestRecordingPermissions();
+        return {
+          outcome:
+            outcome === 'native-requested'
+              ? 'requested'
+              : 'settings-opened',
+        };
       } catch (error) {
         return {
           outcome: 'failed',
           reason:
             error instanceof Error
               ? error.message
-              : 'Sotto could not clear its old macOS recording permission.',
+              : 'Sotto could not request macOS recording permission.',
         };
       }
     },
@@ -713,7 +720,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.deleteRecording,
       IPC_CHANNELS.exportRecording,
       IPC_CHANNELS.openRecordingSettings,
-      IPC_CHANNELS.resetRecordingPermissions,
+      IPC_CHANNELS.requestRecordingPermissions,
       IPC_CHANNELS.cancelTranscription,
       IPC_CHANNELS.searchTranscriptLibrary,
       IPC_CHANNELS.getTranscript,

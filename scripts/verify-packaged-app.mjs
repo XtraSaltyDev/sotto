@@ -14,6 +14,7 @@ const targets = {
     resources: ['Contents', 'Resources'],
     required: [
       'sidecars/darwin-arm64/ffmpeg',
+      'sidecars/darwin-arm64/sotto-screen-permission-request',
       'sidecars/darwin-arm64/whisper-cli',
       'speaker-runtime/sherpa-onnx-darwin-arm64/sherpa-onnx.node',
       'speaker-runtime/sherpa-onnx-darwin-arm64/libonnxruntime.dylib',

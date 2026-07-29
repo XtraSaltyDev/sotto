@@ -33,8 +33,8 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.exportRecording, recordingId),
   openRecordingSettings: () =>
     ipcRenderer.invoke(IPC_CHANNELS.openRecordingSettings),
-  resetRecordingPermissions: () =>
-    ipcRenderer.invoke(IPC_CHANNELS.resetRecordingPermissions),
+  requestRecordingPermissions: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.requestRecordingPermissions),
   cancelTranscription: (jobId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.cancelTranscription, jobId),
   searchTranscriptLibrary: (query: TranscriptLibraryQuery) =>

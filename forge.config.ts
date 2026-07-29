@@ -282,6 +282,8 @@ const config: ForgeConfig = {
         'Sotto captures system audio only when you start a live meeting recording.',
       NSMicrophoneUsageDescription:
         'Sotto captures your microphone only when you start a meeting recording or dictation.',
+      NSScreenCaptureUsageDescription:
+        'Sotto captures the screen only to receive system audio when you start a live meeting recording.',
     },
     // Local packages are ad-hoc signed. Set SOTTO_MAC_SIGNING_IDENTITY to a
     // Developer ID Application identity for hardened distribution builds.
