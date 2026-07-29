@@ -101,7 +101,7 @@ const verifyNormalizedOutput = async (outputPath: string): Promise<void> => {
 /** Normalizes the first audio stream to whisper.cpp's canonical PCM input. */
 export const normalizeMediaToWav = async (
   options: NormalizeMediaOptions,
-): Promise<void> => {
+): Promise<number | null> => {
   if (!path.isAbsolute(options.ffmpegPath)) {
     throw new TypeError('FFmpeg executable paths must be absolute.');
   }
@@ -123,13 +123,18 @@ export const normalizeMediaToWav = async (
     }
   };
 
+  let observedDurationSeconds: number | null = null;
   const progressParser = createFfmpegProgressParser((record) => {
-    if (!options.durationSeconds) {
+    const processedSeconds = readFfmpegProgressSeconds(record.fields);
+    if (processedSeconds === null) {
       return;
     }
 
-    const processedSeconds = readFfmpegProgressSeconds(record.fields);
-    if (processedSeconds !== null) {
+    observedDurationSeconds = Math.max(
+      observedDurationSeconds ?? 0,
+      processedSeconds,
+    );
+    if (options.durationSeconds) {
       emitProgress(Math.min(0.99, processedSeconds / options.durationSeconds));
     }
   });
@@ -181,4 +186,5 @@ export const normalizeMediaToWav = async (
 
   await verifyNormalizedOutput(options.outputPath);
   emitProgress(1);
+  return observedDurationSeconds;
 };

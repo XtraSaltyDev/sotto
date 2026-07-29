@@ -65,6 +65,17 @@ export const resolveLiveRecordingCapability = (
     };
   }
 
+  if (
+    screenAccessStatus === 'not-determined' ||
+    screenAccessStatus === 'unknown'
+  ) {
+    return {
+      state: 'setup-required',
+      message:
+        'Start live recording to let macOS ask for Screen & System Audio Recording access.',
+    };
+  }
+
   if (screenAccessStatus !== 'granted') {
     return {
       state: 'permission-required',

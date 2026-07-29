@@ -102,3 +102,4 @@ resources/speaker-runtime/
 resources/sidecars/*/ffmpeg
 resources/sidecars/*/whisper-cli
 resources/sidecars/*/*.exe
+resources/sidecars/*/*.dll

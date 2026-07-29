@@ -14,6 +14,7 @@ export const IPC_CHANNELS = {
   renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
   deleteTranscript: 'sotto:transcript:delete',
   exportTranscript: 'sotto:transcript:export',
+  deletePlayback: 'sotto:playback:delete',
   stateChanged: 'sotto:state:changed',
 } as const;
 
@@ -54,7 +55,11 @@ export type LiveRecordingErrorCode =
   | 'engine-unavailable';
 
 export interface LiveRecordingCapability {
-  state: 'permission-required' | 'ready' | 'unsupported';
+  state:
+    | 'setup-required'
+    | 'permission-required'
+    | 'ready'
+    | 'unsupported';
   message: string;
 }
 
@@ -118,7 +123,23 @@ export interface TranscriptSegment {
   endMs: number;
   text: string;
   speakerId: string | null;
+  words: TranscriptWord[];
 }
+
+export interface TranscriptWord {
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export type TranscriptPlayback =
+  | {
+      state: 'available';
+      kind: 'imported-audio-copy' | 'live-recording';
+      sizeBytes: number;
+      url: string;
+    }
+  | { state: 'unavailable'; reason: 'not-retained' | 'missing' };
 
 export interface TranscriptSpeaker {
   id: string;
@@ -129,6 +150,7 @@ export interface TranscriptDetail extends TranscriptSummary {
   completedAt: string;
   text: string;
   segments: TranscriptSegment[];
+  playback: TranscriptPlayback;
   speakerAnalysis: {
     engine: {
       name: string;
@@ -211,6 +233,11 @@ export type DeleteTranscriptResult =
   | { outcome: 'deleted' }
   | { outcome: 'not-found' };
 
+export type DeletePlaybackResult =
+  | { outcome: 'deleted' }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
 export type ExportTranscriptResult =
   | { outcome: 'cancelled' }
   | { outcome: 'saved'; fileName: string }
@@ -246,6 +273,7 @@ export interface SottoDesktopApi {
     label: string,
   ): Promise<RenameTranscriptSpeakerResult>;
   deleteTranscript(transcriptId: string): Promise<DeleteTranscriptResult>;
+  deletePlayback(transcriptId: string): Promise<DeletePlaybackResult>;
   exportTranscript(
     transcriptId: string,
     format: TranscriptExportFormat,

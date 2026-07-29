@@ -9,10 +9,17 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type {
+  AppState,
+  LiveRecordingCapability,
+  SavedRecordingSummary,
+} from '../shared/contracts';
+import type { SelectedMedia } from './media/media-import';
 import { RecordingRepository } from './recording/recording-repository';
 import { RECORDING_METADATA_SCHEMA_VERSION } from './recording/recording-metadata';
 import { resolveEngineRuntime } from './runtime/engine-runtime';
 import { TranscriptRepository } from './storage/transcript-repository';
+import type { PlaybackRepository } from './storage/playback-repository';
 import {
   AppController,
   formatTranscriptForExport,
@@ -42,15 +49,55 @@ const record: TranscriptRecord = {
   speakerAnalysis: null,
   text: 'First item. Second item.',
   segments: [
-    { startMs: 0, endMs: 1_000, text: 'First item.', speakerId: null },
+    { startMs: 0, endMs: 1_000, text: 'First item.', speakerId: null, words: [] },
     {
       startMs: 3_660_000,
       endMs: 3_661_000,
       text: 'Second item.',
       speakerId: null,
+      words: [],
     },
   ],
 };
+
+const readyRuntimeStatus = (
+  root: string,
+): ConstructorParameters<typeof AppController>[1] => {
+  const component = {
+    path: path.join(root, 'runtime-component'),
+    source: 'bundled',
+    state: 'ready',
+  } as const;
+  return {
+    ready: true,
+    state: 'ready',
+    resourcesRoot: root,
+    runtime: {
+      ffmpegPath: path.join(root, 'ffmpeg'),
+      modelPath: path.join(root, 'model.bin'),
+      speakerDiarization: null,
+      whisperPath: path.join(root, 'whisper-cli'),
+    },
+    components: {
+      ffmpeg: component,
+      model: component,
+      speakerChild: component,
+      speakerEmbeddingModel: component,
+      speakerModule: component,
+      speakerSegmentationModel: component,
+      whisper: component,
+    },
+  };
+};
+
+const importedMedia = (root: string): SelectedMedia => ({
+  cleanupAfterTranscription: false,
+  extension: 'MP3',
+  mediaKind: 'audio',
+  name: 'Imported meeting.mp3',
+  path: path.join(root, 'imported-meeting.mp3'),
+  sizeBytes: 128,
+});
 
 describe('transcript presentation', () => {
   const temporaryRoots: string[] = [];
@@ -75,6 +122,95 @@ describe('transcript presentation', () => {
     });
     expect(toTranscriptDetail(record).completedAt).toBe(record.completedAt);
     expect(toTranscriptDetail(record)).not.toHaveProperty('source');
+  });
+
+  it('computes transcript previews during reload instead of rescanning records on state emits', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-summary-cache-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    let textReads = 0;
+    const countedRecord = {
+      ...record,
+      get text() {
+        textReads += 1;
+        return record.text;
+      },
+    } satisfies TranscriptRecord;
+    vi.spyOn(repository, 'list').mockResolvedValue([countedRecord]);
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    expect(textReads).toBe(1);
+    expect(controller.getState().transcripts).toEqual([
+      expect.objectContaining({ id: record.id, preview: record.text }),
+    ]);
+    const listener = vi.fn<(state: AppState) => void>();
+    controller.subscribe(listener);
+    (
+      controller as unknown as {
+        emit(): void;
+      }
+    ).emit();
+    controller.getState();
+    controller.getState();
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(textReads).toBe(1);
+    await controller.dispose();
+  });
+
+  it('keeps list summaries cached while detail reads stay repository-backed', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-summary-refresh-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    const speakerId = '11111111-1111-4111-8111-111111111111';
+    const labeled: TranscriptRecord = {
+      ...record,
+      speakerAnalysis: {
+        engine: {
+          name: 'sherpa-onnx',
+          model: 'pyannote + 3D-Speaker',
+          version: '1.13.4',
+        },
+        speakers: [{ id: speakerId, label: 'Speaker 1' }],
+      },
+      segments: record.segments.map((segment) => ({ ...segment, speakerId })),
+    };
+    await repository.save(labeled);
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    expect(controller.getState().transcripts[0]?.preview).toBe(record.text);
+    const updatedText = 'Updated    preview after a repository mutation.';
+    await repository.save({ ...labeled, text: updatedText });
+
+    expect(controller.getState().transcripts[0]?.preview).toBe(record.text);
+    await expect(controller.getTranscript(record.id)).resolves.toMatchObject({
+      text: updatedText,
+    });
+
+    await expect(
+      controller.renameTranscriptSpeaker(record.id, speakerId, 'Morgan'),
+    ).resolves.toMatchObject({ outcome: 'renamed' });
+    expect(controller.getState().transcripts).toEqual([
+      expect.objectContaining({
+        id: record.id,
+        preview: 'Updated preview after a repository mutation.',
+      }),
+    ]);
+    await expect(controller.getTranscript(record.id)).resolves.toMatchObject({
+      speakerAnalysis: { speakers: [{ id: speakerId, label: 'Morgan' }] },
+      text: updatedText,
+    });
+    await controller.dispose();
   });
 
   it('exports readable timestamps and transcript text', () => {
@@ -346,6 +482,23 @@ describe('transcript presentation', () => {
     };
   };
 
+  const makeReadyRecordingController = async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-ready-controller-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+      {
+        state: 'ready',
+        message: 'Live meeting capture is ready.',
+      },
+    );
+    await controller.initialize();
+    return { controller, root };
+  };
+
   it('blocks live capture when macOS recording permission is missing', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-permission-'));
     temporaryRoots.push(root);
@@ -375,6 +528,185 @@ describe('transcript presentation', () => {
     });
   });
 
+  it('allows a first live capture request to reach normal startup checks', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-setup-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    const runtimeStatus = await resolveEngineRuntime({
+      appPath: root,
+      isPackaged: false,
+      platform: 'linux',
+      arch: 'x64',
+      environment: {},
+    });
+    const controller = new AppController(
+      repository,
+      runtimeStatus,
+      path.join(root, 'jobs'),
+      {
+        state: 'setup-required',
+        message: 'Start live recording to request access.',
+      },
+    );
+
+    await expect(controller.startLiveRecording()).rejects.toMatchObject({
+      code: 'engine-unavailable',
+    });
+  });
+
+  it('refreshes a capability provider on state reads and recording lifecycle emits', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-capability-provider-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    let capability: LiveRecordingCapability = {
+      state: 'setup-required',
+      message: 'Start live recording to request access.',
+    };
+    const capabilityProvider = vi.fn(
+      (): LiveRecordingCapability => capability,
+    );
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+      capabilityProvider,
+    );
+    await controller.initialize();
+
+    expect(controller.getState().recording.capability).toEqual(capability);
+    const observedCapabilities: LiveRecordingCapability[] = [];
+    const unsubscribe = controller.subscribe((state) => {
+      observedCapabilities.push(state.recording.capability);
+    });
+
+    capability = {
+      state: 'ready',
+      message: 'Live meeting capture is ready.',
+    };
+    const recording = await controller.startLiveRecording();
+    expect(observedCapabilities.at(-1)).toEqual(capability);
+
+    capability = {
+      state: 'permission-required',
+      message: 'Allow Screen & System Audio Recording.',
+    };
+    await expect(controller.cancelLiveRecording(recording.id)).resolves.toBe(true);
+    expect(observedCapabilities.at(-1)).toEqual(capability);
+    await expect(controller.startLiveRecording()).rejects.toMatchObject({
+      code: 'permission-denied',
+      message: capability.message,
+    });
+    expect(controller.getState().recording.capability).toEqual(capability);
+
+    unsubscribe();
+    await controller.dispose();
+  });
+
+  it('blocks imported transcription while a live recording is active', async () => {
+    const { controller, root } = await makeReadyRecordingController();
+    const recording = await controller.startLiveRecording();
+
+    await expect(
+      controller.startTranscription(importedMedia(root)),
+    ).rejects.toMatchObject({
+      code: 'busy',
+      message: expect.stringContaining('Finish or cancel'),
+    });
+
+    await expect(controller.cancelLiveRecording(recording.id)).resolves.toBe(
+      true,
+    );
+    await controller.dispose();
+  });
+
+  it('blocks start and retry paths while a live recording is finalizing', async () => {
+    const { controller, root } = await makeReadyRecordingController();
+    const recording = await controller.startLiveRecording();
+    await controller.appendLiveRecordingChunk(
+      recording.id,
+      new TextEncoder().encode('recording'),
+    );
+
+    const recordingService = (
+      controller as unknown as {
+        recordingService: {
+          listSavedRecordings: () => Promise<SavedRecordingSummary[]>;
+          repository: {
+            promoteFinalizing: (recordingId: string) => Promise<number>;
+          };
+        };
+      }
+    ).recordingService;
+    const promoteFinalizing = recordingService.repository.promoteFinalizing.bind(
+      recordingService.repository,
+    );
+    const listSavedRecordings = recordingService.listSavedRecordings.bind(
+      recordingService,
+    );
+    let releasePromotion: () => void = () => undefined;
+    const promotionReleased = new Promise<void>((resolve) => {
+      releasePromotion = resolve;
+    });
+    let promotionEntered: () => void = () => undefined;
+    const promotionStarted = new Promise<void>((resolve) => {
+      promotionEntered = resolve;
+    });
+    let releaseFinalizationReload: () => void = () => undefined;
+    const finalizationReloadReleased = new Promise<void>((resolve) => {
+      releaseFinalizationReload = resolve;
+    });
+    let finalizationReloadEntered: () => void = () => undefined;
+    const finalizationReloadStarted = new Promise<void>((resolve) => {
+      finalizationReloadEntered = resolve;
+    });
+    vi.spyOn(recordingService.repository, 'promoteFinalizing').mockImplementation(
+      async (recordingId) => {
+        promotionEntered();
+        await promotionReleased;
+        return promoteFinalizing(recordingId);
+      },
+    );
+    vi.spyOn(recordingService, 'listSavedRecordings').mockImplementation(
+      async () => {
+        finalizationReloadEntered();
+        await finalizationReloadReleased;
+        return listSavedRecordings();
+      },
+    );
+
+    const finishing = controller.finishLiveRecording(recording.id);
+    await promotionStarted;
+
+    expect(controller.getState().recording.active).toMatchObject({
+      id: recording.id,
+    });
+    releasePromotion();
+    await finalizationReloadStarted;
+
+    // The service has promoted the file and cleared its own active slot, but
+    // the controller keeps the visible recording and exclusivity guard until
+    // it can hand the durable media to transcription.
+    expect(controller.getState().recording.active).toMatchObject({
+      id: recording.id,
+    });
+    await expect(
+      controller.startTranscription(importedMedia(root)),
+    ).rejects.toMatchObject({ code: 'busy' });
+    await expect(controller.retryRecording(recording.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    await expect(controller.startLiveRecording()).rejects.toMatchObject({
+      code: 'busy',
+    });
+
+    releaseFinalizationReload();
+    await expect(finishing).resolves.toMatchObject({
+      recordingId: recording.id,
+    });
+    expect(controller.getState().recording.active).toBeNull();
+    await controller.dispose();
+  });
+
   it('keeps a linked transcript when the user deletes only its recording', async () => {
     const { controller, transcriptRepository } =
       await makeLiveRecordingController();
@@ -397,6 +729,59 @@ describe('transcript presentation', () => {
       'recordingId',
     );
     expect(controller.getState().recordings).toEqual([]);
+  });
+
+  it('deletes imported playback independently and with its transcript', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-imported-playback-'));
+    temporaryRoots.push(root);
+    const transcriptRepository = new TranscriptRepository(
+      path.join(root, 'transcripts'),
+    );
+    await transcriptRepository.save(record);
+    const controller = new AppController(
+      transcriptRepository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+    const playbackRepository = (
+      controller as unknown as { playbackRepository: PlaybackRepository }
+    ).playbackRepository;
+    const normalizedPath = path.join(root, 'normalized.wav');
+    await writeFile(normalizedPath, Buffer.alloc(64));
+    await playbackRepository.retain(record.id, normalizedPath);
+
+    await expect(controller.getTranscript(record.id)).resolves.toMatchObject({
+      playback: {
+        state: 'available',
+        kind: 'imported-audio-copy',
+        sizeBytes: 64,
+      },
+    });
+    await expect(controller.deletePlayback(record.id)).resolves.toBe(true);
+    await expect(transcriptRepository.get(record.id)).resolves.toMatchObject({
+      id: record.id,
+    });
+    await expect(controller.getTranscript(record.id)).resolves.toMatchObject({
+      playback: { state: 'unavailable', reason: 'missing' },
+    });
+
+    await playbackRepository.retain(record.id, normalizedPath);
+    await expect(controller.deleteTranscript(record.id)).resolves.toBe(true);
+    await expect(playbackRepository.get(record.id)).resolves.toBeNull();
+  });
+
+  it('reconciles recording metadata from the cached recording transcript id set', async () => {
+    const { controller } = await makeLiveRecordingController();
+
+    expect(controller.getState().recordings).toEqual([
+      expect.objectContaining({
+        id: record.id,
+        transcriptionState: 'completed',
+        transcriptId: record.id,
+      }),
+    ]);
+    await controller.dispose();
   });
 
   it('keeps the original recording and clears its link when only the transcript is deleted', async () => {

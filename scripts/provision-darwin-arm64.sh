@@ -27,6 +27,13 @@ readonly PYANNOTE_MODEL_SHA256='220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4
 readonly SPEAKER_EMBEDDING_MODEL_NAME='3dspeaker-eres2net-base.onnx'
 readonly SPEAKER_EMBEDDING_MODEL_SHA256='1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b'
 readonly SPEAKER_EMBEDDING_MODEL_URL='https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx'
+readonly SHERPA_LICENSE_SHA256='cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
+readonly SHERPA_LICENSE_URL="https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v${SHERPA_ONNX_VERSION}/LICENSE"
+readonly ONNXRUNTIME_VERSION='1.27.0'
+readonly ONNXRUNTIME_LICENSE_SHA256='2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c'
+readonly ONNXRUNTIME_LICENSE_URL="https://raw.githubusercontent.com/microsoft/onnxruntime/v${ONNXRUNTIME_VERSION}/LICENSE"
+readonly ONNXRUNTIME_NOTICES_SHA256='0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2'
+readonly ONNXRUNTIME_NOTICES_URL="https://raw.githubusercontent.com/microsoft/onnxruntime/v${ONNXRUNTIME_VERSION}/ThirdPartyNotices.txt"
 
 readonly MACOS_DEPLOYMENT_TARGET='12.0'
 
@@ -48,6 +55,9 @@ readonly MODEL_CACHE_PATH="${DOWNLOAD_DIRECTORY}/${MODEL_NAME}"
 readonly PYANNOTE_ARCHIVE_CACHE_PATH="${DOWNLOAD_DIRECTORY}/${PYANNOTE_ARCHIVE_NAME}"
 readonly PYANNOTE_MODEL_CACHE_PATH="${DOWNLOAD_DIRECTORY}/${PYANNOTE_MODEL_NAME}"
 readonly SPEAKER_EMBEDDING_MODEL_CACHE_PATH="${DOWNLOAD_DIRECTORY}/${SPEAKER_EMBEDDING_MODEL_NAME}"
+readonly SHERPA_LICENSE_CACHE_PATH="${DOWNLOAD_DIRECTORY}/sherpa-onnx-${SHERPA_ONNX_VERSION}.LICENSE"
+readonly ONNXRUNTIME_LICENSE_CACHE_PATH="${DOWNLOAD_DIRECTORY}/onnxruntime-${ONNXRUNTIME_VERSION}.LICENSE"
+readonly ONNXRUNTIME_NOTICES_CACHE_PATH="${DOWNLOAD_DIRECTORY}/onnxruntime-${ONNXRUNTIME_VERSION}.ThirdPartyNotices.txt"
 
 readonly SIDECAR_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/sidecars/darwin-arm64"
 readonly MODEL_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/models"
@@ -57,6 +67,7 @@ readonly PYANNOTE_MODEL_STAGE_PATH="${DIARIZATION_STAGE_DIRECTORY}/${PYANNOTE_MO
 readonly SPEAKER_EMBEDDING_MODEL_STAGE_PATH="${DIARIZATION_STAGE_DIRECTORY}/${SPEAKER_EMBEDDING_MODEL_NAME}"
 readonly SPEAKER_RUNTIME_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/speaker-runtime"
 readonly LICENSE_STAGE_DIRECTORY="${SIDECAR_STAGE_DIRECTORY}/licenses"
+readonly SHARED_LICENSE_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/sidecars/licenses"
 readonly RUNTIME_MANIFEST_PATH="${SIDECAR_STAGE_DIRECTORY}/runtime-manifest.json"
 
 TEMPORARY_PATHS=()
@@ -77,7 +88,7 @@ cleanup() {
     [[ -e "${temporary_path}" ]] || continue
 
     case "${temporary_path}" in
-      "${RUNTIME_BUILD_ROOT}"/temporary/* | "${SIDECAR_STAGE_DIRECTORY}"/.stage-* | "${MODEL_STAGE_DIRECTORY}"/.stage-* | "${DIARIZATION_STAGE_DIRECTORY}"/.stage-*)
+      "${RUNTIME_BUILD_ROOT}"/temporary/* | "${SIDECAR_STAGE_DIRECTORY}"/.stage-* | "${MODEL_STAGE_DIRECTORY}"/.stage-* | "${DIARIZATION_STAGE_DIRECTORY}"/.stage-* | "${SHARED_LICENSE_STAGE_DIRECTORY}"/.stage-*)
         rm -rf -- "${temporary_path}"
         ;;
       *)
@@ -393,6 +404,41 @@ stage_file() {
   mv -f -- "${temporary_stage}" "${destination_path}"
 }
 
+stage_runtime_licenses() {
+  download_verified_file \
+    "${SHERPA_LICENSE_URL}" \
+    "${SHERPA_LICENSE_SHA256}" \
+    "${SHERPA_LICENSE_CACHE_PATH}" \
+    "sherpa-onnx ${SHERPA_ONNX_VERSION} Apache-2.0 license"
+  download_verified_file \
+    "${ONNXRUNTIME_LICENSE_URL}" \
+    "${ONNXRUNTIME_LICENSE_SHA256}" \
+    "${ONNXRUNTIME_LICENSE_CACHE_PATH}" \
+    "ONNX Runtime ${ONNXRUNTIME_VERSION} license"
+  download_verified_file \
+    "${ONNXRUNTIME_NOTICES_URL}" \
+    "${ONNXRUNTIME_NOTICES_SHA256}" \
+    "${ONNXRUNTIME_NOTICES_CACHE_PATH}" \
+    "ONNX Runtime ${ONNXRUNTIME_VERSION} third-party notices"
+
+  stage_file \
+    "${SHERPA_LICENSE_CACHE_PATH}" \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}/sherpa-onnx.Apache-2.0.LICENSE" \
+    0644
+  stage_file \
+    "${SHERPA_LICENSE_CACHE_PATH}" \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}/3D-Speaker.Apache-2.0.LICENSE" \
+    0644
+  stage_file \
+    "${ONNXRUNTIME_LICENSE_CACHE_PATH}" \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}/onnxruntime.LICENSE" \
+    0644
+  stage_file \
+    "${ONNXRUNTIME_NOTICES_CACHE_PATH}" \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}/onnxruntime.ThirdPartyNotices.txt" \
+    0644
+}
+
 stage_model() {
   if [[ -e "${MODEL_STAGE_PATH}" ]]; then
     verify_sha256 "${MODEL_STAGE_PATH}" "${MODEL_SHA256}" "staged ${MODEL_NAME} model"
@@ -604,6 +650,22 @@ verify_staged_runtime() {
     'The staged sherpa-onnx native addon is not arm64.'
   [[ -f "${SPEAKER_RUNTIME_STAGE_DIRECTORY}/sherpa-onnx-node/sherpa-onnx.js" ]] || fail \
     'The staged sherpa-onnx JavaScript module is missing.'
+  verify_sha256 \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}/sherpa-onnx.Apache-2.0.LICENSE" \
+    "${SHERPA_LICENSE_SHA256}" \
+    'staged sherpa-onnx Apache-2.0 license'
+  verify_sha256 \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}/3D-Speaker.Apache-2.0.LICENSE" \
+    "${SHERPA_LICENSE_SHA256}" \
+    'staged 3D-Speaker Apache-2.0 license'
+  verify_sha256 \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}/onnxruntime.LICENSE" \
+    "${ONNXRUNTIME_LICENSE_SHA256}" \
+    'staged ONNX Runtime license'
+  verify_sha256 \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}/onnxruntime.ThirdPartyNotices.txt" \
+    "${ONNXRUNTIME_NOTICES_SHA256}" \
+    'staged ONNX Runtime third-party notices'
 
   whisper_sha256="$(sha256_file "${SIDECAR_STAGE_DIRECTORY}/whisper-cli")"
   ffmpeg_sha256="$(sha256_file "${SIDECAR_STAGE_DIRECTORY}/ffmpeg")"
@@ -668,7 +730,8 @@ main() {
     "${SIDECAR_STAGE_DIRECTORY}" \
     "${MODEL_STAGE_DIRECTORY}" \
     "${DIARIZATION_STAGE_DIRECTORY}" \
-    "${LICENSE_STAGE_DIRECTORY}"
+    "${LICENSE_STAGE_DIRECTORY}" \
+    "${SHARED_LICENSE_STAGE_DIRECTORY}"
 
   prepare_whisper_source
   prepare_ffmpeg_source
@@ -677,6 +740,7 @@ main() {
   stage_model
   stage_speaker_models
   stage_speaker_runtime
+  stage_runtime_licenses
 
   log "Staging verified runtime executables and license material."
   stage_file "${WHISPER_BUILD_DIRECTORY}/bin/whisper-cli" "${SIDECAR_STAGE_DIRECTORY}/whisper-cli" 0755

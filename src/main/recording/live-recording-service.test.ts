@@ -11,7 +11,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   LiveRecordingError,
@@ -21,6 +21,14 @@ import {
 
 const ABANDONED_ID = '00000000-0000-4000-8000-000000000000';
 const RECOVERED_ID = '11111111-1111-4111-8111-111111111111';
+
+const deferred = () => {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+};
 
 const makeService = async (
   overrides: Partial<ConstructorParameters<typeof LiveRecordingService>[0]> = {},
@@ -235,6 +243,7 @@ describe('LiveRecordingService', () => {
     ).resolves.toEqual({
       fileName: recording.sourceName,
       path: media.path,
+      sizeBytes: media.sizeBytes,
     });
     await expect(readFile(media.path, 'utf8')).resolves.toBe('export me');
 
@@ -268,6 +277,121 @@ describe('LiveRecordingService', () => {
     await expect(service.start()).rejects.toMatchObject({
       code: 'storage-full',
     });
+  });
+
+  it('allows only one recording startup while asynchronous checks are pending', async () => {
+    const availabilityStarted = deferred();
+    const releaseAvailability = deferred();
+    let availabilityChecks = 0;
+    const { service } = await makeService({
+      getAvailableBytes: async () => {
+        availabilityChecks += 1;
+        availabilityStarted.resolve();
+        await releaseAvailability.promise;
+        return null;
+      },
+    });
+
+    const firstStart = service.start();
+    await availabilityStarted.promise;
+    expect(service.hasActiveOrPendingRecording()).toBe(true);
+    await expect(service.start()).rejects.toMatchObject({ code: 'busy' });
+    expect(availabilityChecks).toBe(1);
+
+    releaseAvailability.resolve();
+    const recording = await firstStart;
+    await expect(service.cancel(recording.id)).resolves.toBe(true);
+  });
+
+  it('keeps the recording active and rejects starts while finalization is pending', async () => {
+    const { changes, service } = await makeService();
+    const recording = await service.start();
+    await service.append(recording.id, new TextEncoder().encode('recording'));
+
+    const repository = (
+      service as unknown as {
+        repository: {
+          promoteFinalizing: (recordingId: string) => Promise<number>;
+        };
+      }
+    ).repository;
+    const promoteFinalizing = repository.promoteFinalizing.bind(repository);
+    const promotionStarted = deferred();
+    const releasePromotion = deferred();
+    vi.spyOn(repository, 'promoteFinalizing').mockImplementation(
+      async (recordingId) => {
+        promotionStarted.resolve();
+        await releasePromotion.promise;
+        return promoteFinalizing(recordingId);
+      },
+    );
+
+    const finishing = service.finish(recording.id);
+    await promotionStarted.promise;
+
+    expect(service.getActive()).toMatchObject({ id: recording.id });
+    expect(changes.at(-1)).toBe(recording.id);
+    await expect(service.start()).rejects.toMatchObject({ code: 'busy' });
+    await expect(service.finish(recording.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    await expect(service.cancel(recording.id)).resolves.toBe(false);
+
+    releasePromotion.resolve();
+    await expect(finishing).resolves.toMatchObject({
+      recordingId: recording.id,
+    });
+    expect(service.getActive()).toBeNull();
+    expect(changes.at(-1)).toBeNull();
+  });
+
+  it('keeps closed audio recoverable when durable promotion fails', async () => {
+    const { root, service } = await makeService();
+    const recording = await service.start();
+    const payload = new TextEncoder().encode('recover after promotion failure');
+    await service.append(recording.id, payload);
+
+    const repository = (
+      service as unknown as {
+        repository: {
+          promoteFinalizing: (recordingId: string) => Promise<number>;
+        };
+      }
+    ).repository;
+    const promotion = vi
+      .spyOn(repository, 'promoteFinalizing')
+      .mockRejectedValueOnce(Object.assign(new Error('rename failed'), { code: 'EACCES' }));
+
+    await expect(service.finish(recording.id)).rejects.toMatchObject({
+      code: 'recording-failed',
+      message: expect.stringContaining('kept for automatic recovery'),
+    });
+    expect(service.getActive()).toBeNull();
+    const finalizingPath = path.join(
+      root,
+      recording.id,
+      'recording.finalizing.webm',
+    );
+    await expect(readFile(finalizingPath)).resolves.toEqual(Buffer.from(payload));
+
+    promotion.mockRestore();
+    const restarted = new LiveRecordingService({
+      recordingsRoot: root,
+      onRecordingChanged: () => undefined,
+      minimumFreeBytes: 0,
+    });
+    await restarted.initialize();
+
+    await expect(restarted.listSavedRecordings()).resolves.toEqual([
+      expect.objectContaining({
+        id: recording.id,
+        sizeBytes: payload.byteLength,
+        transcriptionState: 'ready',
+      }),
+    ]);
+    await expect(
+      readFile(path.join(root, recording.id, 'recording.webm')),
+    ).resolves.toEqual(Buffer.from(payload));
   });
 
   it('maps asynchronous disk-full errors and clears the failed partial', async () => {

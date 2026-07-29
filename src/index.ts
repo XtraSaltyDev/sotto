@@ -4,6 +4,7 @@ import {
   app,
   BrowserWindow,
   desktopCapturer,
+  protocol,
   session,
   shell,
   systemPreferences,
@@ -21,6 +22,7 @@ import {
 } from './main/recording/desktop-audio-capture';
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
 import { TranscriptRepository } from './main/storage/transcript-repository';
+import { createPlaybackResponse } from './main/media/playback-response';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -32,6 +34,18 @@ let shutdownStarted = false;
 let readyToQuit = false;
 
 if (started) app.quit();
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'sotto-media',
+    privileges: {
+      secure: true,
+      standard: true,
+      stream: true,
+      supportFetchAPI: true,
+    },
+  },
+]);
 
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
@@ -176,9 +190,16 @@ const initialize = async (): Promise<void> => {
     repository,
     runtimeStatus,
     path.join(app.getPath('userData'), 'jobs'),
-    liveRecordingCapability(),
+    liveRecordingCapability,
   );
   await controller.initialize();
+
+  session.defaultSession.protocol.handle('sotto-media', async (request) => {
+    if (!controller) return new Response(null, { status: 503 });
+    return createPlaybackResponse(request, (transcriptId) =>
+      controller?.getPlaybackDescriptor(transcriptId) ?? Promise.resolve(null),
+    );
+  });
 
   removeIpcHandlers = registerDesktopIpc({
     controller,
@@ -206,6 +227,7 @@ const shutdown = async (): Promise<void> => {
   shutdownStarted = true;
   removeIpcHandlers?.();
   removeIpcHandlers = null;
+  session.defaultSession.protocol.unhandle('sotto-media');
   await controller?.dispose();
 };
 

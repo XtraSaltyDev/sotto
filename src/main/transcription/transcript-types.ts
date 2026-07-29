@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
 export const LEGACY_TRANSCRIPT_SCHEMA_VERSION = 1 as const;
-export const TRANSCRIPT_SCHEMA_VERSION = 2 as const;
+export const SPEAKER_TRANSCRIPT_SCHEMA_VERSION = 2 as const;
+export const TRANSCRIPT_SCHEMA_VERSION = 3 as const;
 
 // These limits are deliberately generous enough for day-long recordings while
 // still bounding data that originated in an external process or a local file.
@@ -15,6 +16,7 @@ export const MAX_ENGINE_FIELD_CHARACTERS = 512;
 export const MAX_SOURCE_FILE_BYTES = 16 * 1_024 * 1_024 * 1_024 * 1_024;
 export const MAX_TRANSCRIPT_SPEAKERS = 256;
 export const MAX_SPEAKER_LABEL_CHARACTERS = 100;
+export const MAX_TRANSCRIPT_WORDS = 1_000_000;
 
 export type TranscriptId = string;
 export type TranscriptSpeakerId = string;
@@ -50,6 +52,13 @@ export interface TranscriptSegment {
   endMs: number;
   text: string;
   speakerId: TranscriptSpeakerId | null;
+  words: TranscriptWord[];
+}
+
+export interface TranscriptWord {
+  startMs: number;
+  endMs: number;
+  text: string;
 }
 
 export interface TranscriptRecord {
@@ -300,7 +309,10 @@ const parseSpeakerAnalysis = (
 
 const parseSegments = (
   value: unknown,
-  schemaVersion: 1 | typeof TRANSCRIPT_SCHEMA_VERSION,
+  schemaVersion:
+    | typeof LEGACY_TRANSCRIPT_SCHEMA_VERSION
+    | typeof SPEAKER_TRANSCRIPT_SCHEMA_VERSION
+    | typeof TRANSCRIPT_SCHEMA_VERSION,
   speakerIds: ReadonlySet<TranscriptSpeakerId>,
 ): TranscriptSegment[] => {
   if (!Array.isArray(value)) {
@@ -313,6 +325,7 @@ const parseSegments = (
 
   let previousEndMs = 0;
   let totalTextCharacters = 0;
+  let totalWords = 0;
 
   return value.map((candidate, index) => {
     if (!isRecord(candidate)) {
@@ -360,9 +373,48 @@ const parseSegments = (
       return fail(`segments[${index}].speakerId must reference a declared speaker.`);
     }
 
+    const rawWords =
+      schemaVersion === TRANSCRIPT_SCHEMA_VERSION ? candidate.words : [];
+    if (!Array.isArray(rawWords)) {
+      return fail(`segments[${index}].words must be an array.`);
+    }
+    totalWords += rawWords.length;
+    if (totalWords > MAX_TRANSCRIPT_WORDS) {
+      return fail(`segments cannot contain more than ${MAX_TRANSCRIPT_WORDS} words.`);
+    }
+    let previousWordEndMs = startMs;
+    const words = rawWords.map((word, wordIndex): TranscriptWord => {
+      if (!isRecord(word)) {
+        return fail(`segments[${index}].words[${wordIndex}] must be an object.`);
+      }
+      const wordStartMs = readInteger(
+        word.startMs,
+        `segments[${index}].words[${wordIndex}].startMs`,
+        startMs,
+        endMs,
+      );
+      const wordEndMs = readInteger(
+        word.endMs,
+        `segments[${index}].words[${wordIndex}].endMs`,
+        wordStartMs,
+        endMs,
+      );
+      if (wordStartMs < previousWordEndMs) {
+        return fail(`segments[${index}].words must be ordered and cannot overlap.`);
+      }
+      const wordText = readBoundedString(
+        word.text,
+        `segments[${index}].words[${wordIndex}].text`,
+        MAX_SEGMENT_TEXT_CHARACTERS,
+        true,
+      );
+      previousWordEndMs = wordEndMs;
+      return { startMs: wordStartMs, endMs: wordEndMs, text: wordText };
+    });
+
     previousEndMs = endMs;
 
-    return { startMs, endMs, text, speakerId };
+    return { startMs, endMs, text, speakerId, words };
   });
 };
 
@@ -379,6 +431,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
 
   if (
     value.schemaVersion !== LEGACY_TRANSCRIPT_SCHEMA_VERSION &&
+    value.schemaVersion !== SPEAKER_TRANSCRIPT_SCHEMA_VERSION &&
     value.schemaVersion !== TRANSCRIPT_SCHEMA_VERSION
   ) {
     return fail(`Unsupported transcript schema version: ${String(value.schemaVersion)}.`);

@@ -1,9 +1,10 @@
 # Runtime provenance and reproducibility
 
-The source of truth for the Apple Silicon runtime is
-`scripts/provision-darwin-arm64.sh`. `sources.json` duplicates the immutable
-inputs in machine-readable form so packaging and release checks can compare the
-staged runtime with the intended source set.
+The source of truth for the Apple Silicon and Windows x64 runtimes is
+`scripts/provision-darwin-arm64.sh` and `scripts/provision-win32-x64.sh`,
+respectively. `sources.json` duplicates the common immutable inputs in
+machine-readable form so packaging and release checks can compare the staged
+runtime with the intended source set.
 
 ## whisper.cpp
 
@@ -26,6 +27,17 @@ GGML_BLAS:BOOL=OFF
 GGML_METAL:BOOL=ON
 GGML_METAL_EMBED_LIBRARY:BOOL=ON
 ```
+
+The Windows script builds the same pinned commit in a digest-pinned Debian
+container with the MinGW-w64 x86-64 POSIX compiler. It disables Metal, BLAS,
+OpenMP, runtime backend loading, native-host tuning, and all optional network or
+service integrations. It explicitly targets an AVX2/FMA/F16C CPU baseline with
+SSE4.2, AVX, AVX2, BMI2, F16C, and FMA enabled; the container build verifies the
+effective CMake cache and compiler flags before staging the binary. Project
+libraries and the MinGW C/C++ runtimes are linked statically.
+`_WIN32_WINNT=0x0601` is used only while compiling whisper.cpp to avoid an
+optional thread power-throttling API missing from the pinned MinGW headers; the
+packaged Electron application itself retains its Windows 10 target.
 
 ## FFmpeg
 
@@ -71,6 +83,12 @@ Provisioning refuses the build unless FFmpeg's configuration summary says both
 `License: LGPL version 2.1 or later` and `network support no`. It also checks the
 built executable still reports `--disable-network`.
 
+The Windows build uses the same bounded protocol, container, codec, parser,
+encoder, muxer, and filter set. Platform-specific changes select MinGW x86-64,
+Win32 threads, static executable linking, and a Windows 10 target. The
+provisioner additionally rejects a `WS2_32.dll` import so the staged FFmpeg
+cannot reach the Windows sockets library.
+
 ## Model
 
 - Source:
@@ -85,13 +103,22 @@ or truncated response is rejected before it reaches the staged model path.
 
 ## Output verification
 
-Both executables must be single-architecture arm64 Mach-O files with a macOS
-12.0 minimum version. Provisioning rejects Homebrew paths, `/usr/local` paths,
-loader-relative dylibs, and dynamically linked FFmpeg/whisper/GGML libraries.
-It computes SHA-256 digests for the final staged executables and writes them to
-`darwin-arm64/runtime-manifest.json` along with the source and model identities.
+For macOS, both executables must be single-architecture arm64 Mach-O files with
+a macOS 12.0 minimum version. Provisioning rejects Homebrew paths, `/usr/local`
+paths, loader-relative dylibs, and dynamically linked FFmpeg/whisper/GGML
+libraries. It writes final SHA-256 digests and source/model identities to
+`darwin-arm64/runtime-manifest.json`.
+
+For Windows, both executables, the sherpa native addon, and its four required
+native DLLs must be PE32+ x86-64 files. Provisioning rejects dynamically linked
+project libraries and MinGW runtime DLLs, verifies the speaker-library
+dependency closure and required license bundle, and writes native-binary hashes
+alongside the executable digests and source/model identities in
+`win32-x64/runtime-manifest.json`. These are structural cross-build checks; a
+native Windows integration run is still required before release qualification.
 
 For release reproducibility, retain the provisioning log, generated runtime
-manifest, Xcode version, CMake version, and macOS build-host version with the
-packaging evidence. Source pins make the inputs reproducible; native compiler
-and SDK versions can still change the exact executable bytes.
+manifest, compiler/CMake versions, container image identity or macOS SDK/Xcode
+version, and build-host version with the packaging evidence. Source pins make
+the inputs reproducible; compiler and SDK versions can still change the exact
+executable bytes.

@@ -15,6 +15,7 @@ import {
   LEGACY_TRANSCRIPT_SCHEMA_VERSION,
   MAX_SPEAKER_LABEL_CHARACTERS,
   MAX_TRANSCRIPT_SPEAKERS,
+  SPEAKER_TRANSCRIPT_SCHEMA_VERSION,
   TRANSCRIPT_SCHEMA_VERSION,
   TranscriptValidationError,
   type TranscriptRecord,
@@ -59,6 +60,7 @@ const createRecord = (
       endMs: 2_500,
       text: 'Welcome to Sotto.',
       speakerId: null,
+      words: [],
     },
   ],
 });
@@ -83,12 +85,14 @@ const createSpeakerRecord = (): TranscriptRecord => ({
       endMs: 1_250,
       text: 'Welcome to Sotto.',
       speakerId: FIRST_SPEAKER_ID,
+      words: [],
     },
     {
       startMs: 1_250,
       endMs: 2_500,
       text: 'This stays private.',
       speakerId: SECOND_SPEAKER_ID,
+      words: [],
     },
   ],
 });
@@ -110,6 +114,20 @@ const createLegacyRecord = () => {
       startMs,
       endMs,
       text,
+    })),
+  };
+};
+
+const createSchemaV2Record = () => {
+  const record = createSpeakerRecord();
+  return {
+    ...record,
+    schemaVersion: SPEAKER_TRANSCRIPT_SCHEMA_VERSION,
+    segments: record.segments.map((segment) => ({
+      startMs: segment.startMs,
+      endMs: segment.endMs,
+      text: segment.text,
+      speakerId: segment.speakerId,
     })),
   };
 };
@@ -179,6 +197,19 @@ describe('TranscriptRepository', () => {
     await repository.save(newer);
 
     await expect(repository.list()).resolves.toEqual([newer, createRecord()]);
+  });
+
+  it('reads schema-v2 speaker records with empty word timings', async () => {
+    const schemaV2 = createSchemaV2Record();
+    await writeFile(
+      path.join(rootPath, `${schemaV2.id}.json`),
+      `${JSON.stringify(schemaV2)}\n`,
+      { encoding: 'utf8', mode: 0o600 },
+    );
+
+    await expect(repository.get(schemaV2.id)).resolves.toEqual(
+      createSpeakerRecord(),
+    );
   });
 
   it('round-trips speaker analysis and segment assignments', async () => {

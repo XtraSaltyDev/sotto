@@ -59,13 +59,31 @@ describe('macOS desktop audio capture', () => {
     },
   );
 
-  it('requires the exact macOS app copy to have screen recording permission', () => {
+  it('allows a first user-started capture to request macOS permission', () => {
     expect(
       resolveLiveRecordingCapability('darwin', '26.5.2', 'not-determined'),
+    ).toEqual({
+      state: 'setup-required',
+      message: expect.stringContaining('Start live recording'),
+    });
+    expect(
+      resolveLiveRecordingCapability('darwin', '26.5.2', 'unknown').state,
+    ).toBe('setup-required');
+  });
+
+  it('opens settings only after macOS has denied or restricted capture', () => {
+    expect(
+      resolveLiveRecordingCapability('darwin', '26.5.2', 'denied'),
     ).toEqual({
       state: 'permission-required',
       message: expect.stringContaining('Screen & System Audio Recording'),
     });
+    expect(
+      resolveLiveRecordingCapability('darwin', '26.5.2', 'restricted').state,
+    ).toBe('permission-required');
+  });
+
+  it('is ready after macOS grants screen and system-audio capture', () => {
     expect(
       resolveLiveRecordingCapability('darwin', '26.5.2', 'granted'),
     ).toEqual({

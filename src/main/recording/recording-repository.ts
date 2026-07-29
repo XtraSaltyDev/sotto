@@ -26,6 +26,7 @@ import {
 } from './recording-metadata';
 
 export const PARTIAL_RECORDING_FILE_NAME = 'recording.partial.webm';
+export const FINALIZING_RECORDING_FILE_NAME = 'recording.finalizing.webm';
 export const DURABLE_RECORDING_FILE_NAME = 'recording.webm';
 export const RECORDING_METADATA_FILE_NAME = 'metadata.json';
 
@@ -94,6 +95,10 @@ export class RecordingRepository {
 
   durablePath(id: string): string {
     return path.join(this.directoryPath(id), DURABLE_RECORDING_FILE_NAME);
+  }
+
+  finalizingPath(id: string): string {
+    return path.join(this.directoryPath(id), FINALIZING_RECORDING_FILE_NAME);
   }
 
   async createPartial(metadata: RecordingMetadata): Promise<void> {
@@ -174,7 +179,9 @@ export class RecordingRepository {
     if (sizeBytes === null) {
       throw new Error('The partial live recording is missing or invalid.');
     }
-    const partialFile = await open(partialPath, 'r');
+    // Windows requires write access on a handle passed to FlushFileBuffers,
+    // which is what FileHandle.sync() uses under the hood.
+    const partialFile = await open(partialPath, 'r+');
     try {
       await partialFile.sync();
     } finally {
@@ -182,6 +189,61 @@ export class RecordingRepository {
     }
     await rename(partialPath, durablePath);
     if (process.platform !== 'win32') await chmod(durablePath, 0o600);
+    return sizeBytes;
+  }
+
+  async markFinalizing(
+    id: string,
+    completedAt: string,
+  ): Promise<number> {
+    if (!isTranscriptId(id)) throw new TypeError('Recording id must be a UUID.');
+    const current = await this.get(id);
+    if (!current || current.storageState !== 'partial') {
+      throw new Error('The partial recording metadata is missing or invalid.');
+    }
+    const sizeBytes = await safeRecordingSize(this.partialPath(id));
+    if (sizeBytes === null) {
+      throw new Error('The partial live recording is missing or invalid.');
+    }
+    await rename(this.partialPath(id), this.finalizingPath(id));
+    if (process.platform !== 'win32') {
+      await chmod(this.finalizingPath(id), 0o600);
+    }
+    const finalizingFile = await open(this.finalizingPath(id), 'r+');
+    try {
+      await finalizingFile.sync();
+    } finally {
+      await finalizingFile.close();
+    }
+    await this.save({
+      ...current,
+      completedAt,
+      sizeBytes,
+      storageState: 'finalizing',
+      transcription: {
+        state: 'ready',
+        updatedAt: completedAt,
+        message: 'Recording closed locally. Finalizing its saved file.',
+      },
+    });
+    return sizeBytes;
+  }
+
+  async promoteFinalizing(id: string): Promise<number> {
+    if (!isTranscriptId(id)) throw new TypeError('Recording id must be a UUID.');
+    const finalizingPath = this.finalizingPath(id);
+    const sizeBytes = await safeRecordingSize(finalizingPath);
+    if (sizeBytes === null) {
+      throw new Error('The closed live recording is missing or invalid.');
+    }
+    const finalizingFile = await open(finalizingPath, 'r+');
+    try {
+      await finalizingFile.sync();
+    } finally {
+      await finalizingFile.close();
+    }
+    await rename(finalizingPath, this.durablePath(id));
+    if (process.platform !== 'win32') await chmod(this.durablePath(id), 0o600);
     return sizeBytes;
   }
 
@@ -195,6 +257,9 @@ export class RecordingRepository {
     }
     if (durableIsRegular) {
       await unlink(this.partialPath(id)).catch((error) => {
+        if (!isMissing(error)) throw error;
+      });
+      await unlink(this.finalizingPath(id)).catch((error) => {
         if (!isMissing(error)) throw error;
       });
       return;
@@ -267,7 +332,7 @@ export class RecordingRepository {
       completedAt,
       sizeBytes,
       storageState: 'complete',
-      transcription: current?.transcription ?? {
+      transcription: {
         state: 'ready',
         updatedAt: completedAt,
         message: 'Recording recovered locally. Ready to transcribe.',
@@ -292,6 +357,9 @@ export class RecordingRepository {
       await unlink(this.partialPath(id)).catch((error) => {
         if (!isMissing(error)) throw error;
       });
+      await unlink(this.finalizingPath(id)).catch((error) => {
+        if (!isMissing(error)) throw error;
+      });
       const metadata = await this.get(id);
       if (metadata?.transcription.state === 'transcribing') {
         await this.save({
@@ -310,8 +378,27 @@ export class RecordingRepository {
       return;
     }
 
-    // A directory with only a partial file is an interrupted capture, not
-    // user data. Finalized files are handled above and are never removed here.
+    const metadata = await this.get(id);
+    const finalizingSize = await safeRecordingSize(this.finalizingPath(id));
+    if (finalizingSize !== null || metadata?.storageState === 'finalizing') {
+      // The encoder closed successfully before the previous process stopped.
+      // Preserve and retry this atomic promotion instead of treating the file
+      // as an interrupted capture. A failed retry leaves the marker and audio
+      // in place for the next launch.
+      try {
+        await this.enforcePrivateFile(this.finalizingPath(id));
+        await this.promoteFinalizing(id);
+        await this.recoverFinalized(id);
+      } catch {
+        // Recovery is deliberately best-effort here. The caller can still
+        // start, and no user audio is deleted after a clean encoder close.
+      }
+      return;
+    }
+
+    // A directory with only an ordinary partial file is an interrupted
+    // capture, not finalized user data. Durable and finalizing files are
+    // handled above and are never removed here.
     await rm(this.directoryPath(id), { force: true, recursive: true });
   }
 

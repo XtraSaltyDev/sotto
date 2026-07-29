@@ -12,6 +12,7 @@ import {
   type AppendLiveRecordingChunkResult,
   type CancelLiveRecordingResult,
   type DeleteRecordingResult,
+  type DeletePlaybackResult,
   type DeleteTranscriptResult,
   type ExportRecordingResult,
   type ExportTranscriptResult,
@@ -418,6 +419,27 @@ export const registerDesktopIpc = ({
   );
 
   ipcMain.handle(
+    IPC_CHANNELS.deletePlayback,
+    async (event, id: unknown): Promise<DeletePlaybackResult> => {
+      trust(event);
+      if (!isTranscriptId(id)) return { outcome: 'not-found' };
+      try {
+        return (await controller.deletePlayback(id))
+          ? { outcome: 'deleted' }
+          : { outcome: 'not-found' };
+      } catch (error) {
+        return {
+          outcome: 'rejected',
+          reason:
+            error instanceof Error
+              ? error.message
+              : 'Sotto could not delete that playback audio.',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.exportTranscript,
     async (
       event,
@@ -491,6 +513,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.getTranscript,
       IPC_CHANNELS.renameTranscriptSpeaker,
       IPC_CHANNELS.deleteTranscript,
+      IPC_CHANNELS.deletePlayback,
       IPC_CHANNELS.exportTranscript,
     ]) {
       ipcMain.removeHandler(channel);

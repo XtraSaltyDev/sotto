@@ -52,6 +52,36 @@ manifest records the locally built executable hashes and the pinned source/model
 identities. A release build should provision these files before packaging and
 archive that generated manifest with the build evidence.
 
+## Provision the Windows x64 runtime
+
+On a Mac with Docker or Colima running, provision the Windows runtime in a
+pinned Debian cross-build container:
+
+```bash
+bash scripts/provision-win32-x64.sh
+```
+
+To validate an already-staged runtime without network access, builds, downloads,
+or filesystem changes, run:
+
+```bash
+bash scripts/provision-win32-x64.sh --verify-only
+```
+
+The script cross-builds PE32+ x64 `whisper-cli.exe` and `ffmpeg.exe`, rejects
+unexpected project or MinGW DLL dependencies, rejects Windows networking imports
+from FFmpeg, verifies the sherpa-onnx addon's four-DLL dependency closure, and
+stages the pinned model, Windows speaker runtime, speaker models, complete
+licenses/notices, and runtime manifest. These checks establish the
+package structure; execution and audio behavior still need qualification on a
+native Windows x64 machine.
+
+The Windows Whisper runtime uses an explicit AVX2/FMA/F16C CPU baseline (with
+SSE4.2, AVX, AVX2, BMI2, F16C, and FMA enabled). This avoids the scalar
+cross-build that made short recordings dramatically slower than real time. The Windows x64
+package therefore requires a processor with those instruction sets; supported
+Windows 11-era Intel and AMD processors meet that baseline.
+
 ## Runtime characteristics
 
 - `whisper-cli` is an arm64 Release build from whisper.cpp `v1.9.1`, with
@@ -70,10 +100,11 @@ archive that generated manifest with the build evidence.
 
 ## Other targets
 
-`darwin-x64/` and `win32-x64/` remain unprovisioned target directories. Each
-future target needs its own pinned build procedure, checksums, runtime manifest,
-and native-host verification. Do not copy the arm64 macOS executables into those
-directories.
+`darwin-x64/` remains an unprovisioned target directory. It needs its own pinned
+build procedure, checksums, runtime manifest, and native-host verification. The
+`win32-x64/` runtime has a pinned cross-build procedure, but still needs native
+Windows execution and clean-machine qualification. Do not copy executables
+between target directories.
 
 See [sources.json](sources.json) for machine-readable source pins,
 [PROVENANCE.md](PROVENANCE.md) for the reproducibility and licensing boundary,

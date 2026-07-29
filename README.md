@@ -1,14 +1,17 @@
 # Sotto
 
 Sotto is a private, local-first desktop transcription app built with Electron
-Forge, React, and TypeScript. The current macOS Apple Silicon build can import
-real audio and video recordings—including downloaded Microsoft Teams MP4s—then
+Forge, React, and TypeScript. The current macOS Apple Silicon and Windows x64
+builds can import real audio and video recordings—including downloaded
+Microsoft Teams MP4s—then
 extract audio, transcribe it with a bundled `whisper.cpp` engine, save the
-result locally, display timestamped text, and export a plain-text transcript.
+result locally, display synchronized timestamped text, play retained audio, and
+export a plain-text transcript.
 It also clusters voices into transcript-local speaker labels that can be
 renamed, and exports Microsoft Word (`.docx`) transcripts.
-On macOS 13 or newer it can also record a live Teams meeting's desktop audio
-and your microphone, then transcribe that capture when you stop.
+On macOS 13 or newer and Windows 11 x64 it can also record a live Teams
+meeting's desktop audio and your microphone, then transcribe that capture when
+you stop.
 
 Nothing is uploaded. Sotto has no cloud service, accounts, analytics, updater,
 automatic summarization, or cloud capture.
@@ -16,8 +19,8 @@ automatic summarization, or cloud capture.
 ## What works now
 
 - Common local audio and video import through the native file picker
-- Live Teams/system-audio plus microphone capture on macOS 13+ (with explicit
-  operating-system recording permissions)
+- Live Teams/system-audio plus microphone capture on macOS 13+ and Windows 11
+  x64 (with explicit operating-system recording permissions)
 - Audio-track detection and duration probing
 - Offline conversion to mono 16 kHz PCM with a minimal, network-disabled FFmpeg
 - English transcription with `whisper.cpp` 1.9.1 and the `small.en` model
@@ -26,27 +29,33 @@ automatic summarization, or cloud capture.
   speaker runtime)
 - Live preparing/transcribing/saving progress, cancellation, and CPU fallback
   if Metal cannot initialize
-- Atomic transcript persistence plus durable original WebM retention for live
-  recordings
+- Atomic transcript persistence plus durable original WebM retention and
+  closed-file recovery for live recordings
 - Recoverable failed/cancelled live transcriptions with Retry Transcription,
   Export Recording, and intentional Delete Recording actions
 - Recent, timestamped transcript detail, delete, speaker rename, plain-text
   export, and Microsoft Word export views
+- Synchronized local playback with clickable segment timestamps, clickable
+  words on new transcripts, current-segment highlighting, 0.75x–2x speed, and
+  keyboard play/pause and five-second jumps
 - One active job at a time, bounded diagnostics, abandoned-job cleanup, and no
   persisted source paths
 - A sandboxed renderer and narrow typed IPC boundary
-- A reproducible, checksummed macOS arm64 runtime build
+- Reproducible, checksummed macOS arm64 and Windows x64 runtime builds
 
-On macOS 13 and newer, **Record live meeting** captures the desktop/system audio
+On macOS 13 and newer and Windows 11, **Record live meeting** captures the desktop/system audio
 that includes Teams participants and mixes it with microphone input when that
 permission is granted. While capture is active, Sotto writes a clearly named
-private `recording.partial.webm`. When you stop, it closes the stream and
-atomically renames that file to a durable `recording.webm` before transcription
-starts. The completed original is kept if transcription succeeds, fails, is
-cancelled, or the app restarts. Sotto does not join Teams, inspect Teams APIs,
+private `recording.partial.webm`. When you stop, it closes the stream, marks the
+closed file as recoverable, and atomically renames it to a durable
+`recording.webm` before transcription starts. If promotion is interrupted, the
+closed audio is retried on the next launch instead of being deleted. The
+completed original is kept if transcription succeeds, fails, is cancelled, or
+the app restarts. Sotto does not join Teams, inspect Teams APIs,
 or upload the call. The Record button is disabled on macOS 12, unsupported
 platforms, builds without the local engine, and macOS app copies that have not
-been granted Screen & System Audio Recording access.
+been granted Screen & System Audio Recording access. Windows permission errors
+use Windows-specific guidance rather than macOS setup steps.
 
 Sotto does not use recordings or transcripts for model training and does not
 collect or infer training consent. Any future training use would require a
@@ -63,9 +72,12 @@ actionable error and is never modified.
 The transcription model is English-only. Sotto separates voices locally, but
 it cannot read participant names from Teams: labels begin as `Speaker 1`,
 `Speaker 2`, and so on, and apply only within that transcript. Rename them after
-the meeting if desired. Sotto stores no reusable voiceprints. Overlapping
-speech, very short turns, music, and noisy mixed audio can remain labeled
-`Unclear`; Sotto does not guess when timing is ambiguous. It produces
+the meeting if desired. Sotto stores no reusable voiceprints. At the end of the
+local speaker pass, Sotto reviews short timing gaps beside reliable speaker
+turns so slightly delayed detections are less likely to strand their opening
+words. Overlapping speech, very short turns, longer gaps, music, and noisy mixed
+audio can remain labeled `Unclear`; Sotto does not guess when timing is still
+ambiguous. It produces
 timestamped speech, not meeting summaries or action items.
 
 ## Use the current macOS build
@@ -85,10 +97,10 @@ Then open:
 out/Sotto-darwin-arm64/Sotto.app
 ```
 
-For the normal macOS download, use the generated disk image:
+For local DMG validation, use the generated disk image:
 
 ```text
-out/make/Sotto-0.1.0-arm64.dmg
+out/make/Sotto-0.1.3-arm64.dmg
 ```
 
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
@@ -100,6 +112,38 @@ that were separately ad-hoc signed because they do not share an Apple Team ID.
 Set `SOTTO_MAC_SIGNING_IDENTITY` to a valid Developer ID Application identity
 when producing a hardened distribution build.
 
+Do not send the output from the normal `npm run make` command as a public
+upgrade. It is intentionally ad-hoc signed, so macOS sees each rebuild as a
+different app and cannot carry Screen & System Audio or microphone permission
+forward. Public macOS releases use the guarded release command:
+
+```bash
+export SOTTO_MAC_SIGNING_IDENTITY='Developer ID Application: Company Name (TEAMID)'
+export SOTTO_MAC_NOTARY_KEYCHAIN_PROFILE='sotto-release'
+npm run make:mac:release
+```
+
+Create the named Keychain profile once with `xcrun notarytool
+store-credentials`. Release packaging stops if either setting is missing, if
+the signing identity is not a Developer ID Application identity, or if signing
+fails. Forge notarizes and staples the signed app before placing it in the DMG
+and ZIP. Keep both the Apple Developer team and `com.sotto.desktop` bundle ID
+unchanged for every release.
+
+That guarded Forge flow notarizes and staples the application before creating
+the DMG. If distribution policy also requires the downloadable DMG container
+itself to carry a notarization ticket, submit and staple the finished DMG as a
+separate release step.
+
+The first Developer-ID-signed release cannot inherit permission that was
+granted to an older ad-hoc build because the old grant names that build's exact
+code hash. That transition may need one final approval. If the old Sotto row is
+still shown as enabled, remove it, add the current `/Applications/Sotto.app`,
+then quit and reopen Sotto. After that transition, replacing Sotto with later
+releases signed by the same Apple team should keep the existing permission.
+Sotto must not automatically run `tccutil`: resetting a privacy decision cannot
+grant access and would force another approval.
+
 For an ad-hoc local build, open the DMG and drag `Sotto.app` to
 **Applications** before setting up live recording. If Sotto shows **Open System
 Settings**, use that button and,
@@ -107,11 +151,17 @@ under **Privacy & Security → Screen & System Audio Recording**, click **+**,
 choose the exact `Sotto.app` copy in Applications, and turn it on. Choose
 **Quit & Reopen** when macOS asks. Because an ad-hoc identity changes when the
 app is rebuilt, repeat this step after replacing Sotto with a newer build.
+If macOS has never asked for access, Sotto instead enables **Set up live
+recording** so a user click can start the system permission request.
 
 Click **Import Recording**, choose a local audio/video file, and leave the
-source file in place until the job completes. The source is read-only. Sotto
-deletes only its derived normalized WAV and temporary engine output after each
-terminal job.
+source file in place until the job completes. The source is read-only. When the
+transcript succeeds, Sotto atomically retains its derived mono 16 kHz WAV as a
+private playback-audio copy. It does not retain the imported video or its
+original path, so playback continues if the original is moved or deleted. The
+retained copy is about 115 MB per hour and is normally much smaller than source
+video; temporary engine output is removed after every terminal job. Failed or
+cancelled imports do not retain a playback copy.
 
 For a live Teams call on macOS 13+, complete the Screen & System Audio
 Recording setup above, then click **Record live meeting** before the call
@@ -132,24 +182,40 @@ per-user application-data directory:
 ```text
 macOS:   ~/Library/Application Support/Sotto/transcripts/
          ~/Library/Application Support/Sotto/recordings/
+         ~/Library/Application Support/Sotto/playback/
          ~/Library/Application Support/Sotto/jobs/       (temporary only)
 Windows: %APPDATA%\Sotto\transcripts\
          %APPDATA%\Sotto\recordings\
+         %APPDATA%\Sotto\playback\
 ```
 
 Each transcript is one schema-validated JSON file with display-only source
-metadata, text, timestamps, transcript-local speaker labels, duration,
-language, and engine provenance. Exported `.txt` and `.docx` files go only to
-the location selected in the native save dialog. Imported media stays in its
-original location and is not copied into Sotto.
+metadata, text, segment and word timestamps, transcript-local speaker labels,
+duration, language, and engine provenance. Schema-v1/v2 transcripts remain
+readable and seekable by segment; they simply have no clickable word timing.
+Exported `.txt` and `.docx` files go only to the location selected in the native
+save dialog. Imported originals stay in their original location and are never
+copied into Sotto; only Sotto's audio-only playback derivative is retained.
+
+Open a transcript to use **Synchronized playback**. Click a timestamp, segment,
+or timed word to seek. Space plays or pauses when focus is not in an input or
+button; Left and Right Arrow jump five seconds. The speed menu offers 0.75x,
+1x, 1.25x, 1.5x, and 2x. The current segment is highlighted. Sotto shows the
+retained copy's size and lets **Delete playback audio** remove it while keeping
+the transcript. Deleting an imported transcript also deletes its playback copy.
+Deleting a live transcript keeps its original WebM ready for another
+transcription. If playback audio is missing, was deleted outside Sotto, or
+cannot be decoded, the transcript remains readable and exportable and the
+detail view shows a non-destructive explanation.
 
 Each saved live recording has its own private directory containing
 `recording.webm` and atomic, schema-validated `metadata.json`. Directories use
 owner-only permissions (`0700`) and files use `0600` where the operating system
 supports Unix permissions. Metadata links the recording to its current job and
 transcript without exposing a filesystem path to the renderer. Interrupted
-partial captures are removed at startup; finalized WebMs are recovered even if
-their metadata update was interrupted.
+partial captures are removed at startup. A recording whose encoder closed
+successfully has a distinct finalizing marker and is recovered even if file
+promotion or its metadata update was interrupted.
 
 **Export Recording** copies the WebM to a location chosen in the native save
 dialog. **Delete Recording** requires a confirmation and removes only the saved
@@ -160,7 +226,7 @@ original recording and makes it available for transcription again.
 
 Prerequisites for the app:
 
-- Node.js 22 or newer
+- Node.js 22.12 or newer
 - npm 10 or newer
 
 Prerequisites for rebuilding the macOS arm64 runtime:
@@ -168,6 +234,11 @@ Prerequisites for rebuilding the macOS arm64 runtime:
 - Apple Silicon and macOS 12 or newer
 - Xcode command-line tools with the Metal compiler
 - CMake, Git, curl, make, and tar/xz support
+
+Prerequisites for cross-building the Windows x64 runtime on a Mac:
+
+- Docker or Colima running with an x86-64-capable Linux container runtime
+- Bash plus standard `file`, SHA-256, and archive tools
 
 The current `sherpa-onnx` speaker runtime uses a native ONNX Runtime build that
 requires macOS 15.5 or newer. On macOS 13–15.4, Sotto can still record and
@@ -197,20 +268,41 @@ To verify an already staged runtime without network, builds, or writes:
 bash scripts/provision-darwin-arm64.sh --verify-only
 ```
 
+To build and stage the pinned Windows x64 runtime, or verify an existing staged
+copy without downloading or changing it:
+
+```bash
+npm run setup:runtime:windows
+bash scripts/provision-win32-x64.sh --verify-only
+```
+
+The Windows provisioner cross-builds static `whisper-cli.exe` and a minimal,
+network-disabled `ffmpeg.exe`, stages the Windows speaker runtime and models,
+checks their architecture and imported libraries, and records final hashes in
+`resources/sidecars/win32-x64/runtime-manifest.json`.
+
 Quality checks:
 
 ```bash
 npm run lint
 npm run typecheck
 npm test
-npm run test:runtime:mac
+npm run test:runtime
 npm run package
+npm run verify:package:mac
+npm run make:windows:zip
+npm run verify:package:windows
 ```
 
-The runtime integration test sends the bundled AAC-in-MP4 fixture through the
-real FFmpeg → whisper.cpp → atomic repository pipeline and checks recognized
-speech. It is separate from the fast unit suite because it loads the 465 MB
-model.
+The runtime integration test selects the current supported host and sends the
+bundled AAC-in-MP4 fixture through the real FFmpeg → whisper.cpp → sherpa-onnx
+→ atomic repository pipeline. It checks recognized speech, timing, persistence,
+and speaker IDs. `test:runtime:mac` and `test:runtime:windows` are explicit
+aliases. The integration is separate from the fast unit suite because it loads
+the 465 MB model. The package verifiers inspect the unpacked application that
+Forge actually produced: they reject foreign native runtimes, check required
+models and licenses, verify immutable runtime hashes, and confirm that the ASAR
+contains the current package version.
 
 ## Architecture
 
@@ -232,7 +324,8 @@ src/
 └── renderer/                        React shell, progress, list, detail
 
 scripts/
-└── speaker-diarization-child.cjs    isolated native speaker-process entry
+├── speaker-diarization-child.cjs    isolated native speaker-process entry
+└── verify-packaged-app.mjs          final package resource/hash checks
 
 resources/
 ├── diarization/                     staged speaker models outside the ASAR
@@ -252,8 +345,10 @@ native file selection or user-started desktop/system-audio capture
   → private temporary 16 kHz WAV
   → whisper.cpp full JSON output with word timing
   → strict output normalization
-  → crash-isolated local speaker segmentation, clustering, and bounded word alignment
-  → atomic transcript save
+  → crash-isolated local speaker segmentation, clustering, bounded word alignment,
+    and conservative timing-gap recovery
+  → imported-media-only atomic private playback WAV retention
+  → atomic schema-v3 transcript save with validated word timing
   → Recent/detail state update
 ```
 
@@ -263,7 +358,9 @@ runtime environment variables are removed. The renderer has
 `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true`. Its
 preload exposes only state, import, live-recording chunks, retry/cancel,
 recording and transcript delete/export, record lookup, and state-change
-methods. IPC requests must come from the current window's main frame, IDs are
+methods. Playback uses a separate `sotto-media` transport that accepts only a
+validated transcript UUID and streams byte ranges from an app-owned file; raw
+filesystem paths never reach the renderer. IPC requests must come from the current window's main frame, IDs are
 validated UUIDs, new windows and unexpected navigation are denied, and only
 the trusted renderer's explicit media-capture request is permitted.
 
@@ -305,26 +402,60 @@ do not share a Developer ID Team ID. Live capture is qualified for the Electron
 desktop-capture path on macOS 13+; macOS 12 remains import-only because Chromium
 cannot capture desktop audio there without a virtual audio device.
 
-Distribution still requires an owned Apple Developer ID identity supplied as
-`SOTTO_MAC_SIGNING_IDENTITY`, hardened runtime signing for the app and sidecars,
-notarization, stapling, and a final Sotto app icon. The DMG is the primary
-macOS delivery format; the ZIP remains available for alternate and update
-workflows.
-Intel (`darwin-x64`) has a folder contract but no built or qualified runtime yet.
+The distribution path now requires an owned Apple Developer ID identity,
+hardened runtime signing for the app and sidecars, and a named notarization
+Keychain profile. `npm run make:mac:release` fails closed when that release
+configuration is incomplete; the ordinary local packaging commands remain
+ad-hoc for development. This machine does not currently have a valid Developer
+ID identity installed, so a signed/notarized artifact and real permission-
+preserving upgrade have not yet been qualified. The DMG is the primary macOS
+delivery format; the ZIP remains available for alternate and update workflows.
+Intel (`darwin-x64`) has no built or qualified runtime. Packaging now rejects
+that target, Windows arm64, and Linux instead of producing an unusable app with
+the wrong native resources. Each supported package also prunes the other
+platform's native payload before signing and archive creation.
 
 ### Windows
 
-The secure IPC, storage, and `win32-x64` sidecar path contracts are implemented,
-and Squirrel.Windows is configured. Windows is **not ready for use yet**: the
-pinned x64 `whisper-cli.exe` and minimal `ffmpeg.exe` must be built on a Windows
-release host, staged with licenses/model, code-signed, packaged, and exercised
-against the same integration fixture on a clean Windows machine. No macOS test
-can substitute for that platform qualification.
+The secure IPC, storage, packaged-runtime path, Windows icon, and speaker-runtime
+contracts are implemented. Build the pinned x64 runtime and portable package
+with:
+
+```bash
+npm run setup:runtime:windows
+npm run make:windows:zip
+```
+
+The ZIP is written to `out/make/zip/win32/x64/`. Extract the whole archive on a
+Windows x64 machine and run `Sotto.exe`; it is not an installer.
+
+The cross-built executables, model, complete native speaker DLL closure,
+licenses, packaged resource layout, and ZIP integrity are checked from macOS.
+An earlier 0.1.2 package was also exercised on a real Windows 11 x64 machine:
+the app launched and a live recording completed normalization, Whisper
+transcription, and speaker labeling. That test exposed
+a scalar Whisper build that took about 96 seconds for roughly six seconds of
+audio. Version 0.1.3 rebuilds Whisper with an explicit AVX2/FMA/F16C baseline,
+uses up to eight logical CPU threads, and shows the initial model phase as
+indeterminate instead of holding at a misleading 20%. The optimized 0.1.3
+binary still needs a native Windows timing retest, the native integration
+fixture, and clean-machine qualification before public release.
+
+The Windows x64 runtime requires SSE4.2, AVX, AVX2, BMI2, F16C, and FMA CPU
+features. Its runtime manifest records that baseline and hashes the speaker
+addon plus all four required DLLs. The portable ZIP and executable are not
+Authenticode-signed, so they are internal test artifacts.
+
+Squirrel.Windows is configured for an installer build, but Electron Forge only
+supports that maker on Windows or Linux with Wine and Mono. Run
+`npm run make:windows` from a qualified Windows x64 release host. A public
+installer also needs Authenticode code signing and an install/upgrade test.
 
 ## Bounded next work
 
-1. Add Windows x64 runtime/provisioning, desktop-audio capture, and a
-   clean-machine installer test.
+1. Retest the optimized Windows x64 package on native Windows, including the
+   integration fixture, live desktop/microphone timing, code signing, and a
+   clean-machine installer/upgrade test.
 2. Add macOS Intel only if there is a real deployment need.
 3. Add an explicit multilingual model choice if non-English meetings are in
    scope.

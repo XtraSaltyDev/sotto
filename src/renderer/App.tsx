@@ -4,6 +4,7 @@ import type {
   AppState,
   LiveRecordingSnapshot,
   SavedRecordingSummary,
+  StartLiveRecordingResult,
   TranscriptDetail,
   TranscriptExportFormat,
   TranscriptSpeaker,
@@ -12,6 +13,14 @@ import type {
 } from '../shared/contracts';
 import { clearSavedSpeakerDraft } from './speaker-drafts';
 import { liveRecordingStartErrorMessage } from './live-recording-errors';
+import { releaseAbandonedLiveRecordingStart } from './live-recording-start-cleanup';
+import { isIndeterminateTranscriptionProgress } from './transcription-progress';
+import {
+  activeSegmentIndexAt,
+  isPunctuationOnlyToken,
+  PLAYBACK_JUMP_SECONDS,
+  shouldIgnorePlaybackShortcut,
+} from './playback';
 import {
   ArrowLeftIcon,
   AudioFileIcon,
@@ -313,7 +322,7 @@ const TranscriptView = ({
   message,
   onBack,
   onDelete,
-  onDeleteRecording,
+  onDeletePlayback,
   onExport,
   onExportRecording,
   onRenameSpeaker,
@@ -323,11 +332,83 @@ const TranscriptView = ({
   message: string | null;
   onBack: () => void;
   onDelete: () => void;
-  onDeleteRecording: () => void;
+  onDeletePlayback: () => void;
   onExport: (format: TranscriptExportFormat) => void;
   onExportRecording: () => void;
   onRenameSpeaker: (speakerId: string, label: string) => Promise<string | null>;
-}) => (
+}) => {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const playbackAvailable = transcript?.playback.state === 'available';
+  const activeSegmentIndex = transcript
+    ? activeSegmentIndexAt(transcript.segments, currentTimeMs)
+    : -1;
+
+  const seekTo = useCallback((milliseconds: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const seconds = Math.max(0, milliseconds / 1_000);
+    audio.currentTime = Number.isFinite(audio.duration)
+      ? Math.min(seconds, audio.duration)
+      : seconds;
+    setCurrentTimeMs(audio.currentTime * 1_000);
+  }, []);
+
+  const jumpBy = useCallback((seconds: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    seekTo((audio.currentTime + seconds) * 1_000);
+  }, [seekTo]);
+
+  const togglePlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      void audio.play().catch(() => {
+        setPlaybackError(
+          'Sotto could not play this saved audio. The file may be damaged or use an unsupported encoding.',
+        );
+      });
+    } else {
+      audio.pause();
+    }
+  }, []);
+
+  useEffect(() => {
+    setCurrentTimeMs(0);
+    setPlaybackError(null);
+  }, [transcript?.id]);
+
+  useEffect(() => {
+    if (!playbackAvailable) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        shouldIgnorePlaybackShortcut(event.target)
+      ) {
+        return;
+      }
+      if (event.code === 'Space' && !event.repeat) {
+        event.preventDefault();
+        togglePlayback();
+      } else if (event.code === 'ArrowLeft') {
+        event.preventDefault();
+        jumpBy(-PLAYBACK_JUMP_SECONDS);
+      } else if (event.code === 'ArrowRight') {
+        event.preventDefault();
+        jumpBy(PLAYBACK_JUMP_SECONDS);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [jumpBy, playbackAvailable, togglePlayback]);
+
+  return (
   <main className="workspace">
     <header className="topbar topbar--detail">
       <button className="icon-button icon-button--back" onClick={onBack} type="button">
@@ -350,16 +431,6 @@ const TranscriptView = ({
             <DownloadIcon />
             <span>Export TXT</span>
           </button>
-          {transcript.recordingId ? (
-            <button
-              className="icon-button icon-button--danger"
-              onClick={onDeleteRecording}
-              type="button"
-            >
-              <TrashIcon />
-              <span>Delete recording</span>
-            </button>
-          ) : null}
           <button className="icon-button icon-button--danger" onClick={onDelete} type="button">
             <TrashIcon />
             <span>Delete transcript</span>
@@ -393,6 +464,79 @@ const TranscriptView = ({
             <p className="engine-note">No reliable speaker labels were found.</p>
           )}
         </header>
+        <section className="playback" aria-labelledby="playback-title">
+          <div className="playback__heading">
+            <div>
+              <h2 id="playback-title">Synchronized playback</h2>
+              {transcript.playback.state === 'available' ? (
+                <p>
+                  {formatFileSize(transcript.playback.sizeBytes)} saved privately on this device
+                </p>
+              ) : (
+                <p>Playback audio is not available for this transcript.</p>
+              )}
+            </div>
+            {transcript.playback.state === 'available' ? (
+              <button className="playback__delete" onClick={onDeletePlayback} type="button">
+                Delete playback audio
+              </button>
+            ) : null}
+          </div>
+          {transcript.playback.state === 'available' ? (
+            <>
+              <audio
+                controls
+                key={transcript.playback.url}
+                onError={() => setPlaybackError(
+                  'Sotto could not decode this saved audio. The transcript is still safe.',
+                )}
+                onLoadedMetadata={(event) => {
+                  event.currentTarget.playbackRate = playbackRate;
+                  setPlaybackError(null);
+                }}
+                onTimeUpdate={(event) =>
+                  setCurrentTimeMs(event.currentTarget.currentTime * 1_000)
+                }
+                preload="metadata"
+                ref={audioRef}
+                src={transcript.playback.url}
+              >
+                Your system does not support local audio playback.
+              </audio>
+              <div className="playback__controls">
+                <button onClick={() => jumpBy(-PLAYBACK_JUMP_SECONDS)} type="button">
+                  −{PLAYBACK_JUMP_SECONDS}s
+                </button>
+                <button onClick={() => jumpBy(PLAYBACK_JUMP_SECONDS)} type="button">
+                  +{PLAYBACK_JUMP_SECONDS}s
+                </button>
+                <label>
+                  Speed
+                  <select
+                    onChange={(event) => {
+                      const rate = Number(event.target.value);
+                      setPlaybackRate(rate);
+                      if (audioRef.current) audioRef.current.playbackRate = rate;
+                    }}
+                    value={playbackRate}
+                  >
+                    {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
+                      <option key={rate} value={rate}>{rate}x</option>
+                    ))}
+                  </select>
+                </label>
+                <span>Space: play/pause · ←/→: jump 5 seconds</span>
+              </div>
+            </>
+          ) : (
+            <p className="playback__unavailable">
+              It may have been deleted or moved by another tool, or this may be an older
+              transcript created before Sotto retained playback audio. You can still read,
+              rename speakers, export, or delete the transcript.
+            </p>
+          )}
+          {playbackError ? <p className="playback__error" role="alert">{playbackError}</p> : null}
+        </section>
         {transcript.speakerAnalysis?.speakers.length ? (
           <SpeakerEditor
             key={transcript.id}
@@ -410,16 +554,50 @@ const TranscriptView = ({
               );
               return (
               <div
-                className={`segment${transcript.speakerAnalysis ? ' segment--with-speaker' : ''}`}
+                className={`segment${transcript.speakerAnalysis ? ' segment--with-speaker' : ''}${activeSegmentIndex === index ? ' segment--active' : ''}${playbackAvailable ? ' segment--seekable' : ''}`}
                 key={`${segment.startMs}-${index}`}
+                onClick={(event) => {
+                  if (!playbackAvailable || (event.target as HTMLElement).closest('button')) return;
+                  seekTo(segment.startMs);
+                }}
               >
-                <time>{formatDuration(segment.startMs)}</time>
+                <time>
+                  {playbackAvailable ? (
+                    <button onClick={() => seekTo(segment.startMs)} type="button">
+                      {formatDuration(segment.startMs)}
+                    </button>
+                  ) : formatDuration(segment.startMs)}
+                </time>
                 {transcript.speakerAnalysis ? (
                   <span className={`segment__speaker${speaker ? '' : ' segment__speaker--unknown'}`}>
                     {speaker?.label ?? 'Unclear'}
                   </span>
                 ) : null}
-                <p>{segment.text}</p>
+                <p>
+                  {playbackAvailable && segment.words.length > 0
+                    ? segment.words.map((word, wordIndex) => {
+                        const key = `${word.startMs}-${word.endMs}-${wordIndex}`;
+                        return word.text.trim().length === 0 || isPunctuationOnlyToken(word.text) ? (
+                          <span className="transcript-word transcript-word--punctuation" key={key}>
+                            {wordIndex === 0 ? word.text.trimStart() : word.text}
+                          </span>
+                        ) : (
+                          <button
+                            aria-label={`Seek to ${word.text.trim()} at ${formatDuration(word.startMs)}`}
+                            className="transcript-word"
+                            key={key}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              seekTo(word.startMs);
+                            }}
+                            type="button"
+                          >
+                            {wordIndex === 0 ? word.text.trimStart() : word.text}
+                          </button>
+                        );
+                      })
+                    : segment.text}
+                </p>
               </div>
               );
             })
@@ -430,7 +608,8 @@ const TranscriptView = ({
       <div className="detail-loading">That transcript is no longer available.</div>
     )}
   </main>
-);
+  );
+};
 
 export const App = () => {
   const [appState, setAppState] = useState<AppState | null>(null);
@@ -508,6 +687,8 @@ export const App = () => {
 
   const running = isRunningJob(appState?.activeJob ?? null);
   const activeRecording = appState?.recording.active ?? null;
+  const recordingCapabilityState = appState?.recording.capability.state;
+  const needsRecordingSetup = recordingCapabilityState === 'setup-required';
   const recordingElapsed = activeRecording
     ? Math.max(0, recordingTick - new Date(activeRecording.startedAt).getTime())
     : 0;
@@ -516,17 +697,22 @@ export const App = () => {
     !running &&
     !activeRecording &&
     !isStartingRecording &&
+    !isStoppingRecording &&
     !isSelecting;
   const canRecord =
     appState?.engine.state === 'ready' &&
-    appState.recording.capability.state === 'ready' &&
+    (recordingCapabilityState === 'ready' || needsRecordingSetup) &&
     !running &&
     !activeRecording &&
     !isStartingRecording &&
+    !isStoppingRecording &&
     !isSelecting;
   const progress = useMemo(
     () => Math.round(Math.min(1, Math.max(0, appState?.activeJob?.progress ?? 0)) * 100),
     [appState?.activeJob?.progress],
+  );
+  const progressIsIndeterminate = isIndeterminateTranscriptionProgress(
+    appState?.activeJob ?? null,
   );
 
   const cleanupCapture = async () => {
@@ -609,6 +795,9 @@ export const App = () => {
 
     let recordingId: string | null = null;
     let desktopCapture: Promise<MediaStream> | null = null;
+    let desktopStreamClaimed = false;
+    let startRecording: Promise<StartLiveRecordingResult> | null = null;
+    let startResultHandled = false;
     try {
       if (!navigator.mediaDevices?.getDisplayMedia) {
         throw new Error('This build cannot request desktop audio capture.');
@@ -621,17 +810,14 @@ export const App = () => {
         audio: true,
         video: { frameRate: 1, height: 240, width: 320 },
       });
+      startRecording = window.sotto.startLiveRecording();
       const started = await withTimeout(
-        window.sotto.startLiveRecording(),
+        startRecording,
         20_000,
         'Sotto timed out while opening the private recording file.',
       );
+      startResultHandled = true;
       if (started.outcome === 'rejected') {
-        void desktopCapture
-          .then((unusedStream) => {
-            unusedStream.getTracks().forEach((track) => track.stop());
-          })
-          .catch(() => undefined);
         setMessage(started.reason);
         return;
       }
@@ -639,8 +825,9 @@ export const App = () => {
       recordingIdRef.current = recordingId;
 
       const desktopStream = await desktopCapture;
+      desktopStreamRef.current = desktopStream;
+      desktopStreamClaimed = true;
       if (desktopStream.getAudioTracks().length === 0) {
-        desktopStream.getTracks().forEach((track) => track.stop());
         throw new Error(
           'Sotto did not receive Teams audio. Allow screen and system-audio capture, then try again.',
         );
@@ -652,6 +839,7 @@ export const App = () => {
           audio: true,
           video: false,
         });
+        microphoneStreamRef.current = microphoneStream;
       } catch {
         setMessage(
           'Microphone access was not granted. Sotto will record Teams audio only for this meeting.',
@@ -659,6 +847,7 @@ export const App = () => {
       }
 
       const context = new AudioContext();
+      audioContextRef.current = context;
       await context.resume();
       const destination = context.createMediaStreamDestination();
       context.createMediaStreamSource(desktopStream).connect(destination);
@@ -730,10 +919,6 @@ export const App = () => {
           }
         });
       });
-
-      desktopStreamRef.current = desktopStream;
-      microphoneStreamRef.current = microphoneStream;
-      audioContextRef.current = context;
       mediaRecorderRef.current = recorder;
       recorder.start(1_000);
     } catch (error) {
@@ -747,9 +932,21 @@ export const App = () => {
       await cleanupCapture();
       recordingIdRef.current = null;
       setMessage(
-        liveRecordingStartErrorMessage(error),
+        liveRecordingStartErrorMessage(error, navigator.platform),
       );
     } finally {
+      void releaseAbandonedLiveRecordingStart({
+        cancelRecording: (lateRecordingId) =>
+          withTimeout(
+            window.sotto.cancelLiveRecording(lateRecordingId),
+            5_000,
+            'Sotto timed out while clearing the incomplete recording.',
+          ),
+        desktopCapture,
+        desktopStreamClaimed,
+        startRecording,
+        startResultHandled,
+      });
       setIsStartingRecording(false);
     }
   };
@@ -828,7 +1025,9 @@ export const App = () => {
     if (!window.sotto || !selectedId) return;
     const recordingNote = transcript?.recordingId
       ? ' The original recording will stay saved.'
-      : '';
+      : transcript?.playback.state === 'available'
+        ? ' Its retained playback audio will also be deleted.'
+        : '';
     if (
       !window.confirm(
         `Delete this local transcript?${recordingNote} This cannot be undone.`,
@@ -841,6 +1040,45 @@ export const App = () => {
     if (result.outcome === 'deleted') {
       setSelectedId(null);
       setTranscript(null);
+    }
+  };
+
+  const handleDeletePlayback = async () => {
+    if (!window.sotto || !selectedId || transcript?.playback.state !== 'available') {
+      return;
+    }
+    const description =
+      transcript.playback.kind === 'live-recording'
+        ? 'saved live recording'
+        : 'retained playback audio';
+    if (
+      !window.confirm(
+        `Delete this ${description}? The transcript will stay saved. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setMessage(null);
+    const result = await window.sotto.deletePlayback(selectedId);
+    if (result.outcome === 'rejected') {
+      setMessage(result.reason);
+    } else if (result.outcome === 'not-found') {
+      setMessage('That playback audio is no longer available.');
+      setTranscript((current) => current
+        ? { ...current, playback: { state: 'unavailable', reason: 'missing' } }
+        : current);
+    } else {
+      setTranscript((current) => current
+        ? {
+            ...current,
+            recordingId:
+              current.playback.state === 'available' &&
+              current.playback.kind === 'live-recording'
+                ? undefined
+                : current.recordingId,
+            playback: { state: 'unavailable', reason: 'missing' },
+          }
+        : current);
     }
   };
 
@@ -922,9 +1160,7 @@ export const App = () => {
             setSelectedId(null);
           }}
           onDelete={() => void handleDelete()}
-          onDeleteRecording={() => {
-            if (transcript?.recordingId) void deleteRecording(transcript.recordingId);
-          }}
+          onDeletePlayback={() => void handleDeletePlayback()}
           onExport={(format) => void handleExport(format)}
           onExportRecording={() => {
             if (transcript?.recordingId) void exportRecording(transcript.recordingId);
@@ -966,10 +1202,17 @@ export const App = () => {
               <div className={`job-card job-card--${appState.activeJob.stage}`}>
                 <div className="job-card__heading">
                   <span><strong>{jobLabel(appState.activeJob)}</strong><small>{appState.activeJob.sourceName}</small></span>
-                  <span>{progress}%</span>
+                  <span>{progressIsIndeterminate ? 'Working…' : `${progress}%`}</span>
                 </div>
-                <div className="progress-track" aria-label="Transcription progress" aria-valuemax={100} aria-valuemin={0} aria-valuenow={progress} role="progressbar">
-                  <span style={{ width: `${progress}%` }} />
+                <div
+                  className={`progress-track${progressIsIndeterminate ? ' progress-track--indeterminate' : ''}`}
+                  aria-label="Transcription progress"
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={progressIsIndeterminate ? undefined : progress}
+                  role="progressbar"
+                >
+                  <span style={progressIsIndeterminate ? undefined : { width: `${progress}%` }} />
                 </div>
                 <p>{appState.activeJob.message}</p>
                 {running ? (
@@ -1008,8 +1251,8 @@ export const App = () => {
               type="button"
             >
               {isStartingRecording || isStoppingRecording ? <SpinnerIcon className="spinner" /> : <MicrophoneIcon />}
-              <span>{isStartingRecording ? 'Opening capture…' : activeRecording ? 'Stop recording' : 'Record live meeting'}</span>
-              <span className="button__status">{activeRecording ? formatDuration(recordingElapsed) : 'System + mic'}</span>
+              <span>{isStartingRecording ? 'Opening capture…' : activeRecording ? 'Stop recording' : needsRecordingSetup ? 'Set up live recording' : 'Record live meeting'}</span>
+              <span className="button__status">{activeRecording ? formatDuration(recordingElapsed) : needsRecordingSetup ? 'One-time macOS approval' : 'System + mic'}</span>
             </button>
 
             {appState?.engine.state !== 'ready' ? (

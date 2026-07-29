@@ -1,4 +1,5 @@
 import { mkdir, readdir, readFile, rm, stat, unlink } from 'node:fs/promises';
+import { availableParallelism as readAvailableParallelism } from 'node:os';
 import path from 'node:path';
 
 import type {
@@ -24,9 +25,11 @@ import {
   TRANSCRIPT_SCHEMA_VERSION,
   type TranscriptRecord,
 } from './transcript-types';
+import type { PlaybackRepository } from '../storage/playback-repository';
 import {
   MAX_WHISPER_JSON_BYTES,
   parseWhisperOutputJson,
+  type NormalizedWhisperOutput,
   WhisperOutputValidationError,
 } from './whisper-output';
 import { createWhisperProgressParser } from './whisper-progress';
@@ -45,6 +48,12 @@ const RUNNING_STAGES: ReadonlySet<TranscriptionStage> = new Set([
 ]);
 const WHISPER_VERSION = '1.9.1';
 const MODEL_NAME = 'small.en';
+const MAX_WINDOWS_WHISPER_THREADS = 8;
+
+export const resolveWindowsWhisperThreads = (parallelism: number): number => {
+  const normalized = Number.isFinite(parallelism) ? Math.floor(parallelism) : 1;
+  return Math.max(1, Math.min(MAX_WINDOWS_WHISPER_THREADS, normalized));
+};
 
 export class TranscriptionStartError extends Error {
   constructor(
@@ -75,6 +84,10 @@ export interface LocalTranscriptionServiceOptions {
   speakerDiarizationRunner?: (
     options: RunSpeakerDiarizationOptions,
   ) => Promise<SpeakerDiarizationSegment[]>;
+  /** Test seams for the Windows-only thread policy. */
+  platform?: NodeJS.Platform;
+  availableParallelism?: number;
+  playbackRepository?: PlaybackRepository;
 }
 
 const snapshot = (job: TranscriptionJobSnapshot): TranscriptionJobSnapshot => ({
@@ -88,6 +101,13 @@ const titleFromMediaName = (name: string): string => {
 
 const isActiveStage = (stage: TranscriptionStage): boolean =>
   RUNNING_STAGES.has(stage);
+
+const canRunSpeakerDiarization = (
+  transcript: NormalizedWhisperOutput,
+): boolean =>
+  transcript.text.length > 0 &&
+  transcript.segments.some((segment) => segment.text.length > 0) &&
+  transcript.words.length > 0;
 
 export class LocalTranscriptionService {
   private activeJob: TranscriptionJobSnapshot | null = null;
@@ -221,7 +241,7 @@ export class LocalTranscriptionService {
       });
 
       this.update('normalizing', 0.05, 'Preparing a private audio copy…');
-      await normalizeMediaToWav({
+      const normalizedDurationSeconds = await normalizeMediaToWav({
         ffmpegPath: this.options.runtime.ffmpegPath,
         inputPath: media.path,
         outputPath: normalizedPath,
@@ -237,7 +257,7 @@ export class LocalTranscriptionService {
         },
       });
 
-      this.update('transcribing', 0.2, 'Listening locally with whisper.cpp…');
+      this.update('transcribing', 0.2, 'Running the local speech model…');
       await this.runWhisper(normalizedPath, outputPrefix, outputJsonPath, signal);
 
       const outputStats = await stat(outputJsonPath);
@@ -248,7 +268,7 @@ export class LocalTranscriptionService {
       const normalized = parseWhisperOutputJson(await readFile(outputJsonPath, 'utf8'));
       let diarization: SpeakerDiarizationSegment[] = [];
       const speakerRuntime = this.options.runtime.speakerDiarization;
-      if (speakerRuntime) {
+      if (speakerRuntime && canRunSpeakerDiarization(normalized)) {
         this.update('transcribing', 0.92, 'Separating speakers locally…');
         try {
           diarization = await (
@@ -272,6 +292,9 @@ export class LocalTranscriptionService {
           diarization = [];
         }
       }
+      if (diarization.length > 0) {
+        this.update('transcribing', 0.95, 'Finishing speaker labels locally…');
+      }
       const aligned = alignTranscriptSpeakers(
         normalized.segments,
         normalized.words,
@@ -282,6 +305,7 @@ export class LocalTranscriptionService {
       const durationMs = Math.max(
         normalized.durationMs,
         Math.round((probe.durationSeconds ?? 0) * 1_000),
+        Math.round((normalizedDurationSeconds ?? 0) * 1_000),
       );
       const completedAt = new Date().toISOString();
       const record: TranscriptRecord = {
@@ -308,9 +332,20 @@ export class LocalTranscriptionService {
         text: normalized.text,
         segments: aligned.segments,
       };
+      let retainedPlayback = false;
       try {
+        if (
+          record.source.type === 'imported-file' &&
+          this.options.playbackRepository
+        ) {
+          await this.options.playbackRepository.retain(record.id, normalizedPath);
+          retainedPlayback = true;
+        }
         await this.options.repository.save(record);
       } catch {
+        if (retainedPlayback) {
+          await this.options.playbackRepository?.delete(record.id).catch(() => undefined);
+        }
         throw new PipelineError(
           'storage-failed',
           'The transcript was created, but Sotto could not save it locally.',
@@ -357,7 +392,20 @@ export class LocalTranscriptionService {
     outputJsonPath: string,
     signal: AbortSignal,
   ): Promise<void> {
+    const platform = this.options.platform ?? process.platform;
+    const threadArgs =
+      platform === 'win32'
+        ? [
+            '--threads',
+            String(
+              resolveWindowsWhisperThreads(
+                this.options.availableParallelism ?? readAvailableParallelism(),
+              ),
+            ),
+          ]
+        : [];
     const baseArgs = [
+      ...threadArgs,
       '--model',
       this.options.runtime.modelPath,
       '--file',

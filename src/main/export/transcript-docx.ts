@@ -26,7 +26,7 @@ export interface TranscriptDocxSpeaker {
   label: string;
 }
 
-export type TranscriptDocxSegment = Omit<TranscriptSegment, 'speakerId'> & {
+export type TranscriptDocxSegment = Omit<TranscriptSegment, 'speakerId' | 'words'> & {
   /** Canonical speaker reference used by transcript schema v2. */
   speakerId?: string | null;
   /** Compatibility for callers that only have a presentation label. */

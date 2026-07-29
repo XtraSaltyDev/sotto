@@ -75,7 +75,7 @@ describe('normalizeMediaToWav', () => {
       },
     );
 
-    await normalizeMediaToWav({
+    const observedDurationSeconds = await normalizeMediaToWav({
       ffmpegPath: '/runtime/ffmpeg',
       inputPath: '/recordings/meeting.mp4',
       outputPath,
@@ -84,6 +84,7 @@ describe('normalizeMediaToWav', () => {
       processRunner,
     });
 
+    expect(observedDurationSeconds).toBe(10);
     expect(progress).toEqual([0, 0.25, 0.99, 1]);
     expect(processRunner).toHaveBeenCalledOnce();
     expect(processRunner.mock.calls[0][0].args).toEqual([
@@ -118,6 +119,36 @@ describe('normalizeMediaToWav', () => {
       '-nostats',
       outputPath,
     ]);
+  });
+
+  it('returns FFmpeg output duration when the container duration is unknown', async () => {
+    const directory = await makeTemporaryDirectory();
+    const outputPath = path.join(directory, 'normalized.wav');
+    const progress: number[] = [];
+    const processRunner = vi.fn(
+      async (options: RunProcessOptions): Promise<ProcessResult> => {
+        options.onStdout?.(
+          Buffer.from(
+            'out_time_us=2500000\nprogress=continue\n' +
+              'out_time_us=12750000\nprogress=end\n',
+          ),
+        );
+        await writeFile(outputPath, Buffer.alloc(44));
+        return successfulResult;
+      },
+    );
+
+    const observedDurationSeconds = await normalizeMediaToWav({
+      ffmpegPath: '/runtime/ffmpeg',
+      inputPath: '/recordings/live-recording.webm',
+      outputPath,
+      durationSeconds: null,
+      onProgress: (value) => progress.push(value),
+      processRunner,
+    });
+
+    expect(observedDurationSeconds).toBe(12.75);
+    expect(progress).toEqual([0, 1]);
   });
 
   it('does not claim completion when FFmpeg fails', async () => {

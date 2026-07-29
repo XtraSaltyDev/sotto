@@ -69,6 +69,13 @@ interface ActiveRecording {
   failed: boolean;
 }
 
+type LiveRecordingOperation =
+  | { readonly kind: 'starting' }
+  | {
+      readonly kind: 'cancelling' | 'finishing';
+      readonly recordingId: string;
+    };
+
 const snapshot = (recording: ActiveRecording): LiveRecordingSnapshot => ({
   id: recording.id,
   sourceName: recording.sourceName,
@@ -174,6 +181,7 @@ const defaultAvailableBytes = async (
 
 export class LiveRecordingService {
   private activeRecording: ActiveRecording | null = null;
+  private operation: LiveRecordingOperation | null = null;
   private readonly repository: RecordingRepository;
   private readonly writeWaitMs: number;
   private readonly minimumFreeBytes: number;
@@ -212,6 +220,10 @@ export class LiveRecordingService {
     return this.activeRecording ? snapshot(this.activeRecording) : null;
   }
 
+  hasActiveOrPendingRecording(): boolean {
+    return this.activeRecording !== null || this.operation !== null;
+  }
+
   async listSavedRecordings(): Promise<SavedRecordingSummary[]> {
     const recordings = await this.repository.list();
     return recordings.map(toSavedRecordingSummary);
@@ -245,9 +257,11 @@ export class LiveRecordingService {
 
   async getExportDescriptor(
     id: string,
-  ): Promise<{ fileName: string; path: string } | null> {
+  ): Promise<{ fileName: string; path: string; sizeBytes: number } | null> {
     const media = await this.getRecordingMedia(id);
-    return media ? { fileName: media.name, path: media.path } : null;
+    return media
+      ? { fileName: media.name, path: media.path, sizeBytes: media.sizeBytes }
+      : null;
   }
 
   async has(id: string): Promise<boolean> {
@@ -255,56 +269,63 @@ export class LiveRecordingService {
   }
 
   async start(): Promise<LiveRecordingSnapshot> {
-    if (this.activeRecording) {
+    if (this.activeRecording || this.operation) {
       throw new LiveRecordingError('busy', 'A live recording is already in progress.');
     }
 
-    const availableBytes = await this.getAvailableBytes(
-      this.options.recordingsRoot,
-    );
-    if (
-      availableBytes !== null &&
-      availableBytes < this.minimumFreeBytes
-    ) {
-      throw new LiveRecordingError(
-        'storage-full',
-        'This device has less than 512 MB free. Free up space before starting a live recording.',
-      );
-    }
+    const operation = { kind: 'starting' } as const;
+    this.operation = operation;
 
-    const id = createTranscriptId();
-    const startedAt = new Date().toISOString();
-    const sourceName = sourceNameFor(startedAt);
-    let recording: ActiveRecording | null = null;
     try {
-      await this.repository.createPartial(metadataFor(id, sourceName, startedAt));
-      const stream = this.createStream(this.repository.partialPath(id));
-      recording = {
-        id,
-        sourceName,
-        startedAt,
-        stream,
-        writeQueue: Promise.resolve(),
-        pendingReject: null,
-        streamError: null,
-        bytesWritten: 0,
-        failed: false,
-      };
-      stream.on('error', (error: Error) => {
-        if (!recording) return;
-        recording.streamError = error;
-        recording.pendingReject?.(error);
-      });
-      await waitForOpen(stream, this.writeWaitMs);
-    } catch (error) {
-      recording?.stream.destroy();
-      await this.repository.removeUnfinished(id).catch(() => undefined);
-      throw asLiveRecordingError(error, 'Sotto could not create a private partial recording.');
-    }
+      const availableBytes = await this.getAvailableBytes(
+        this.options.recordingsRoot,
+      );
+      if (
+        availableBytes !== null &&
+        availableBytes < this.minimumFreeBytes
+      ) {
+        throw new LiveRecordingError(
+          'storage-full',
+          'This device has less than 512 MB free. Free up space before starting a live recording.',
+        );
+      }
 
-    this.activeRecording = recording;
-    this.publish();
-    return snapshot(recording);
+      const id = createTranscriptId();
+      const startedAt = new Date().toISOString();
+      const sourceName = sourceNameFor(startedAt);
+      let recording: ActiveRecording | null = null;
+      try {
+        await this.repository.createPartial(metadataFor(id, sourceName, startedAt));
+        const stream = this.createStream(this.repository.partialPath(id));
+        recording = {
+          id,
+          sourceName,
+          startedAt,
+          stream,
+          writeQueue: Promise.resolve(),
+          pendingReject: null,
+          streamError: null,
+          bytesWritten: 0,
+          failed: false,
+        };
+        stream.on('error', (error: Error) => {
+          if (!recording) return;
+          recording.streamError = error;
+          recording.pendingReject?.(error);
+        });
+        await waitForOpen(stream, this.writeWaitMs);
+      } catch (error) {
+        recording?.stream.destroy();
+        await this.repository.removeUnfinished(id).catch(() => undefined);
+        throw asLiveRecordingError(error, 'Sotto could not create a private partial recording.');
+      }
+
+      this.activeRecording = recording;
+      this.publish();
+      return snapshot(recording);
+    } finally {
+      if (this.operation === operation) this.operation = null;
+    }
   }
 
   async append(
@@ -312,6 +333,16 @@ export class LiveRecordingService {
     chunk: Uint8Array,
   ): Promise<AppendLiveRecordingChunkResult> {
     const recording = this.assertActive(recordingId);
+    if (
+      this.operation &&
+      this.operation.kind !== 'starting' &&
+      this.operation.recordingId === recording.id
+    ) {
+      throw new LiveRecordingError(
+        'busy',
+        'The live recording is already being finalized.',
+      );
+    }
     if (chunk.byteLength === 0) {
       return { outcome: 'accepted', bytesWritten: recording.bytesWritten };
     }
@@ -353,17 +384,27 @@ export class LiveRecordingService {
 
   async finish(recordingId: string): Promise<SelectedMedia> {
     const recording = this.assertActive(recordingId);
-    this.activeRecording = null;
-    this.options.onRecordingChanged(null);
+    if (this.operation) {
+      throw new LiveRecordingError(
+        'busy',
+        'The live recording is already being finalized.',
+      );
+    }
+    const operation = {
+      kind: 'finishing',
+      recordingId: recording.id,
+    } as const;
+    this.operation = operation;
 
-    let promoted = false;
+    let encoderClosed = false;
     try {
       await recording.writeQueue;
       if (recording.streamError) throw recording.streamError;
       await this.endStream(recording);
-      const sizeBytes = await this.repository.promotePartial(recording.id);
-      promoted = true;
+      encoderClosed = true;
       const completedAt = new Date().toISOString();
+      await this.repository.markFinalizing(recording.id, completedAt);
+      const sizeBytes = await this.repository.promoteFinalizing(recording.id);
       await this.repository.completeMetadata(recording.id, sizeBytes, completedAt);
       const filePath = this.repository.durablePath(recording.id);
       const validation = validateSelectedMedia(filePath, sizeBytes);
@@ -376,33 +417,54 @@ export class LiveRecordingService {
         cleanupAfterTranscription: false,
       };
     } catch (error) {
-      if (!promoted) {
+      if (!encoderClosed) {
         await this.repository.removeUnfinished(recording.id).catch(() => undefined);
       }
       throw asLiveRecordingError(
         error,
-        'Sotto could not finish saving the live recording. The finalized recording, if present, was kept.',
+        encoderClosed
+          ? 'Sotto could not finish saving the recording, but the closed audio was kept for automatic recovery after restart.'
+          : 'Sotto could not finish saving the live recording.',
       );
+    } finally {
+      if (this.activeRecording?.id === recording.id) {
+        this.activeRecording = null;
+        this.options.onRecordingChanged(null);
+      }
+      if (this.operation === operation) this.operation = null;
     }
   }
 
   async cancel(recordingId: string): Promise<boolean> {
     const recording = this.assertActive(recordingId, false);
     if (!recording) return false;
+    if (this.operation) return false;
 
-    this.activeRecording = null;
-    this.options.onRecordingChanged(null);
-    recording.failed = true;
-    recording.pendingReject?.(
-      new LiveRecordingError(
-        'recording-failed',
-        'The incomplete live recording was cancelled.',
-      ),
-    );
-    recording.stream.destroy();
-    await recording.writeQueue.catch(() => undefined);
-    await this.repository.removeUnfinished(recording.id);
-    return true;
+    const operation = {
+      kind: 'cancelling',
+      recordingId: recording.id,
+    } as const;
+    this.operation = operation;
+
+    try {
+      recording.failed = true;
+      recording.pendingReject?.(
+        new LiveRecordingError(
+          'recording-failed',
+          'The incomplete live recording was cancelled.',
+        ),
+      );
+      recording.stream.destroy();
+      await recording.writeQueue.catch(() => undefined);
+      await this.repository.removeUnfinished(recording.id);
+      return true;
+    } finally {
+      if (this.activeRecording?.id === recording.id) {
+        this.activeRecording = null;
+        this.options.onRecordingChanged(null);
+      }
+      if (this.operation === operation) this.operation = null;
+    }
   }
 
   async updateTranscription(

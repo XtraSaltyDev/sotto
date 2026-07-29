@@ -46,6 +46,8 @@ const api: SottoDesktopApi = Object.freeze({
     ),
   deleteTranscript: (transcriptId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.deleteTranscript, transcriptId),
+  deletePlayback: (transcriptId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deletePlayback, transcriptId),
   exportTranscript: (transcriptId: string, format: 'txt' | 'docx') =>
     ipcRenderer.invoke(IPC_CHANNELS.exportTranscript, transcriptId, format),
   onAppStateChanged: (listener: (state: AppState) => void) => {

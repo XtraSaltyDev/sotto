@@ -12,7 +12,7 @@ license texts staged beside the runtime.
 - License: MIT
 
 The provisioning script copies the exact `LICENSE` file from the verified pinned
-source checkout to `darwin-arm64/licenses/whisper.cpp.LICENSE`.
+source checkout to each target runtime's `licenses/whisper.cpp.LICENSE`.
 
 ## FFmpeg
 
@@ -24,7 +24,8 @@ source checkout to `darwin-arm64/licenses/whisper.cpp.LICENSE`.
 The build does not enable GPL, nonfree, or version-3-only features. The script
 requires FFmpeg's configuration summary to identify the result as LGPL 2.1 or
 later. It stages the upstream `COPYING.LGPLv2.1` and `COPYING.LGPLv3` texts in
-`darwin-arm64/licenses/`, together with FFmpeg's `LICENSE.md` overview, for
+each target runtime's `licenses/` directory, together with FFmpeg's `LICENSE.md`
+overview, for
 redistribution with the executable.
 
 FFmpeg is distributed without warranty under its applicable license. Recipients
@@ -52,11 +53,22 @@ license directory during provisioning.
 - Segmentation model: Pyannote Segmentation 3.0, MIT
 - Embedding model: 3D-Speaker ERes2Net base, Apache-2.0
 
-The exact download URLs and SHA-256 hashes are recorded in `sources.json`.
+The exact model download URLs and SHA-256 hashes are recorded in `sources.json`.
+The Windows npm package URLs and SHA-512 hashes are pinned in
+`scripts/provision-win32-x64.sh`.
 The Pyannote model's upstream MIT text is committed at
 `licenses/pyannote-segmentation-3.0.LICENSE`. The native npm package and both
 models are staged as local, offline runtime resources; no model service is
 contacted while Sotto is running.
+
+The complete Apache-2.0 text is staged as
+`licenses/sherpa-onnx.Apache-2.0.LICENSE` and
+`licenses/3D-Speaker.Apache-2.0.LICENSE`. The native package also contains ONNX
+Runtime 1.27.0; its MIT license and upstream third-party notices are staged as
+`licenses/onnxruntime.LICENSE` and
+`licenses/onnxruntime.ThirdPartyNotices.txt`. The provisioner downloads these
+files from their pinned upstream release tags and verifies their SHA-256 hashes
+before they can enter a package.
 
 ## docx
 

@@ -12,7 +12,7 @@ export const RECORDING_METADATA_SCHEMA_VERSION = 1 as const;
 export const MAX_RECORDING_METADATA_BYTES = 64 * 1_024;
 export const MAX_RECORDING_STATUS_MESSAGE_CHARACTERS = 2_000;
 
-export type RecordingStorageState = 'partial' | 'complete';
+export type RecordingStorageState = 'partial' | 'finalizing' | 'complete';
 
 export interface RecordingTranscriptionMetadata {
   state: RecordingTranscriptionState;
@@ -155,7 +155,11 @@ export const parseRecordingMetadata = (value: unknown): RecordingMetadata => {
   if (!isTranscriptId(value.id)) {
     return fail('Recording id must be a UUID.');
   }
-  if (value.storageState !== 'partial' && value.storageState !== 'complete') {
+  if (
+    value.storageState !== 'partial' &&
+    value.storageState !== 'finalizing' &&
+    value.storageState !== 'complete'
+  ) {
     return fail('Recording storage state is not supported.');
   }
   if (
@@ -174,8 +178,8 @@ export const parseRecordingMetadata = (value: unknown): RecordingMetadata => {
   if (completedAt && Date.parse(completedAt) < Date.parse(startedAt)) {
     return fail('completedAt cannot be earlier than startedAt.');
   }
-  if (value.storageState === 'complete' && completedAt === null) {
-    return fail('A complete recording must include completedAt.');
+  if (value.storageState !== 'partial' && completedAt === null) {
+    return fail('A finalizing or complete recording must include completedAt.');
   }
 
   return {

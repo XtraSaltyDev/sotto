@@ -193,6 +193,7 @@ export const normalizeWhisperOutput = (value: unknown): NormalizedWhisperOutput 
         return fail(`Whisper output cannot contain more than ${MAX_WHISPER_WORDS} tokens.`);
       }
 
+      let previousTokenEndMs = startMs;
       candidate.tokens.forEach((token, tokenIndex) => {
         if (!isRecord(token) || !Number.isSafeInteger(token.id)) {
           return fail(`transcription[${index}].tokens[${tokenIndex}] is invalid.`);
@@ -223,6 +224,11 @@ export const normalizeWhisperOutput = (value: unknown): NormalizedWhisperOutput 
         if (wordEndMs > endMs) {
           return fail(`transcription[${index}].tokens[${tokenIndex}] exceeds its segment.`);
         }
+        if (wordStartMs < previousTokenEndMs) {
+          return fail(
+            `transcription[${index}].tokens must be ordered and cannot overlap.`,
+          );
+        }
 
         words.push({
           startMs: wordStartMs,
@@ -230,6 +236,7 @@ export const normalizeWhisperOutput = (value: unknown): NormalizedWhisperOutput 
           text: tokenText,
           segmentIndex: index,
         });
+        previousTokenEndMs = wordEndMs;
       });
     }
     if (text.length > 0) {
