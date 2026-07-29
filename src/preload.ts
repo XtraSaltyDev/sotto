@@ -5,6 +5,7 @@ import {
   type AppState,
   type RecordingKind,
   type SottoDesktopApi,
+  type TranscriptLibraryQuery,
 } from './shared/contracts';
 
 const api: SottoDesktopApi = Object.freeze({
@@ -30,10 +31,23 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.exportRecording, recordingId),
   openRecordingSettings: () =>
     ipcRenderer.invoke(IPC_CHANNELS.openRecordingSettings),
+  resetRecordingPermissions: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.resetRecordingPermissions),
   cancelTranscription: (jobId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.cancelTranscription, jobId),
+  searchTranscriptLibrary: (query: TranscriptLibraryQuery) =>
+    ipcRenderer.invoke(IPC_CHANNELS.searchTranscriptLibrary, query),
   getTranscript: (transcriptId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.getTranscript, transcriptId),
+  updateTranscriptMetadata: (
+    transcriptId: string,
+    metadata: { title?: string; tags?: string[] },
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.updateTranscriptMetadata,
+      transcriptId,
+      metadata,
+    ),
   updateTranscriptSegment: (
     transcriptId: string,
     segmentIndex: number,

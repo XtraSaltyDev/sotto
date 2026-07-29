@@ -25,6 +25,7 @@ import {
   type LocalTranscriptionServiceOptions,
 } from './transcription-service';
 import type { SpeakerDiarizationSegment } from './speaker-diarization';
+import { TRANSCRIPT_SCHEMA_VERSION } from './transcript-types';
 
 const RECORDING_ID = '32ce6fee-8f3e-4f03-a266-46d6c00ef08c';
 
@@ -436,7 +437,7 @@ describe('LocalTranscriptionService durable recording behavior', () => {
     await expect(terminal).resolves.toMatchObject({ stage: 'completed' });
 
     const saved = await context.repository.get(RECORDING_ID);
-    expect(saved?.schemaVersion).toBe(3);
+    expect(saved?.schemaVersion).toBe(TRANSCRIPT_SCHEMA_VERSION);
     expect(saved?.speakerAnalysis?.speakers).toEqual([
       expect.objectContaining({ label: 'Speaker 1' }),
     ]);

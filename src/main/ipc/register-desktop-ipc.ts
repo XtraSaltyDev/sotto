@@ -21,9 +21,12 @@ import {
   type OpenRecordingSettingsResult,
   type RecordingKind,
   type RetryRecordingResult,
+  type ResetRecordingPermissionsResult,
   type RenameTranscriptSpeakerResult,
   type StartLiveRecordingResult,
+  type TranscriptLibraryResult,
   type TranscriptExportFormat,
+  type UpdateTranscriptMetadataResult,
   type UpdateTranscriptSegmentResult,
 } from '../../shared/contracts';
 import { AppController } from '../app-controller';
@@ -39,6 +42,7 @@ import {
   MAX_SEGMENT_TEXT_CHARACTERS,
   MAX_TRANSCRIPT_SEGMENTS,
   MAX_SPEAKER_LABEL_CHARACTERS,
+  TranscriptValidationError,
 } from '../transcription/transcript-types';
 import {
   LiveRecordingError,
@@ -46,11 +50,16 @@ import {
 } from '../recording/live-recording-service';
 import { copyRecordingForExport } from '../recording/recording-export';
 import { writeTranscriptExport } from '../export/transcript-export';
+import {
+  parseTranscriptLibraryQuery,
+  parseTranscriptMetadataUpdate,
+} from './transcript-ipc-validation';
 
 export interface DesktopIpcOptions {
   controller: AppController;
   getMainWindow: () => BrowserWindow | null;
   openRecordingSettings: () => Promise<void>;
+  resetRecordingPermissions: () => Promise<void>;
 }
 
 const assertTrustedSender = (
@@ -116,6 +125,7 @@ export const registerDesktopIpc = ({
   controller,
   getMainWindow,
   openRecordingSettings,
+  resetRecordingPermissions,
 }: DesktopIpcOptions): (() => void) => {
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
     assertTrustedSender(event, getMainWindow);
@@ -137,6 +147,25 @@ export const registerDesktopIpc = ({
           outcome: 'failed',
           reason:
             'Open System Settings → Privacy & Security → Screen & System Audio Recording.',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.resetRecordingPermissions,
+    async (event): Promise<ResetRecordingPermissionsResult> => {
+      trust(event);
+      try {
+        await resetRecordingPermissions();
+        return { outcome: 'reset' };
+      } catch (error) {
+        return {
+          outcome: 'failed',
+          reason:
+            error instanceof Error
+              ? error.message
+              : 'Sotto could not clear its old macOS recording permission.',
         };
       }
     },
@@ -399,6 +428,53 @@ export const registerDesktopIpc = ({
   });
 
   ipcMain.handle(
+    IPC_CHANNELS.searchTranscriptLibrary,
+    (
+      event,
+      rawQuery: unknown,
+    ): TranscriptLibraryResult => {
+      trust(event);
+      try {
+        return controller.searchTranscriptLibrary(
+          parseTranscriptLibraryQuery(rawQuery),
+        );
+      } catch {
+        return {
+          transcripts: [],
+          availableSpeakers: [],
+          availableTags: [],
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.updateTranscriptMetadata,
+    async (
+      event,
+      transcriptId: unknown,
+      rawMetadata: unknown,
+    ): Promise<UpdateTranscriptMetadataResult> => {
+      trust(event);
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      try {
+        return controller.updateTranscriptMetadata(
+          transcriptId,
+          parseTranscriptMetadataUpdate(rawMetadata),
+        );
+      } catch (error) {
+        return {
+          outcome: 'rejected',
+          reason:
+            error instanceof TranscriptValidationError
+              ? error.message
+              : 'Sotto rejected invalid transcript information.',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.updateTranscriptSegment,
     async (
       event,
@@ -557,8 +633,11 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.deleteRecording,
       IPC_CHANNELS.exportRecording,
       IPC_CHANNELS.openRecordingSettings,
+      IPC_CHANNELS.resetRecordingPermissions,
       IPC_CHANNELS.cancelTranscription,
+      IPC_CHANNELS.searchTranscriptLibrary,
       IPC_CHANNELS.getTranscript,
+      IPC_CHANNELS.updateTranscriptMetadata,
       IPC_CHANNELS.updateTranscriptSegment,
       IPC_CHANNELS.renameTranscriptSpeaker,
       IPC_CHANNELS.deleteTranscript,

@@ -17,6 +17,7 @@ const createRecord = (
   schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
   id: TRANSCRIPT_ID,
   title: 'R&D <weekly sync>',
+  tags: [],
   createdAt: '2026-07-27T12:00:00.000Z',
   completedAt: '2026-07-27T12:02:00.000Z',
   source: {

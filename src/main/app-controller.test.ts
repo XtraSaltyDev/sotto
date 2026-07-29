@@ -35,6 +35,7 @@ const record: TranscriptRecord = {
   schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
   id: '32ce6fee-8f3e-4f03-a266-46d6c00ef08c',
   title: 'Teams planning meeting',
+  tags: [],
   createdAt: '2026-07-27T12:00:00.000Z',
   completedAt: '2026-07-27T12:05:00.000Z',
   source: {
@@ -119,9 +120,93 @@ describe('transcript presentation', () => {
       durationMs: record.durationMs,
       language: 'en',
       preview: record.text,
+      tags: [],
     });
     expect(toTranscriptDetail(record).completedAt).toBe(record.completedAt);
     expect(toTranscriptDetail(record)).not.toHaveProperty('source');
+  });
+
+  it('searches cached transcript content, speakers, dates, and tags locally', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-library-search-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    const speakerId = '11111111-1111-4111-8111-111111111111';
+    await repository.save({
+      ...record,
+      tags: ['Client'],
+      speakerAnalysis: {
+        engine: {
+          name: 'sherpa-onnx',
+          model: 'pyannote + 3D-Speaker',
+          version: '1.13.4',
+        },
+        speakers: [{ id: speakerId, label: 'Morgan' }],
+      },
+      segments: record.segments.map((segment) => ({
+        ...segment,
+        speakerId,
+      })),
+    });
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    expect(
+      controller.searchTranscriptLibrary({
+        text: 'Morgan Second',
+        createdFrom: '2026-07-01T00:00:00.000Z',
+        speaker: 'morgan',
+        tag: 'client',
+      }),
+    ).toMatchObject({
+      transcripts: [{ id: record.id, tags: ['Client'] }],
+      availableSpeakers: ['Morgan'],
+      availableTags: ['Client'],
+    });
+    await controller.dispose();
+  });
+
+  it('updates title and tags together and refreshes library state', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-library-metadata-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    await repository.save(record);
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    await expect(
+      controller.updateTranscriptMetadata(record.id, {
+        title: 'Customer launch',
+        tags: ['Important'],
+      }),
+    ).resolves.toEqual({
+      outcome: 'updated',
+      title: 'Customer launch',
+      tags: ['Important'],
+    });
+    expect(controller.getState().transcripts).toEqual([
+      expect.objectContaining({
+        id: record.id,
+        title: 'Customer launch',
+        tags: ['Important'],
+      }),
+    ]);
+    expect(
+      controller.searchTranscriptLibrary({
+        text: 'Customer',
+        createdFrom: null,
+        speaker: null,
+        tag: 'Important',
+      }).transcripts,
+    ).toHaveLength(1);
+    await controller.dispose();
   });
 
   it('withholds an implausible legacy speaker count instead of showing phantom people', () => {

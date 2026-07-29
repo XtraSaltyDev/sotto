@@ -9,9 +9,12 @@ import type {
   SavedRecordingSummary,
   EngineStatus as RendererEngineStatus,
   TranscriptDetail,
+  TranscriptLibraryQuery,
+  TranscriptLibraryResult,
   TranscriptSegment as RendererTranscriptSegment,
   TranscriptSummary,
   RenameTranscriptSpeakerResult,
+  UpdateTranscriptMetadataResult,
   UpdateTranscriptSegmentResult,
   TranscriptExportFormat,
   TranscriptionJobSnapshot,
@@ -23,6 +26,7 @@ import {
 } from './recording/live-recording-service';
 import type { EngineStatus as RuntimeStatus } from './runtime/engine-runtime';
 import { TranscriptRepository } from './storage/transcript-repository';
+import { searchTranscriptRecords } from './storage/transcript-library';
 import { PlaybackRepository } from './storage/playback-repository';
 import {
   LocalTranscriptionService,
@@ -83,6 +87,7 @@ export const toTranscriptSummary = (record: TranscriptRecord): TranscriptSummary
   durationMs: record.durationMs,
   language: record.language ?? 'unknown',
   preview: previewFor(record.text),
+  tags: [...record.tags],
 });
 
 const withReliableSpeakerPresentation = (
@@ -208,6 +213,7 @@ export class AppController {
   private transcriptionStartPending = false;
   private transcriptReloadChain: Promise<void> = Promise.resolve();
   private transcriptSummaries: TranscriptSummary[] = [];
+  private transcriptLibraryRecords: TranscriptRecord[] = [];
   private recordingTranscriptIds = new Set<string>();
 
   constructor(
@@ -283,7 +289,10 @@ export class AppController {
       },
       activeJob: this.activeJob ? { ...this.activeJob } : null,
       recordings: this.recordings.map((recording) => ({ ...recording })),
-      transcripts: this.transcriptSummaries.map((transcript) => ({ ...transcript })),
+      transcripts: this.transcriptSummaries.map((transcript) => ({
+        ...transcript,
+        tags: [...transcript.tags],
+      })),
     };
   }
 
@@ -444,6 +453,20 @@ export class AppController {
       : { ...detail, playback: { state: 'unavailable', reason: 'missing' } };
   }
 
+  searchTranscriptLibrary(
+    query: TranscriptLibraryQuery,
+  ): TranscriptLibraryResult {
+    const selection = searchTranscriptRecords(
+      this.transcriptLibraryRecords,
+      query,
+    );
+    return {
+      transcripts: selection.records.map(toTranscriptSummary),
+      availableSpeakers: selection.availableSpeakers,
+      availableTags: selection.availableTags,
+    };
+  }
+
   async getPlaybackDescriptor(
     transcriptId: string,
   ): Promise<{ path: string; mimeType: string; sizeBytes: number } | null> {
@@ -515,6 +538,34 @@ export class AppController {
           error instanceof TranscriptValidationError
             ? error.message
             : 'Sotto could not rename that speaker.',
+      };
+    }
+  }
+
+  async updateTranscriptMetadata(
+    transcriptId: string,
+    metadata: { title?: string; tags?: string[] },
+  ): Promise<UpdateTranscriptMetadataResult> {
+    try {
+      const result = await this.repository.updateMetadata(
+        transcriptId,
+        metadata,
+      );
+      if (result.outcome === 'not-found') return result;
+      await this.reloadTranscripts();
+      this.emit();
+      return {
+        outcome: 'updated',
+        title: result.record.title,
+        tags: [...result.record.tags],
+      };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof TranscriptValidationError
+            ? error.message
+            : 'Sotto could not save that transcript information.',
       };
     }
   }
@@ -674,6 +725,7 @@ export class AppController {
           .map((record) => record.recordingId ?? record.id),
       );
       this.transcriptSummaries = transcriptSummaries;
+      this.transcriptLibraryRecords = records;
       this.recordingTranscriptIds = recordingTranscriptIds;
     });
     this.transcriptReloadChain = reload.catch(() => undefined);

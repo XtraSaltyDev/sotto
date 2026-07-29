@@ -10,6 +10,7 @@ import { WebpackPlugin } from '@electron-forge/plugin-webpack';
 
 import { mainConfig } from './webpack.main.config';
 import { rendererConfig } from './webpack.renderer.config';
+import { SOTTO_APP_BUNDLE_ID } from './src/shared/app-identity';
 
 export const createMacSignOptions = (configuredIdentity?: string) => {
   const identity = configuredIdentity?.trim();
@@ -270,7 +271,7 @@ assertMacReleaseConfiguration({
 
 const config: ForgeConfig = {
   packagerConfig: {
-    appBundleId: 'com.sotto.desktop',
+    appBundleId: SOTTO_APP_BUNDLE_ID,
     appCategoryType: 'public.app-category.productivity',
     asar: true,
     // Electron Packager selects Sotto.icns on macOS and Sotto.ico on Windows
@@ -278,9 +279,9 @@ const config: ForgeConfig = {
     icon: './resources/Sotto',
     extendInfo: {
       NSAudioCaptureUsageDescription:
-        'Sotto captures meeting audio only when you start a live recording.',
+        'Sotto captures system audio only when you start a live meeting recording.',
       NSMicrophoneUsageDescription:
-        'Sotto captures your microphone only when you start a live recording.',
+        'Sotto captures your microphone only when you start a meeting recording or dictation.',
     },
     // Local packages are ad-hoc signed. Set SOTTO_MAC_SIGNING_IDENTITY to a
     // Developer ID Application identity for hardened distribution builds.

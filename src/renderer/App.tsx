@@ -16,10 +16,12 @@ import type {
   StartLiveRecordingResult,
   TranscriptDetail,
   TranscriptExportFormat,
+  TranscriptLibraryResult,
   TranscriptSpeaker,
   TranscriptSummary,
   TranscriptionJobSnapshot,
 } from '../shared/contracts';
+import { MAX_TRANSCRIPT_LIBRARY_QUERY_CHARACTERS } from '../shared/contracts';
 import { clearSavedSpeakerDraft } from './speaker-drafts';
 import { liveRecordingStartErrorMessage } from './live-recording-errors';
 import { releaseAbandonedLiveRecordingStart } from './live-recording-start-cleanup';
@@ -34,6 +36,11 @@ import {
   adjacentSearchResult,
   matchingTranscriptSegmentIndexes,
 } from './transcript-search';
+import {
+  createTranscriptLibraryQuery,
+  parseTranscriptTagDraft,
+  type TranscriptLibraryDateRange,
+} from './transcript-library';
 import {
   ArrowLeftIcon,
   AudioFileIcon,
@@ -113,6 +120,11 @@ const recordingLabel = (recording: LiveRecordingSnapshot | null): string =>
       ? 'Recording live meeting audio'
       : 'Record live meeting';
 
+const dictationShortcutLabel = (): string =>
+  /Mac|iPhone|iPad/iu.test(navigator.platform)
+    ? '⌘⇧D · mic only'
+    : 'Ctrl+Shift+D · mic only';
+
 const savedRecordingLabel = (recording: SavedRecordingSummary): string => {
   if (recording.transcriptionState === 'completed') return 'Transcript ready';
   if (recording.transcriptionState === 'transcribing') return 'Transcribing';
@@ -126,45 +138,289 @@ const recordingMimeType = (): string | undefined => {
   return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate));
 };
 
-const TranscriptList = ({
+interface TranscriptLibraryViewState {
+  query: string;
+  dateRange: TranscriptLibraryDateRange;
+  speaker: string;
+  tag: string;
+}
+
+const TranscriptLibrary = ({
   transcripts,
   onOpen,
+  onViewStateChange,
+  viewState,
 }: {
   transcripts: TranscriptSummary[];
   onOpen: (id: string) => void;
-}) => (
-  <section className="recent" id="recent" aria-labelledby="recent-title">
-    <h2 id="recent-title">Recent</h2>
-    {transcripts.length === 0 ? (
-      <div className="empty-state">
-        <InboxIcon />
-        <h3>No transcripts yet</h3>
-        <p>Import a meeting or recording. The finished transcript will appear here.</p>
+  onViewStateChange: (
+    update: (current: TranscriptLibraryViewState) => TranscriptLibraryViewState,
+  ) => void;
+  viewState: TranscriptLibraryViewState;
+}) => {
+  const { query, dateRange, speaker, tag } = viewState;
+  const [result, setResult] = useState<TranscriptLibraryResult>({
+    transcripts,
+    availableSpeakers: [],
+    availableTags: [],
+  });
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const deferredQuery = useDeferredValue(query);
+  const transcriptRevision = useMemo(
+    () =>
+      transcripts
+        .map((transcript) =>
+          [
+            transcript.id,
+            transcript.title,
+            transcript.preview,
+            ...transcript.tags,
+          ].join('\u0001'),
+        )
+        .join('\u0002'),
+    [transcripts],
+  );
+
+  useEffect(() => {
+    if (!window.sotto) {
+      setResult((current) => ({ ...current, transcripts }));
+      return undefined;
+    }
+    let cancelled = false;
+    setIsSearching(true);
+    setSearchError(null);
+    window.sotto
+      .searchTranscriptLibrary(
+        createTranscriptLibraryQuery({
+          dateRange,
+          speaker,
+          tag,
+          text: deferredQuery,
+        }),
+      )
+      .then((nextResult) => {
+        if (cancelled) return;
+        setResult(nextResult);
+        if (
+          speaker &&
+          !nextResult.availableSpeakers.some(
+            (candidate) =>
+              candidate.toLocaleLowerCase() === speaker.toLocaleLowerCase(),
+          )
+        ) {
+          onViewStateChange((current) => ({ ...current, speaker: '' }));
+        }
+        if (
+          tag &&
+          !nextResult.availableTags.some(
+            (candidate) =>
+              candidate.toLocaleLowerCase() === tag.toLocaleLowerCase(),
+          )
+        ) {
+          onViewStateChange((current) => ({ ...current, tag: '' }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSearchError('Sotto could not search the local transcript library.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsSearching(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    dateRange,
+    deferredQuery,
+    onViewStateChange,
+    speaker,
+    tag,
+    transcriptRevision,
+    transcripts,
+  ]);
+
+  useEffect(() => {
+    const focusLibrarySearch = (event: KeyboardEvent) => {
+      if (
+        event.key.toLocaleLowerCase() === 'f' &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', focusLibrarySearch);
+    return () => window.removeEventListener('keydown', focusLibrarySearch);
+  }, []);
+
+  const hasFilters =
+    query.trim().length > 0 ||
+    dateRange !== 'all' ||
+    speaker.length > 0 ||
+    tag.length > 0;
+
+  return (
+    <section
+      className="transcript-library"
+      id="transcript-library"
+      aria-labelledby="library-title"
+    >
+      <div className="section-heading">
+        <div>
+          <h2 id="library-title">Transcript Library</h2>
+          <p>Search and organize every transcript kept on this device.</p>
+        </div>
+        <span aria-live="polite" className="library-count">
+          {isSearching
+            ? 'Searching…'
+            : `${result.transcripts.length} ${result.transcripts.length === 1 ? 'transcript' : 'transcripts'}`}
+        </span>
       </div>
-    ) : (
-      <div className="transcript-list">
-        {transcripts.map((transcript) => (
+      {transcripts.length > 0 ? (
+        <div className="library-tools" role="search">
+          <div className="library-search">
+            <label htmlFor="library-search">Search transcripts</label>
+            <input
+              autoComplete="off"
+              id="library-search"
+              maxLength={MAX_TRANSCRIPT_LIBRARY_QUERY_CHARACTERS}
+              onChange={(event) =>
+                onViewStateChange((current) => ({
+                  ...current,
+                  query: event.target.value,
+                }))
+              }
+              placeholder="Titles, words, speakers, summaries, or tags"
+              ref={searchInputRef}
+              type="search"
+              value={query}
+            />
+          </div>
+          <label>
+            Date
+            <select
+              onChange={(event) =>
+                onViewStateChange((current) => ({
+                  ...current,
+                  dateRange: event.target.value as TranscriptLibraryDateRange,
+                }))
+              }
+              value={dateRange}
+            >
+              <option value="all">Any time</option>
+              <option value="today">Today</option>
+              <option value="7-days">Last 7 days</option>
+              <option value="30-days">Last 30 days</option>
+              <option value="this-year">This year</option>
+            </select>
+          </label>
+          <label>
+            Speaker
+            <select
+              disabled={result.availableSpeakers.length === 0}
+              onChange={(event) =>
+                onViewStateChange((current) => ({
+                  ...current,
+                  speaker: event.target.value,
+                }))
+              }
+              value={speaker}
+            >
+              <option value="">Any speaker</option>
+              {result.availableSpeakers.map((label) => (
+                <option key={label} value={label}>{label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Tag
+            <select
+              disabled={result.availableTags.length === 0}
+              onChange={(event) =>
+                onViewStateChange((current) => ({
+                  ...current,
+                  tag: event.target.value,
+                }))
+              }
+              value={tag}
+            >
+              <option value="">Any tag</option>
+              {result.availableTags.map((label) => (
+                <option key={label} value={label}>{label}</option>
+              ))}
+            </select>
+          </label>
           <button
-            className="transcript-row"
-            key={transcript.id}
-            onClick={() => onOpen(transcript.id)}
+            className="library-clear"
+            disabled={!hasFilters}
+            onClick={() => {
+              onViewStateChange(() => ({
+                query: '',
+                dateRange: 'all',
+                speaker: '',
+                tag: '',
+              }));
+              searchInputRef.current?.focus();
+            }}
             type="button"
           >
-            <DocumentIcon />
-            <span className="transcript-row__body">
-              <strong>{transcript.title}</strong>
-              <span>{transcript.preview || 'No speech detected'}</span>
-            </span>
-            <span className="transcript-row__meta">
-              <span>{formatDate(transcript.createdAt)}</span>
-              <span>{formatDuration(transcript.durationMs)}</span>
-            </span>
+            Clear
           </button>
-        ))}
-      </div>
-    )}
-  </section>
-);
+        </div>
+      ) : null}
+      {searchError ? <p className="library-error" role="alert">{searchError}</p> : null}
+      {transcripts.length === 0 ? (
+        <div className="empty-state">
+          <InboxIcon />
+          <h3>No transcripts yet</h3>
+          <p>Import a meeting or recording. The finished transcript will appear here.</p>
+        </div>
+      ) : result.transcripts.length === 0 ? (
+        <div className="empty-state empty-state--compact">
+          <InboxIcon />
+          <h3>No matching transcripts</h3>
+          <p>Try a different word, date, speaker, or tag.</p>
+        </div>
+      ) : (
+        <div className="transcript-list" aria-label="Transcript search results">
+          {result.transcripts.map((transcript) => (
+            <button
+              aria-label={`Open ${transcript.title}`}
+              className="transcript-row"
+              data-transcript-id={transcript.id}
+              key={transcript.id}
+              onClick={() => onOpen(transcript.id)}
+              type="button"
+            >
+              <DocumentIcon />
+              <span className="transcript-row__body">
+                <strong>{transcript.title}</strong>
+                <span>{transcript.preview || 'No speech detected'}</span>
+                {transcript.tags.length ? (
+                  <span className="tag-list" aria-label={`Tags: ${transcript.tags.join(', ')}`}>
+                    {transcript.tags.map((transcriptTag) => (
+                      <span className="tag" key={transcriptTag}>{transcriptTag}</span>
+                    ))}
+                  </span>
+                ) : null}
+              </span>
+              <span className="transcript-row__meta">
+                <span>{formatDate(transcript.createdAt)}</span>
+                <span>{formatDuration(transcript.durationMs)}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
 
 const SavedRecordingList = ({
   busyId,
@@ -333,6 +589,123 @@ const SpeakerEditor = ({
   );
 };
 
+const TranscriptMetadataEditor = ({
+  onUpdate,
+  tags,
+  title,
+}: {
+  onUpdate: (metadata: {
+    title?: string;
+    tags?: string[];
+  }) => Promise<string | null>;
+  tags: string[];
+  title: string;
+}) => {
+  const [titleDraft, setTitleDraft] = useState(title);
+  const [tagDraft, setTagDraft] = useState(tags.join(', '));
+  const [saving, setSaving] = useState<'title' | 'tags' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTitleDraft(title);
+  }, [title]);
+
+  useEffect(() => {
+    setTagDraft(tags.join(', '));
+  }, [tags]);
+
+  return (
+    <section
+      className="transcript-metadata"
+      aria-labelledby="transcript-information-title"
+    >
+      <div>
+        <h2 id="transcript-information-title">Transcript information</h2>
+        <p>Titles and tags stay with this local transcript.</p>
+      </div>
+      <div className="transcript-metadata__forms">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            setSaving('title');
+            setError(null);
+            void onUpdate({ title: titleDraft })
+              .then((reason) => {
+                setSaving(null);
+                setError(reason);
+              })
+              .catch(() => {
+                setSaving(null);
+                setError('Sotto could not save that transcript title.');
+              });
+          }}
+        >
+          <label htmlFor="transcript-title">Title</label>
+          <div>
+            <input
+              id="transcript-title"
+              maxLength={300}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              value={titleDraft}
+            />
+            <button
+              disabled={
+                saving !== null ||
+                !titleDraft.trim() ||
+                titleDraft.trim() === title
+              }
+              type="submit"
+            >
+              {saving === 'title' ? 'Saving…' : 'Save title'}
+            </button>
+          </div>
+        </form>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            const parsed = parseTranscriptTagDraft(tagDraft);
+            if (!parsed.ok) {
+              setError(parsed.reason);
+              return;
+            }
+            setSaving('tags');
+            setError(null);
+            void onUpdate({ tags: parsed.tags })
+              .then((reason) => {
+                setSaving(null);
+                setError(reason);
+              })
+              .catch(() => {
+                setSaving(null);
+                setError('Sotto could not save those transcript tags.');
+              });
+          }}
+        >
+          <label htmlFor="transcript-tags">Tags</label>
+          <div>
+            <input
+              aria-describedby="transcript-tags-help"
+              id="transcript-tags"
+              onChange={(event) => setTagDraft(event.target.value)}
+              placeholder="Client, planning, follow up"
+              value={tagDraft}
+            />
+            <button disabled={saving !== null} type="submit">
+              {saving === 'tags' ? 'Saving…' : 'Save tags'}
+            </button>
+          </div>
+          <p id="transcript-tags-help">
+            Separate tags with commas. Use tags to filter the library.
+          </p>
+        </form>
+        {error ? (
+          <p className="transcript-metadata__error" role="alert">{error}</p>
+        ) : null}
+      </div>
+    </section>
+  );
+};
+
 const MeetingSummaryView = ({
   onSeek,
   playbackAvailable,
@@ -407,6 +780,7 @@ const TranscriptView = ({
   onExport,
   onExportRecording,
   onRenameSpeaker,
+  onUpdateMetadata,
   onUpdateSegment,
 }: {
   transcript: TranscriptDetail | null;
@@ -418,6 +792,10 @@ const TranscriptView = ({
   onExport: (format: TranscriptExportFormat) => void;
   onExportRecording: () => void;
   onRenameSpeaker: (speakerId: string, label: string) => Promise<string | null>;
+  onUpdateMetadata: (metadata: {
+    title?: string;
+    tags?: string[];
+  }) => Promise<string | null>;
   onUpdateSegment: (segmentIndex: number, text: string) => Promise<string | null>;
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -575,6 +953,11 @@ const TranscriptView = ({
         <header className="transcript-detail__header">
           <p className="eyebrow">Local transcript</p>
           <h1>{transcript.title}</h1>
+          {transcript.tags.length ? (
+            <div className="tag-list tag-list--detail" aria-label={`Tags: ${transcript.tags.join(', ')}`}>
+              {transcript.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
+            </div>
+          ) : null}
           <p>
             {formatDate(transcript.completedAt)} · {formatDuration(transcript.durationMs)} ·{' '}
             {transcript.language.toUpperCase()}
@@ -591,6 +974,12 @@ const TranscriptView = ({
             <p className="engine-note">No reliable speaker labels were found.</p>
           )}
         </header>
+        <TranscriptMetadataEditor
+          key={transcript.id}
+          onUpdate={onUpdateMetadata}
+          tags={transcript.tags}
+          title={transcript.title}
+        />
         {transcript.meetingSummary ? (
           <MeetingSummaryView
             onSeek={seekTo}
@@ -904,13 +1293,22 @@ export const App = () => {
   const [isSelecting, setIsSelecting] = useState(false);
   const [isStartingRecording, setIsStartingRecording] = useState(false);
   const [isStoppingRecording, setIsStoppingRecording] = useState(false);
+  const [isRepairingPermissions, setIsRepairingPermissions] = useState(false);
   const [recordingActionId, setRecordingActionId] = useState<string | null>(null);
   const [recordingTick, setRecordingTick] = useState(() => Date.now());
+  const [libraryViewState, setLibraryViewState] =
+    useState<TranscriptLibraryViewState>({
+      query: '',
+      dateRange: 'all',
+      speaker: '',
+      tag: '',
+    });
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStopPromiseRef = useRef<Promise<void> | null>(null);
   const recordingChunkQueueRef = useRef<Promise<void>>(Promise.resolve());
   const recordingChunkErrorRef = useRef<string | null>(null);
   const recordingIdRef = useRef<string | null>(null);
+  const returnFocusTranscriptIdRef = useRef<string | null>(null);
   const stoppingRecordingRef = useRef(false);
   const desktopStreamRef = useRef<MediaStream | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
@@ -968,6 +1366,26 @@ export const App = () => {
       cancelled = true;
     };
   }, [selectedId]);
+
+  useEffect(() => {
+    const transcriptId = returnFocusTranscriptIdRef.current;
+    if (selectedId || !transcriptId) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLButtonElement>(
+        `[data-transcript-id="${transcriptId}"]`,
+      );
+      if (target) {
+        target.focus();
+        returnFocusTranscriptIdRef.current = null;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [appState?.transcripts, selectedId]);
+
+  const openTranscript = useCallback((transcriptId: string) => {
+    returnFocusTranscriptIdRef.current = transcriptId;
+    setSelectedId(transcriptId);
+  }, []);
 
   const running = isRunningJob(appState?.activeJob ?? null);
   const activeRecording = appState?.recording.active ?? null;
@@ -1271,15 +1689,46 @@ export const App = () => {
         void handleStartRecording('dictation');
       } else if (running) {
         setMessage('Wait for the current transcription to finish before starting dictation.');
+      } else if (appState?.engine.state !== 'ready') {
+        setMessage(
+          appState?.engine.message ??
+          'The local transcription engine must be ready before starting dictation.',
+        );
+      } else {
+        setMessage('Sotto is busy. Finish the current action before starting dictation.');
       }
     });
-  }, [activeRecording, canDictate, running]);
+  }, [activeRecording, appState?.engine.message, appState?.engine.state, canDictate, running]);
 
   const handleOpenRecordingSettings = async () => {
     if (!window.sotto) return;
     setMessage(null);
     const result = await window.sotto.openRecordingSettings();
     if (result.outcome === 'failed') setMessage(result.reason);
+  };
+
+  const handleRepairRecordingPermissions = async () => {
+    if (!window.sotto || isRepairingPermissions) return;
+    if (!window.confirm(
+      'Repair Sotto recording permissions? This clears only Sotto’s old Screen & System Audio and microphone decisions. macOS will ask for approval again after Sotto reopens.',
+    )) {
+      return;
+    }
+
+    setMessage(null);
+    setIsRepairingPermissions(true);
+    try {
+      const result = await window.sotto.resetRecordingPermissions();
+      if (result.outcome === 'failed') {
+        setMessage(result.reason);
+        setIsRepairingPermissions(false);
+      } else {
+        setMessage('Old Sotto recording permissions were cleared. Sotto is reopening…');
+      }
+    } catch {
+      setMessage('Sotto could not clear its old macOS recording permission.');
+      setIsRepairingPermissions(false);
+    }
   };
 
   const handleImport = async () => {
@@ -1345,6 +1794,33 @@ export const App = () => {
     return null;
   };
 
+  const handleUpdateMetadata = async (metadata: {
+    title?: string;
+    tags?: string[];
+  }): Promise<string | null> => {
+    if (!window.sotto || !selectedId) {
+      return 'Sotto could not save that transcript information.';
+    }
+    const result = await window.sotto.updateTranscriptMetadata(
+      selectedId,
+      metadata,
+    );
+    if (result.outcome === 'rejected') return result.reason;
+    if (result.outcome === 'not-found') {
+      return 'That transcript is no longer available.';
+    }
+    setTranscript((current) =>
+      current
+        ? {
+            ...current,
+            title: result.title,
+            tags: result.tags,
+          }
+        : current,
+    );
+    return null;
+  };
+
   const handleUpdateSegment = async (
     segmentIndex: number,
     text: string,
@@ -1393,6 +1869,7 @@ export const App = () => {
 
     const result = await window.sotto.deleteTranscript(selectedId);
     if (result.outcome === 'deleted') {
+      returnFocusTranscriptIdRef.current = null;
       setSelectedId(null);
       setTranscript(null);
     }
@@ -1521,6 +1998,7 @@ export const App = () => {
             if (transcript?.recordingId) void exportRecording(transcript.recordingId);
           }}
           onRenameSpeaker={handleRenameSpeaker}
+          onUpdateMetadata={handleUpdateMetadata}
           onUpdateSegment={handleUpdateSegment}
           transcript={transcript}
         />
@@ -1622,51 +2100,69 @@ export const App = () => {
             >
               {isStartingRecording || isStoppingRecording ? <SpinnerIcon className="spinner" /> : <MicrophoneIcon />}
               <span>{isStartingRecording ? 'Opening microphone…' : activeRecording?.kind === 'dictation' ? 'Stop dictation' : 'Dictate'}</span>
-              <span className="button__status">{activeRecording?.kind === 'dictation' ? formatDuration(recordingElapsed) : '⌘/Ctrl + Shift + D · mic only'}</span>
+              <span className="button__status">{activeRecording?.kind === 'dictation' ? formatDuration(recordingElapsed) : dictationShortcutLabel()}</span>
             </button>
 
-            {appState?.engine.state !== 'ready' ? (
-              <p className="import-message import-message--error" role="alert">
-                {appState?.engine.message ?? 'Checking the local transcription engine…'}
-              </p>
-            ) : (
-              <p className="import-message import-message--notice">
-                Local engine ready · {appState.engine.modelName}
-              </p>
-            )}
-            {appState?.recording.capability.state !== 'ready' ? (
-              <div className="recording-permission">
-                <p className="import-message import-message--notice">
-                  {appState?.recording.capability.message ?? 'Checking live capture support…'}
+            <div className="import-status-stack">
+              {appState?.engine.state !== 'ready' ? (
+                <p className="import-message import-message--error" role="alert">
+                  {appState?.engine.message ?? 'Checking the local transcription engine…'}
                 </p>
-                {appState?.recording.capability.state === 'permission-required' ? (
-                  <button
-                    className="recording-permission__button"
-                    onClick={() => void handleOpenRecordingSettings()}
-                    type="button"
-                  >
-                    Open Screen & System Audio Settings
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            {appState?.recording.storageMessage ? (
-              <p className="import-message import-message--error" role="alert">
-                {appState.recording.storageMessage}
-              </p>
-            ) : null}
-            {message ? <p className="import-message import-message--error" role="alert">{message}</p> : null}
+              ) : (
+                <p className="import-message import-message--notice">
+                  Local engine ready · {appState.engine.modelName}
+                </p>
+              )}
+              {appState?.recording.capability.state !== 'ready' ? (
+                <div className="recording-permission">
+                  <p className="import-message import-message--notice">
+                    {appState?.recording.capability.message ?? 'Checking live capture support…'}
+                  </p>
+                  {appState?.recording.capability.state === 'permission-required' ? (
+                    <div className="recording-permission__actions">
+                      <button
+                        className="recording-permission__button recording-permission__button--primary"
+                        disabled={isRepairingPermissions}
+                        onClick={() => void handleRepairRecordingPermissions()}
+                        type="button"
+                      >
+                        {isRepairingPermissions ? 'Repairing permissions…' : 'Repair permissions and reopen'}
+                      </button>
+                      <button
+                        className="recording-permission__button"
+                        disabled={isRepairingPermissions}
+                        onClick={() => void handleOpenRecordingSettings()}
+                        type="button"
+                      >
+                        Open System Settings
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {appState?.recording.storageMessage ? (
+                <p className="import-message import-message--error" role="alert">
+                  {appState.recording.storageMessage}
+                </p>
+              ) : null}
+              {message ? <p className="import-message import-message--error" role="alert">{message}</p> : null}
+            </div>
           </div>
         </section>
         <SavedRecordingList
           busyId={recordingActionId}
           onDelete={(recording) => void deleteRecording(recording.id)}
           onExport={(recording) => void exportRecording(recording.id)}
-          onOpenTranscript={setSelectedId}
+          onOpenTranscript={openTranscript}
           onRetry={(recording) => void retryRecording(recording.id)}
           recordings={appState?.recordings ?? []}
         />
-        <TranscriptList onOpen={setSelectedId} transcripts={appState?.transcripts ?? []} />
+        <TranscriptLibrary
+          onOpen={openTranscript}
+          onViewStateChange={setLibraryViewState}
+          transcripts={appState?.transcripts ?? []}
+          viewState={libraryViewState}
+        />
       </main>
     </div>
   );
@@ -1676,7 +2172,7 @@ const Sidebar = () => (
   <aside className="sidebar" aria-label="Sotto navigation">
     <div className="brand"><BrandIcon className="brand__mark" /><span>Sotto</span></div>
     <nav className="navigation" aria-label="Primary">
-      <a className="navigation__item navigation__item--active" href="#recent"><DocumentIcon /><span>Transcripts</span></a>
+      <a className="navigation__item navigation__item--active" href="#transcript-library"><DocumentIcon /><span>Transcripts</span></a>
     </nav>
     <div className="privacy-note"><LockIcon /><span>Media and transcripts stay on this device.</span></div>
   </aside>

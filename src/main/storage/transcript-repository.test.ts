@@ -17,6 +17,7 @@ import {
   MAX_TRANSCRIPT_SPEAKERS,
   SPEAKER_TRANSCRIPT_SCHEMA_VERSION,
   TRANSCRIPT_SCHEMA_VERSION,
+  WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION,
   TranscriptValidationError,
   type TranscriptRecord,
   type TranscriptSpeakerAnalysis,
@@ -37,6 +38,7 @@ const createRecord = (
   schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
   id,
   title: 'Weekly product meeting',
+  tags: [],
   createdAt,
   completedAt,
   source: {
@@ -132,6 +134,15 @@ const createSchemaV2Record = () => {
   };
 };
 
+const createSchemaV3Record = () => {
+  const record = createSpeakerRecord();
+  return {
+    ...record,
+    schemaVersion: WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION,
+    tags: undefined,
+  };
+};
+
 const requireSpeakerAnalysis = (
   record: TranscriptRecord,
 ): TranscriptSpeakerAnalysis => {
@@ -163,7 +174,7 @@ describe('TranscriptRepository', () => {
     expect(await readdir(rootPath)).toEqual([`${record.id}.json`]);
   });
 
-  it('reads schema-v1 records as canonical v2 without rewriting them', async () => {
+  it('reads schema-v1 records as canonical v4 without rewriting them', async () => {
     const legacyRecord = createLegacyRecord();
     const filePath = path.join(rootPath, `${legacyRecord.id}.json`);
     const serialized = `${JSON.stringify(legacyRecord, null, 2)}\n`;
@@ -210,6 +221,18 @@ describe('TranscriptRepository', () => {
     await expect(repository.get(schemaV2.id)).resolves.toEqual(
       createSpeakerRecord(),
     );
+  });
+
+  it('reads schema-v3 word timings with empty library tags', async () => {
+    const schemaV3 = createSchemaV3Record();
+    const serialized = `${JSON.stringify(schemaV3)}\n`;
+    const filePath = path.join(rootPath, `${schemaV3.id}.json`);
+    await writeFile(filePath, serialized, { encoding: 'utf8', mode: 0o600 });
+
+    await expect(repository.get(schemaV3.id)).resolves.toEqual(
+      createSpeakerRecord(),
+    );
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(serialized);
   });
 
   it('lets an older schema-v1 transcript be corrected through canonical storage', async () => {
@@ -577,6 +600,76 @@ describe('TranscriptRepository', () => {
           speakerId: FIRST_SPEAKER_ID,
         }),
       ]),
+      speakerAnalysis: {
+        speakers: [
+          { id: FIRST_SPEAKER_ID, label: 'Morgan' },
+          { id: SECOND_SPEAKER_ID, label: 'Speaker 2' },
+        ],
+      },
+    });
+  });
+
+  it('atomically updates a title and normalized tags without losing content', async () => {
+    const record = createSpeakerRecord();
+    await repository.save(record);
+
+    await expect(
+      repository.updateMetadata(record.id, {
+        title: '  Customer launch review  ',
+        tags: [' Client ', 'Planning', 'client'],
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'updated',
+      record: {
+        title: 'Customer launch review',
+        tags: ['Client', 'Planning'],
+        text: record.text,
+        segments: record.segments,
+      },
+    });
+
+    const saved = await repository.get(record.id);
+    expect(saved).toMatchObject({
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      title: 'Customer launch review',
+      tags: ['Client', 'Planning'],
+      text: record.text,
+    });
+    expect((await readdir(rootPath)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('rejects invalid metadata without rewriting the transcript', async () => {
+    const record = createRecord();
+    await repository.save(record);
+    const filePath = path.join(rootPath, `${record.id}.json`);
+    const before = await readFile(filePath, 'utf8');
+
+    await expect(
+      repository.updateMetadata(record.id, { title: '/Users/name/private' }),
+    ).rejects.toThrow('absolute path');
+    await expect(
+      repository.updateMetadata(record.id, { tags: ['bad,tag'] }),
+    ).rejects.toThrow('cannot contain a comma');
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(before);
+  });
+
+  it('serializes metadata updates with segment and speaker edits', async () => {
+    const record = createSpeakerRecord();
+    await repository.save(record);
+
+    await Promise.all([
+      repository.updateMetadata(record.id, {
+        title: 'Renamed meeting',
+        tags: ['Important'],
+      }),
+      repository.updateSegmentText(record.id, 0, 'Corrected welcome.'),
+      repository.renameSpeakerLabel(record.id, FIRST_SPEAKER_ID, 'Morgan'),
+    ]);
+
+    await expect(repository.get(record.id)).resolves.toMatchObject({
+      title: 'Renamed meeting',
+      tags: ['Important'],
+      text: 'Corrected welcome. This stays private.',
       speakerAnalysis: {
         speakers: [
           { id: FIRST_SPEAKER_ID, label: 'Morgan' },

@@ -24,6 +24,7 @@ import {
   MACOS_SCREEN_RECORDING_SETTINGS_URLS,
   resolveLiveRecordingCapability,
 } from './main/recording/desktop-audio-capture';
+import { resetSottoRecordingPermissions } from './main/recording/recording-permission-reset';
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
 import { TranscriptRepository } from './main/storage/transcript-repository';
 import { createPlaybackResponse } from './main/media/playback-response';
@@ -241,6 +242,13 @@ const initialize = async (): Promise<void> => {
         }
       }
       throw lastError;
+    },
+    resetRecordingPermissions: async () => {
+      await resetSottoRecordingPermissions();
+      setTimeout(() => {
+        app.relaunch();
+        app.quit();
+      }, 750);
     },
   });
   createWindow();

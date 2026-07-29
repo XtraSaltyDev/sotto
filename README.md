@@ -7,7 +7,9 @@ Microsoft Teams MP4s—then
 extract audio, transcribe it with a bundled `whisper.cpp` engine, save the
 result locally, display synchronized timestamped text, play retained audio, and
 export a plain-text transcript. Saved transcript segments can be corrected
-without changing their timing or speaker assignment, and searched locally.
+without changing their timing or speaker assignment. The local Transcript
+Library searches titles, transcript text, speaker names, tags, and meeting
+summary content without sending a query or transcript off the device.
 It also clusters voices into transcript-local speaker labels that can be
 renamed, and exports Microsoft Word (`.docx`) transcripts.
 On macOS 13 or newer and Windows 11 x64 it can also record a live Teams
@@ -37,8 +39,10 @@ transcript and links every listed point back to its timestamp.
   closed-file recovery for live recordings
 - Recoverable failed/cancelled live transcriptions with Retry Transcription,
   Export Recording, and intentional Delete Recording actions
-- Recent, timestamped transcript detail, segment correction, transcript search,
-  delete, speaker rename, plain-text export, and Microsoft Word export views
+- A local Transcript Library with full-text search, date/speaker/tag filters,
+  editable titles, simple tags, timestamped detail, segment correction,
+  transcript search, delete, speaker rename, plain-text export, and Microsoft
+  Word export views
 - Local meeting-summary drafts with an overview, key points, decisions, action
   items, and transcript-linked timestamps
 - Synchronized local playback with clickable segment timestamps, clickable
@@ -108,7 +112,7 @@ out/Sotto-darwin-arm64/Sotto.app
 For local DMG validation, use the generated disk image:
 
 ```text
-out/make/Sotto-0.1.4-arm64.dmg
+out/make/Sotto-0.1.6-arm64.dmg
 ```
 
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
@@ -145,20 +149,25 @@ separate release step.
 
 The first Developer-ID-signed release cannot inherit permission that was
 granted to an older ad-hoc build because the old grant names that build's exact
-code hash. That transition may need one final approval. If the old Sotto row is
-still shown as enabled, remove it, add the current `/Applications/Sotto.app`,
-then quit and reopen Sotto. After that transition, replacing Sotto with later
-releases signed by the same Apple team should keep the existing permission.
-Sotto must not automatically run `tccutil`: resetting a privacy decision cannot
-grant access and would force another approval.
+code hash. That transition may need one final approval. Use **Repair permissions
+and reopen** when Sotto detects a stale recording decision. After explicit
+confirmation, Sotto runs Apple's `tccutil` only for `com.sotto.desktop` and the
+ScreenCapture, AudioCapture, and Microphone services, then relaunches. It never
+runs this reset automatically and cannot grant permission; the next recording
+setup still uses Apple's normal consent UI. After the Developer ID transition,
+replacing Sotto with later releases signed by the same Apple team should keep
+the existing permission.
 
 For an ad-hoc local build, open the DMG and drag `Sotto.app` to
-**Applications** before setting up live recording. If Sotto shows **Open System
-Settings**, use that button and,
-under **Privacy & Security → Screen & System Audio Recording**, click **+**,
-choose the exact `Sotto.app` copy in Applications, and turn it on. Choose
-**Quit & Reopen** when macOS asks. Because an ad-hoc identity changes when the
-app is rebuilt, repeat this step after replacing Sotto with a newer build.
+**Applications** before setting up live recording. If Sotto reports a stale
+permission after an upgrade, click **Repair permissions and reopen**, confirm
+the Sotto-only reset, and then click **Set up live recording** after the app
+reopens. macOS asks for permission again. Because an ad-hoc identity changes
+when the app is rebuilt, repeat this approval after replacing Sotto with a newer
+build. If Apple's reset command fails, use **Open System Settings** and,
+under **Privacy & Security → Screen & System Audio Recording**, remove the old
+Sotto entry, click **+**, choose the current `/Applications/Sotto.app`, and turn
+it on. Choose **Quit & Reopen** when macOS asks.
 If macOS has never asked for access, Sotto instead enables **Set up live
 recording** so a user click can start the system permission request.
 
@@ -199,11 +208,32 @@ Windows: %APPDATA%\Sotto\transcripts\
 
 Each transcript is one schema-validated JSON file with display-only source
 metadata, text, segment and word timestamps, transcript-local speaker labels,
-duration, language, and engine provenance. Schema-v1/v2 transcripts remain
-readable and seekable by segment; they simply have no clickable word timing.
+title, tags, duration, language, and engine provenance. Schema-v1/v2/v3
+transcripts remain readable. Older records gain an empty tag list in memory and
+are not rewritten merely because they were opened; schema-v1/v2 records simply
+have no clickable word timing. The next transcript, segment, speaker, title, or
+tag edit writes the current schema atomically. On Unix-like systems, the
+transcript directory is owner-only (`0700`) and each JSON file is owner-private
+(`0600`).
 Exported `.txt` and `.docx` files go only to the location selected in the native
 save dialog. Imported originals stay in their original location and are never
 copied into Sotto; only Sotto's audio-only playback derivative is retained.
+
+Use **Transcript Library** to search every saved transcript. Search covers
+manual titles, full transcript text and segments, transcript-local speaker
+names, tags, and the existing local meeting-summary draft. Terms are
+case-insensitive, accent-insensitive, and can match different fields in the
+same transcript. Date, speaker, and tag filters can be combined with search.
+Press **Command + F** on macOS or **Ctrl + F** on Windows while the library is
+open to focus its search field. Opening a result and returning to the library
+restores keyboard focus to that transcript when it is still visible.
+
+Open a transcript and use **Transcript information** to replace its title or
+edit its comma-separated tags. Titles are manual only; Sotto does not generate
+them. A transcript can have up to 32 tags of 48 characters each. Tags are a
+flat local organizing aid rather than folders, nested workspaces, or shared
+collections. Title and tag changes use the same validated atomic record write
+as transcript corrections.
 
 Open a transcript to use **Synchronized playback**. Click a timestamp, segment,
 or timed word to seek. Space plays or pauses when focus is not in an input or
@@ -221,8 +251,9 @@ case-insensitive matching segments; Previous, Next, or Enter moves through them,
 scrolls the selected segment into view, and seeks available playback to that
 segment without starting it. Use **Edit segment** to correct its text while the
 recording remains available for reference. Saving keeps that segment's start
-and end time and speaker label, refreshes Recent and future exports, and writes
-the full validated transcript atomically. Because corrected prose no longer has
+and end time and speaker label, refreshes the Transcript Library and future
+exports, and writes the full validated transcript atomically. Because corrected
+prose no longer has
 a reliable one-to-one relationship with the original Whisper tokens, Sotto
 removes old word-level click targets from that edited segment; its timestamp and
 whole-segment seeking continue to work. Corrections have explicit Save and
@@ -384,8 +415,8 @@ native file selection or user-started desktop/system-audio capture
   → crash-isolated local speaker segmentation, clustering, bounded word alignment,
     and conservative timing-gap recovery
   → imported-media-only atomic private playback WAV retention
-  → atomic schema-v3 transcript save with validated word timing
-  → Recent/detail state update
+  → atomic schema-v4 transcript save with validated word timing and local tags
+  → Transcript Library/detail state update
 ```
 
 Only the main process sees filesystem paths or launches native code. Child
@@ -393,8 +424,9 @@ processes are invoked directly with `shell: false`; loader-injection and Node
 runtime environment variables are removed. The renderer has
 `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true`. Its
 preload exposes only state, import, live-recording chunks, retry/cancel,
-recording and transcript delete/export, validated segment correction and
-speaker rename, record lookup, and state-change methods. Playback uses a
+recording and transcript delete/export, validated segment correction, speaker
+rename, transcript metadata updates, local library search, record lookup, and
+state-change methods. Playback uses a
 separate `sotto-media` transport that accepts only a
 validated transcript UUID and streams byte ranges from an app-owned file; raw
 filesystem paths never reach the renderer. IPC requests must come from the current window's main frame, IDs are

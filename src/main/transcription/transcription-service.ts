@@ -312,6 +312,7 @@ export class LocalTranscriptionService {
         schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
         id: job.id,
         title: titleFromMediaName(media.name),
+        tags: [],
         createdAt: job.startedAt,
         completedAt,
         ...(media.recordingId ? { recordingId: media.recordingId } : {}),

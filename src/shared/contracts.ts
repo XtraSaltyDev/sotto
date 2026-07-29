@@ -9,8 +9,11 @@ export const IPC_CHANNELS = {
   deleteRecording: 'sotto:recording:delete',
   exportRecording: 'sotto:recording:export',
   openRecordingSettings: 'sotto:recording:settings',
+  resetRecordingPermissions: 'sotto:recording:permissions:reset',
   cancelTranscription: 'sotto:transcription:cancel',
+  searchTranscriptLibrary: 'sotto:transcript:library:search',
   getTranscript: 'sotto:transcript:get',
+  updateTranscriptMetadata: 'sotto:transcript:metadata:update',
   updateTranscriptSegment: 'sotto:transcript:segment:update',
   renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
   deleteTranscript: 'sotto:transcript:delete',
@@ -121,6 +124,22 @@ export interface TranscriptSummary {
   durationMs: number;
   language: string;
   preview: string;
+  tags: string[];
+}
+
+export const MAX_TRANSCRIPT_LIBRARY_QUERY_CHARACTERS = 500;
+
+export interface TranscriptLibraryQuery {
+  text: string;
+  createdFrom: string | null;
+  speaker: string | null;
+  tag: string | null;
+}
+
+export interface TranscriptLibraryResult {
+  transcripts: TranscriptSummary[];
+  availableSpeakers: string[];
+  availableTags: string[];
 }
 
 export interface TranscriptSegment {
@@ -244,6 +263,10 @@ export type OpenRecordingSettingsResult =
   | { outcome: 'opened' }
   | { outcome: 'failed'; reason: string };
 
+export type ResetRecordingPermissionsResult =
+  | { outcome: 'reset' }
+  | { outcome: 'failed'; reason: string };
+
 export type CancelTranscriptionResult =
   | { outcome: 'cancelled' }
   | { outcome: 'not-found' };
@@ -267,6 +290,11 @@ export type TranscriptExportFormat = 'txt' | 'docx';
 
 export type RenameTranscriptSpeakerResult =
   | { outcome: 'renamed'; speaker: TranscriptSpeaker }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
+export type UpdateTranscriptMetadataResult =
+  | { outcome: 'updated'; title: string; tags: string[] }
   | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
@@ -295,8 +323,16 @@ export interface SottoDesktopApi {
   deleteRecording(recordingId: string): Promise<DeleteRecordingResult>;
   exportRecording(recordingId: string): Promise<ExportRecordingResult>;
   openRecordingSettings(): Promise<OpenRecordingSettingsResult>;
+  resetRecordingPermissions(): Promise<ResetRecordingPermissionsResult>;
   cancelTranscription(jobId: string): Promise<CancelTranscriptionResult>;
+  searchTranscriptLibrary(
+    query: TranscriptLibraryQuery,
+  ): Promise<TranscriptLibraryResult>;
   getTranscript(transcriptId: string): Promise<TranscriptDetail | null>;
+  updateTranscriptMetadata(
+    transcriptId: string,
+    metadata: { title?: string; tags?: string[] },
+  ): Promise<UpdateTranscriptMetadataResult>;
   updateTranscriptSegment(
     transcriptId: string,
     segmentIndex: number,

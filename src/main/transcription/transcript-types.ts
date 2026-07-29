@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 export const LEGACY_TRANSCRIPT_SCHEMA_VERSION = 1 as const;
 export const SPEAKER_TRANSCRIPT_SCHEMA_VERSION = 2 as const;
-export const TRANSCRIPT_SCHEMA_VERSION = 3 as const;
+export const WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION = 3 as const;
+export const TRANSCRIPT_SCHEMA_VERSION = 4 as const;
 
 // These limits are deliberately generous enough for day-long recordings while
 // still bounding data that originated in an external process or a local file.
@@ -17,6 +18,8 @@ export const MAX_SOURCE_FILE_BYTES = 16 * 1_024 * 1_024 * 1_024 * 1_024;
 export const MAX_TRANSCRIPT_SPEAKERS = 256;
 export const MAX_SPEAKER_LABEL_CHARACTERS = 100;
 export const MAX_TRANSCRIPT_WORDS = 1_000_000;
+export const MAX_TRANSCRIPT_TAGS = 32;
+export const MAX_TRANSCRIPT_TAG_CHARACTERS = 48;
 
 export type TranscriptId = string;
 export type TranscriptSpeakerId = string;
@@ -65,6 +68,7 @@ export interface TranscriptRecord {
   schemaVersion: typeof TRANSCRIPT_SCHEMA_VERSION;
   id: TranscriptId;
   title: string;
+  tags: string[];
   createdAt: string;
   completedAt: string;
   /** Links a transcript to a retained live recording without persisting a path. */
@@ -188,6 +192,64 @@ export const normalizeSpeakerLabel = (value: unknown): string => {
   }
 
   return label.trim();
+};
+
+const hasControlCharacters = (value: string): boolean =>
+  Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint === 127;
+  });
+
+export const normalizeTranscriptTitle = (value: unknown): string => {
+  const title = readBoundedString(
+    value,
+    'title',
+    MAX_TRANSCRIPT_TITLE_CHARACTERS,
+  ).trim();
+
+  if (hasControlCharacters(title)) {
+    return fail('title cannot contain control characters.');
+  }
+  if (looksLikeAbsolutePath(title)) {
+    return fail('title cannot be an absolute path.');
+  }
+
+  return title;
+};
+
+export const normalizeTranscriptTags = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return fail('tags must be an array.');
+  }
+  if (value.length > MAX_TRANSCRIPT_TAGS) {
+    return fail(`tags cannot contain more than ${MAX_TRANSCRIPT_TAGS} items.`);
+  }
+
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const [index, candidate] of value.entries()) {
+    const tag = readBoundedString(
+      candidate,
+      `tags[${index}]`,
+      MAX_TRANSCRIPT_TAG_CHARACTERS,
+    )
+      .replace(/\s+/gu, ' ')
+      .trim();
+    if (hasControlCharacters(tag)) {
+      return fail(`tags[${index}] cannot contain control characters.`);
+    }
+    if (tag.includes(',')) {
+      return fail(`tags[${index}] cannot contain a comma.`);
+    }
+
+    const key = tag.toLocaleLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      tags.push(tag);
+    }
+  }
+
+  return tags;
 };
 
 const parseDateTime = (value: unknown, field: string): string => {
@@ -326,6 +388,7 @@ const parseSegments = (
   schemaVersion:
     | typeof LEGACY_TRANSCRIPT_SCHEMA_VERSION
     | typeof SPEAKER_TRANSCRIPT_SCHEMA_VERSION
+    | typeof WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION
     | typeof TRANSCRIPT_SCHEMA_VERSION,
   speakerIds: ReadonlySet<TranscriptSpeakerId>,
 ): TranscriptSegment[] => {
@@ -388,7 +451,10 @@ const parseSegments = (
     }
 
     const rawWords =
-      schemaVersion === TRANSCRIPT_SCHEMA_VERSION ? candidate.words : [];
+      schemaVersion === WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION ||
+      schemaVersion === TRANSCRIPT_SCHEMA_VERSION
+        ? candidate.words
+        : [];
     if (!Array.isArray(rawWords)) {
       return fail(`segments[${index}].words must be an array.`);
     }
@@ -446,6 +512,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
   if (
     value.schemaVersion !== LEGACY_TRANSCRIPT_SCHEMA_VERSION &&
     value.schemaVersion !== SPEAKER_TRANSCRIPT_SCHEMA_VERSION &&
+    value.schemaVersion !== WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION &&
     value.schemaVersion !== TRANSCRIPT_SCHEMA_VERSION
   ) {
     return fail(`Unsupported transcript schema version: ${String(value.schemaVersion)}.`);
@@ -456,14 +523,11 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     return fail('id must be a UUID.');
   }
 
-  const title = readBoundedString(
-    value.title,
-    'title',
-    MAX_TRANSCRIPT_TITLE_CHARACTERS,
-  );
-  if (looksLikeAbsolutePath(title)) {
-    return fail('title cannot be an absolute path.');
-  }
+  const title = normalizeTranscriptTitle(value.title);
+  const tags =
+    sourceSchemaVersion === TRANSCRIPT_SCHEMA_VERSION
+      ? normalizeTranscriptTags(value.tags)
+      : [];
 
   const durationMs = readInteger(
     value.durationMs,
@@ -519,6 +583,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
     id: value.id.toLowerCase(),
     title,
+    tags,
     createdAt,
     completedAt,
     ...(recordingId ? { recordingId } : {}),

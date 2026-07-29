@@ -12,6 +12,8 @@ import path from 'node:path';
 import {
   isTranscriptSpeakerId,
   isTranscriptId,
+  normalizeTranscriptTags,
+  normalizeTranscriptTitle,
   normalizeTranscriptSegmentText,
   normalizeSpeakerLabel,
   parseTranscriptRecord,
@@ -37,6 +39,13 @@ export type UpdateSegmentTextResult =
       outcome: 'updated';
       record: TranscriptRecord;
       segment: TranscriptRecord['segments'][number];
+    }
+  | { outcome: 'not-found' };
+
+export type UpdateTranscriptMetadataResult =
+  | {
+      outcome: 'updated';
+      record: TranscriptRecord;
     }
   | { outcome: 'not-found' };
 
@@ -241,6 +250,54 @@ export class TranscriptRepository {
       });
 
       return { outcome: 'renamed', record, speaker };
+    });
+  }
+
+  async updateMetadata(
+    transcriptId: TranscriptId,
+    metadata: { title?: unknown; tags?: unknown },
+  ): Promise<UpdateTranscriptMetadataResult> {
+    if (!isTranscriptId(transcriptId)) {
+      throw new TranscriptValidationError('Transcript id must be a UUID.');
+    }
+    if (
+      !metadata ||
+      typeof metadata !== 'object' ||
+      (metadata.title === undefined && metadata.tags === undefined)
+    ) {
+      throw new TranscriptValidationError(
+        'A transcript title or tags update is required.',
+      );
+    }
+
+    const normalizedTranscriptId = transcriptId.toLowerCase();
+    const normalizedTitle =
+      metadata.title === undefined
+        ? undefined
+        : normalizeTranscriptTitle(metadata.title);
+    const normalizedTags =
+      metadata.tags === undefined
+        ? undefined
+        : normalizeTranscriptTags(metadata.tags);
+
+    return this.serializeMutation(async () => {
+      const current = await this.get(normalizedTranscriptId);
+      if (!current) return { outcome: 'not-found' };
+
+      const title = normalizedTitle ?? current.title;
+      const tags = normalizedTags ?? current.tags;
+      if (
+        title === current.title &&
+        tags.length === current.tags.length &&
+        tags.every((tag, index) => tag === current.tags[index])
+      ) {
+        return { outcome: 'updated', record: current };
+      }
+
+      return {
+        outcome: 'updated',
+        record: await this.save({ ...current, title, tags }),
+      };
     });
   }
 

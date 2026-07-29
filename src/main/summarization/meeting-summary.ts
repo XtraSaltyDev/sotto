@@ -6,28 +6,39 @@ import type { TranscriptRecord } from '../transcription/transcript-types';
 
 const MAX_ITEM_CHARACTERS = 360;
 const MAX_OVERVIEW_CHARACTERS = 620;
+const MAX_CANDIDATE_CHARACTERS = 720;
 const MAX_KEY_POINTS = 5;
-const MAX_DECISIONS = 6;
-const MAX_ACTION_ITEMS = 8;
+const MAX_DECISIONS = 5;
+const MAX_ACTION_ITEMS = 5;
 
 const STOP_WORDS = new Set([
   'about', 'after', 'again', 'also', 'and', 'are', 'because', 'been', 'before',
   'being', 'but', 'can', 'could', 'did', 'does', 'doing', 'for', 'from', 'get',
-  'got', 'had', 'has', 'have', 'here', 'how', 'into', 'just', 'like', 'more',
+  'actually', 'anything', 'basically', 'don\'t', 'even', 'got', 'guess', 'had',
+  'has', 'have', 'here', 'how', 'into', 'just', 'kind', 'like', 'maybe', 'mean', 'more',
   'most', 'not', 'now', 'okay', 'only', 'our', 'out', 'really', 'right', 'said',
-  'should', 'some', 'that', 'the', 'their', 'them', 'then', 'there', 'these',
-  'they', 'thing', 'think', 'this', 'those', 'through', 'too', 'very', 'want',
+  'should', 'some', 'something', 'stuff', 'that', 'the', 'their', 'them', 'then',
+  'there', 'these', 'they', 'thing', 'things', 'think', 'this', 'those', 'through',
+  'too', 'very', 'want',
   'was', 'way', 'well', 'were', 'what', 'when', 'where', 'which', 'who', 'why',
   'with', 'would', 'yeah', 'you', 'your',
 ]);
 
 const DECISION_PATTERN =
-  /\b(?:agreed|approved|decided|decision is|settled on|the plan is|we(?:'ll| will) (?:use|choose|launch|move|keep|stop|start|adopt|ship))\b/iu;
-const ACTION_PATTERN =
-  /\b(?:action item|follow[ -]?up|need(?:s)? to|please|let(?:'s| us)|(?:i|we|you|they|he|she|[\p{L}][\p{L}'-]+) (?:will|can) (?:send|share|prepare|schedule|review|update|deliver|complete|finish|check|confirm|contact|draft|create|fix|investigate|test|publish|write|call|email))\b/iu;
+  /\b(?:(?:we|the (?:team|group|committee)) (?:agreed|approved|decided) (?:to|that|on)|decision is|settled on|the plan is|we(?:'ll| will) (?:use|choose|launch|move|keep|stop|start|adopt|ship))\b/iu;
+const ACTION_VERBS =
+  'send|share|prepare|schedule|review|update|deliver|complete|finish|check|confirm|contact|draft|create|fix|investigate|test|publish|write|call|email';
+const ACTION_PATTERN = new RegExp(
+  `\\b(?:action item|follow[ -]?up(?: on| with)?|please (?:${ACTION_VERBS})|let(?:'s| us) (?:${ACTION_VERBS})|(?:(?:i|we|you|they|he|she)(?:'ll| will| should| need(?:s)? to)|[\\p{L}][\\p{L}'-]+ (?:will|should|need(?:s)? to)) (?:${ACTION_VERBS}))\\b`,
+  'iu',
+);
+const SENTENCE_END_PATTERN = /[.!?]["'”’)]*$/u;
+const SENTENCE_PIECE_PATTERN = /[^.!?]+(?:[.!?]+["'”’)]*|$)/gu;
+const SPOKEN_TURN_PREFIX_PATTERN = /^[-–—]\s*/u;
 
 interface Candidate extends MeetingSummaryItem {
   index: number;
+  wordCount: number;
   words: string[];
 }
 
@@ -45,25 +56,76 @@ const meaningfulWords = (value: string): string[] =>
   (value.toLocaleLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}'-]{2,}/gu) ?? [])
     .filter((word) => !STOP_WORDS.has(word));
 
+const wordCount = (value: string): number =>
+  value.match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu)?.length ?? 0;
+
 const sentenceCandidates = (record: TranscriptRecord): Candidate[] => {
   const candidates: Candidate[] = [];
-  for (const segment of record.segments) {
-    const sentences = normalizeText(segment.text)
-      .split(/(?<=[.!?])\s+(?=[\p{L}\p{N}])/u)
-      .map(normalizeText)
-      .filter((text) => text.length >= 8);
-    for (const text of sentences) {
+  let pending: MeetingSummaryItem | null = null;
+
+  const flush = (): void => {
+    if (!pending) return;
+    const text = boundedText(
+      normalizeText(pending.text).replace(SPOKEN_TURN_PREFIX_PATTERN, ''),
+      MAX_ITEM_CHARACTERS,
+    );
+    if (text.length >= 8) {
       candidates.push({
+        ...pending,
         index: candidates.length,
-        speakerId: segment.speakerId,
-        startMs: segment.startMs,
-        text: boundedText(text, MAX_ITEM_CHARACTERS),
+        text,
+        wordCount: wordCount(text),
         words: meaningfulWords(text),
       });
     }
+    pending = null;
+  };
+
+  for (const segment of record.segments) {
+    const segmentText = normalizeText(segment.text);
+    if (!segmentText) continue;
+
+    const startsSpokenTurn = SPOKEN_TURN_PREFIX_PATTERN.test(segmentText);
+    const changesKnownSpeaker = Boolean(
+      pending?.speakerId &&
+      segment.speakerId &&
+      pending.speakerId !== segment.speakerId,
+    );
+    if (pending && (startsSpokenTurn || changesKnownSpeaker)) flush();
+
+    const pieces = segmentText.match(SENTENCE_PIECE_PATTERN) ?? [segmentText];
+    for (const rawPiece of pieces) {
+      const piece = normalizeText(rawPiece);
+      if (!piece) continue;
+      if (
+        pending &&
+        pending.text.length + piece.length + 1 > MAX_CANDIDATE_CHARACTERS
+      ) {
+        flush();
+      }
+
+      if (pending) {
+        pending.text = `${pending.text} ${piece}`;
+        if (pending.speakerId !== segment.speakerId) pending.speakerId = null;
+      } else {
+        pending = {
+          speakerId: segment.speakerId,
+          startMs: segment.startMs,
+          text: piece,
+        };
+      }
+
+      if (SENTENCE_END_PATTERN.test(piece)) flush();
+    }
   }
+  flush();
   return candidates;
 };
+
+const isUsefulSignal = (candidate: Candidate, pattern: RegExp): boolean =>
+  candidate.text.length >= 20 &&
+  candidate.words.length >= 3 &&
+  pattern.test(candidate.text);
 
 const distinctItems = (
   candidates: readonly Candidate[],
@@ -85,7 +147,9 @@ const distinctItems = (
   return items;
 };
 
-const selectKeyPoints = (candidates: readonly Candidate[]): MeetingSummaryItem[] => {
+const selectKeyPoints = (
+  candidates: readonly Candidate[],
+): { items: MeetingSummaryItem[]; overviewItems: MeetingSummaryItem[] } => {
   const frequencies = new Map<string, number>();
   for (const candidate of candidates) {
     for (const word of new Set(candidate.words)) {
@@ -94,21 +158,24 @@ const selectKeyPoints = (candidates: readonly Candidate[]): MeetingSummaryItem[]
   }
 
   const ranked = candidates
-    .filter((candidate) => candidate.text.length >= 24 && candidate.words.length >= 3)
+    .filter(
+      (candidate) =>
+        candidate.text.length >= 24 &&
+        candidate.words.length >= 3 &&
+        candidate.words.length / Math.max(1, candidate.wordCount) >= 0.23,
+    )
     .map((candidate) => {
       const termScore = candidate.words.reduce(
-        (score, word) => score + Math.log2(1 + (frequencies.get(word) ?? 0)),
+        (score, word) =>
+          score + Math.log2(Math.max(1, frequencies.get(word) ?? 0)),
         0,
       );
       const emphasis =
         (DECISION_PATTERN.test(candidate.text) ? 1.8 : 0) +
         (ACTION_PATTERN.test(candidate.text) ? 1.2 : 0);
-      const positionBonus = candidate.index < Math.max(2, candidates.length * 0.12)
-        ? 0.45
-        : 0;
       return {
         candidate,
-        score: termScore / Math.sqrt(candidate.words.length) + emphasis + positionBonus,
+        score: termScore / Math.sqrt(candidate.words.length) + emphasis,
       };
     })
     .sort((left, right) =>
@@ -117,7 +184,10 @@ const selectKeyPoints = (candidates: readonly Candidate[]): MeetingSummaryItem[]
 
   const selected: Candidate[] = [];
   const selectedWords: Array<Set<string>> = [];
-  for (const { candidate } of ranked) {
+  const informative = ranked.some(({ score }) => score > 0)
+    ? ranked.filter(({ score }) => score > 0)
+    : ranked;
+  for (const { candidate } of informative) {
     const words = new Set(candidate.words);
     const duplicatesExisting = selectedWords.some((existing) => {
       const overlap = [...words].filter((word) => existing.has(word)).length;
@@ -129,10 +199,13 @@ const selectKeyPoints = (candidates: readonly Candidate[]): MeetingSummaryItem[]
     if (selected.length === MAX_KEY_POINTS) break;
   }
 
-  return distinctItems(
-    selected.sort((left, right) => left.index - right.index),
-    MAX_KEY_POINTS,
-  );
+  return {
+    items: distinctItems(
+      [...selected].sort((left, right) => left.index - right.index),
+      MAX_KEY_POINTS,
+    ),
+    overviewItems: distinctItems(selected, 2),
+  };
 };
 
 export const buildMeetingSummary = (
@@ -141,12 +214,16 @@ export const buildMeetingSummary = (
   const candidates = sentenceCandidates(record);
   if (candidates.length === 0) return null;
 
-  const keyPoints = selectKeyPoints(candidates);
+  const keyPointSelection = selectKeyPoints(candidates);
+  const keyPoints = keyPointSelection.items;
   const fallback = keyPoints.length > 0
     ? keyPoints
     : distinctItems(candidates, Math.min(3, MAX_KEY_POINTS));
+  const overviewItems = keyPointSelection.overviewItems.length > 0
+    ? keyPointSelection.overviewItems
+    : fallback;
   const overview = boundedText(
-    fallback.slice(0, 2).map((item) => item.text).join(' '),
+    overviewItems.slice(0, 2).map((item) => item.text).join(' '),
     MAX_OVERVIEW_CHARACTERS,
   );
 
@@ -154,11 +231,11 @@ export const buildMeetingSummary = (
     overview,
     keyPoints: fallback,
     decisions: distinctItems(
-      candidates.filter((candidate) => DECISION_PATTERN.test(candidate.text)),
+      candidates.filter((candidate) => isUsefulSignal(candidate, DECISION_PATTERN)),
       MAX_DECISIONS,
     ),
     actionItems: distinctItems(
-      candidates.filter((candidate) => ACTION_PATTERN.test(candidate.text)),
+      candidates.filter((candidate) => isUsefulSignal(candidate, ACTION_PATTERN)),
       MAX_ACTION_ITEMS,
     ),
   };
