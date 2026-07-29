@@ -1782,7 +1782,7 @@ export const App = () => {
   const handleRepairRecordingPermissions = async () => {
     if (!window.sotto || isRepairingPermissions) return;
     if (!window.confirm(
-      'Repair Sotto recording permissions? This clears only Sotto’s old Screen & System Audio and microphone decisions. macOS will ask for approval again after Sotto reopens.',
+      'Clear Sotto’s old recording permissions and open System Settings? In Settings, click Add, authenticate, choose /Applications/Sotto.app, and turn it on. macOS requires you to complete those protected steps.',
     )) {
       return;
     }
@@ -1795,7 +1795,8 @@ export const App = () => {
         setMessage(result.reason);
         setIsRepairingPermissions(false);
       } else {
-        setMessage('Old Sotto recording permissions were cleared. Sotto is reopening…');
+        setMessage('Old Sotto permissions were cleared. In System Settings, click Add, authenticate, choose /Applications/Sotto.app, turn it on, then choose Quit & Reopen if macOS asks.');
+        setIsRepairingPermissions(false);
       }
     } catch {
       setMessage('Sotto could not clear its old macOS recording permission.');
@@ -2221,7 +2222,7 @@ export const App = () => {
                         onClick={() => void handleRepairRecordingPermissions()}
                         type="button"
                       >
-                        {isRepairingPermissions ? 'Repairing permissions…' : 'Repair permissions and reopen'}
+                        {isRepairingPermissions ? 'Opening System Settings…' : 'Clear old entry and open Settings'}
                       </button>
                       <button
                         className="recording-permission__button"

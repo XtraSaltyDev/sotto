@@ -15,6 +15,8 @@ type CommandRunner = (
   file: string,
   args: readonly string[],
 ) => Promise<void>;
+type PermissionResetter = () => Promise<PermissionService[]>;
+type RecordingSettingsOpener = () => Promise<void>;
 
 const execFileAsync = promisify(execFile);
 
@@ -80,5 +82,22 @@ export const resetSottoRecordingPermissions = async ({
   // resets are returned for diagnostics without turning a useful repair into
   // a failure.
   void failures;
+  return reset;
+};
+
+/**
+ * Clears Sotto's stale decisions before opening Apple's permission page.
+ * System Settings owns the protected add/enable steps, so Sotto must remain
+ * running while the user authenticates and selects the current app bundle.
+ */
+export const repairSottoRecordingPermissions = async ({
+  resetPermissions = resetSottoRecordingPermissions,
+  openSettings,
+}: {
+  resetPermissions?: PermissionResetter;
+  openSettings: RecordingSettingsOpener;
+}): Promise<PermissionService[]> => {
+  const reset = await resetPermissions();
+  await openSettings();
   return reset;
 };

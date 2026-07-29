@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   RECORDING_PERMISSION_SERVICES,
+  repairSottoRecordingPermissions,
   RecordingPermissionResetError,
   SOTTO_MAC_BUNDLE_ID,
   TCCUTIL_PATH,
@@ -46,5 +47,36 @@ describe('resetSottoRecordingPermissions', () => {
         throw new Error('reset failed');
       },
     })).rejects.toThrow('remove the old Sotto entry manually');
+  });
+});
+
+describe('repairSottoRecordingPermissions', () => {
+  it('opens System Settings only after Sotto permissions are cleared', async () => {
+    const calls: string[] = [];
+
+    await expect(repairSottoRecordingPermissions({
+      resetPermissions: async () => {
+        calls.push('reset');
+        return ['ScreenCapture'];
+      },
+      openSettings: async () => {
+        calls.push('settings');
+      },
+    })).resolves.toEqual(['ScreenCapture']);
+
+    expect(calls).toEqual(['reset', 'settings']);
+  });
+
+  it('does not open System Settings when the reset fails', async () => {
+    const openSettings = vi.fn();
+
+    await expect(repairSottoRecordingPermissions({
+      resetPermissions: async () => {
+        throw new RecordingPermissionResetError();
+      },
+      openSettings,
+    })).rejects.toBeInstanceOf(RecordingPermissionResetError);
+
+    expect(openSettings).not.toHaveBeenCalled();
   });
 });

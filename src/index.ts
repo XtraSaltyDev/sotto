@@ -24,7 +24,7 @@ import {
   MACOS_SCREEN_RECORDING_SETTINGS_URLS,
   resolveLiveRecordingCapability,
 } from './main/recording/desktop-audio-capture';
-import { resetSottoRecordingPermissions } from './main/recording/recording-permission-reset';
+import { repairSottoRecordingPermissions } from './main/recording/recording-permission-reset';
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
 import { TranscriptRepository } from './main/storage/transcript-repository';
 import { createPlaybackResponse } from './main/media/playback-response';
@@ -226,29 +226,29 @@ const initialize = async (): Promise<void> => {
     );
   });
 
+  const openRecordingSettings = async (): Promise<void> => {
+    let lastError: unknown = new Error(
+      'No macOS screen recording settings route was available.',
+    );
+    for (const url of MACOS_SCREEN_RECORDING_SETTINGS_URLS) {
+      try {
+        await shell.openExternal(url, { activate: true });
+        return;
+      } catch (error: unknown) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  };
+
   removeIpcHandlers = registerDesktopIpc({
     controller,
     getMainWindow: () => mainWindow,
-    openRecordingSettings: async () => {
-      let lastError: unknown = new Error(
-        'No macOS screen recording settings route was available.',
-      );
-      for (const url of MACOS_SCREEN_RECORDING_SETTINGS_URLS) {
-        try {
-          await shell.openExternal(url, { activate: true });
-          return;
-        } catch (error: unknown) {
-          lastError = error;
-        }
-      }
-      throw lastError;
-    },
+    openRecordingSettings,
     resetRecordingPermissions: async () => {
-      await resetSottoRecordingPermissions();
-      setTimeout(() => {
-        app.relaunch();
-        app.quit();
-      }, 750);
+      await repairSottoRecordingPermissions({
+        openSettings: openRecordingSettings,
+      });
     },
   });
   createWindow();

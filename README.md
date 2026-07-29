@@ -149,20 +149,23 @@ separate release step.
 
 The first Developer-ID-signed release cannot inherit permission that was
 granted to an older ad-hoc build because the old grant names that build's exact
-code hash. That transition may need one final approval. Use **Repair permissions
-and reopen** when Sotto detects a stale recording decision. After explicit
-confirmation, Sotto runs Apple's `tccutil` only for `com.sotto.desktop` and the
-ScreenCapture, AudioCapture, and Microphone services, then relaunches. It never
-runs this reset automatically and cannot grant permission; the next recording
-setup still uses Apple's normal consent UI. After the Developer ID transition,
+code hash. That transition may need one final approval. Use **Clear old entry
+and open Settings** when Sotto detects a stale recording decision. After
+explicit confirmation, Sotto runs Apple's `tccutil` only for
+`com.sotto.desktop` and the ScreenCapture, AudioCapture, and Microphone services,
+then opens Apple's Screen & System Audio Recording page. It never runs this
+reset automatically and cannot authenticate, add itself, or grant permission.
+In System Settings, click **Add**, use Touch ID or enter the Mac password, choose
+`/Applications/Sotto.app`, turn it on, and choose **Quit & Reopen** if macOS
+asks. After the Developer ID transition,
 replacing Sotto with later releases signed by the same Apple team should keep
 the existing permission.
 
 For an ad-hoc local build, open the DMG and drag `Sotto.app` to
 **Applications** before setting up live recording. If Sotto reports a stale
-permission after an upgrade, click **Repair permissions and reopen**, confirm
-the Sotto-only reset, and then click **Set up live recording** after the app
-reopens. macOS asks for permission again. Because an ad-hoc identity changes
+permission after an upgrade, click **Clear old entry and open Settings**,
+confirm the Sotto-only reset, and complete the protected add/enable steps in
+System Settings. Because an ad-hoc identity changes
 when the app is rebuilt, repeat this approval after replacing Sotto with a newer
 build. If Apple's reset command fails, use **Open System Settings** and,
 under **Privacy & Security → Screen & System Audio Recording**, remove the old
