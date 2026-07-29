@@ -4,6 +4,7 @@ import {
   app,
   BrowserWindow,
   desktopCapturer,
+  globalShortcut,
   protocol,
   session,
   shell,
@@ -11,7 +12,10 @@ import {
 } from 'electron';
 import started from 'electron-squirrel-startup';
 
-import type { LiveRecordingCapability } from './shared/contracts';
+import {
+  IPC_CHANNELS,
+  type LiveRecordingCapability,
+} from './shared/contracts';
 
 import { AppController } from './main/app-controller';
 import { registerDesktopIpc } from './main/ipc/register-desktop-ipc';
@@ -32,6 +36,7 @@ let controller: AppController | null = null;
 let removeIpcHandlers: (() => void) | null = null;
 let shutdownStarted = false;
 let readyToQuit = false;
+const DICTATION_ACCELERATOR = 'CommandOrControl+Shift+D';
 
 if (started) app.quit();
 
@@ -162,6 +167,25 @@ const createWindow = (): BrowserWindow => {
   return window;
 };
 
+const requestDictationToggle = (): void => {
+  const window = mainWindow ?? (controller ? createWindow() : null);
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+
+  const sendShortcut = (): void => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(IPC_CHANNELS.dictationShortcut);
+    }
+  };
+  if (window.webContents.isLoadingMainFrame()) {
+    window.webContents.once('did-finish-load', sendShortcut);
+  } else {
+    sendShortcut();
+  }
+};
+
 const initialize = async (): Promise<void> => {
   configureDesktopAudioCapture();
   session.defaultSession.setPermissionRequestHandler(
@@ -220,6 +244,11 @@ const initialize = async (): Promise<void> => {
     },
   });
   createWindow();
+  if (!globalShortcut.register(DICTATION_ACCELERATOR, requestDictationToggle)) {
+    console.warn(
+      `[sotto] The dictation shortcut ${DICTATION_ACCELERATOR} is already in use.`,
+    );
+  }
 };
 
 const shutdown = async (): Promise<void> => {
@@ -227,6 +256,7 @@ const shutdown = async (): Promise<void> => {
   shutdownStarted = true;
   removeIpcHandlers?.();
   removeIpcHandlers = null;
+  globalShortcut.unregister(DICTATION_ACCELERATOR);
   session.defaultSession.protocol.unhandle('sotto-media');
   await controller?.dispose();
 };

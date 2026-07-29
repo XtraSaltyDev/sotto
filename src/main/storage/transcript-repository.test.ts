@@ -212,6 +212,24 @@ describe('TranscriptRepository', () => {
     );
   });
 
+  it('lets an older schema-v1 transcript be corrected through canonical storage', async () => {
+    const legacyRecord = createLegacyRecord();
+    const filePath = path.join(rootPath, `${legacyRecord.id}.json`);
+    await writeFile(filePath, `${JSON.stringify(legacyRecord)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+
+    await expect(
+      repository.updateSegmentText(legacyRecord.id, 0, 'Corrected legacy text.'),
+    ).resolves.toMatchObject({ outcome: 'updated' });
+    await expect(repository.get(legacyRecord.id)).resolves.toMatchObject({
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      text: 'Corrected legacy text.',
+      segments: [{ text: 'Corrected legacy text.', speakerId: null, words: [] }],
+    });
+  });
+
   it('round-trips speaker analysis and segment assignments', async () => {
     const record = createSpeakerRecord();
 
@@ -485,5 +503,86 @@ describe('TranscriptRepository', () => {
       { id: FIRST_SPEAKER_ID, label: 'Mike' },
       { id: SECOND_SPEAKER_ID, label: 'Sarah' },
     ]);
+  });
+
+  it('updates one segment without changing its timing or speaker assignment', async () => {
+    const record = createSpeakerRecord();
+    record.segments[0].words = [
+      { startMs: 0, endMs: 600, text: 'Welcome' },
+      { startMs: 600, endMs: 1_250, text: ' to Sotto.' },
+    ];
+    await repository.save(record);
+
+    await expect(
+      repository.updateSegmentText(
+        record.id,
+        0,
+        '  Welcome to the private Sotto workspace.  ',
+      ),
+    ).resolves.toMatchObject({
+      outcome: 'updated',
+      segment: {
+        startMs: 0,
+        endMs: 1_250,
+        speakerId: FIRST_SPEAKER_ID,
+        text: 'Welcome to the private Sotto workspace.',
+        words: [],
+      },
+    });
+
+    await expect(repository.get(record.id)).resolves.toMatchObject({
+      text: 'Welcome to the private Sotto workspace. This stays private.',
+      segments: [
+        {
+          startMs: 0,
+          endMs: 1_250,
+          speakerId: FIRST_SPEAKER_ID,
+          text: 'Welcome to the private Sotto workspace.',
+          words: [],
+        },
+        record.segments[1],
+      ],
+    });
+  });
+
+  it('rejects empty corrections and missing segment indexes without rewriting', async () => {
+    const record = createRecord();
+    await repository.save(record);
+    const filePath = path.join(rootPath, `${record.id}.json`);
+    const before = await readFile(filePath, 'utf8');
+
+    await expect(
+      repository.updateSegmentText(record.id, 0, ' \n\t '),
+    ).rejects.toThrow('Transcript segment text cannot be empty.');
+    await expect(
+      repository.updateSegmentText(record.id, 4, 'Missing segment'),
+    ).resolves.toEqual({ outcome: 'not-found' });
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(before);
+  });
+
+  it('serializes a correction and speaker rename so neither change is lost', async () => {
+    const record = createSpeakerRecord();
+    await repository.save(record);
+
+    await Promise.all([
+      repository.updateSegmentText(record.id, 0, 'Corrected welcome.'),
+      repository.renameSpeakerLabel(record.id, FIRST_SPEAKER_ID, 'Morgan'),
+    ]);
+
+    await expect(repository.get(record.id)).resolves.toMatchObject({
+      text: 'Corrected welcome. This stays private.',
+      segments: expect.arrayContaining([
+        expect.objectContaining({
+          text: 'Corrected welcome.',
+          speakerId: FIRST_SPEAKER_ID,
+        }),
+      ]),
+      speakerAnalysis: {
+        speakers: [
+          { id: FIRST_SPEAKER_ID, label: 'Morgan' },
+          { id: SECOND_SPEAKER_ID, label: 'Speaker 2' },
+        ],
+      },
+    });
   });
 });

@@ -11,11 +11,13 @@ export const IPC_CHANNELS = {
   openRecordingSettings: 'sotto:recording:settings',
   cancelTranscription: 'sotto:transcription:cancel',
   getTranscript: 'sotto:transcript:get',
+  updateTranscriptSegment: 'sotto:transcript:segment:update',
   renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
   deleteTranscript: 'sotto:transcript:delete',
   exportTranscript: 'sotto:transcript:export',
   deletePlayback: 'sotto:playback:delete',
   stateChanged: 'sotto:state:changed',
+  dictationShortcut: 'sotto:dictation:shortcut',
 } as const;
 
 export type EngineState = 'checking' | 'ready' | 'unavailable';
@@ -65,10 +67,13 @@ export interface LiveRecordingCapability {
 
 export interface LiveRecordingSnapshot {
   id: string;
+  kind: RecordingKind;
   sourceName: string;
   startedAt: string;
   bytesWritten: number;
 }
+
+export type RecordingKind = 'meeting' | 'dictation';
 
 export interface LiveRecordingStatus {
   capability: LiveRecordingCapability;
@@ -146,10 +151,24 @@ export interface TranscriptSpeaker {
   label: string;
 }
 
+export interface MeetingSummaryItem {
+  text: string;
+  startMs: number;
+  speakerId: string | null;
+}
+
+export interface MeetingSummary {
+  overview: string;
+  keyPoints: MeetingSummaryItem[];
+  decisions: MeetingSummaryItem[];
+  actionItems: MeetingSummaryItem[];
+}
+
 export interface TranscriptDetail extends TranscriptSummary {
   completedAt: string;
   text: string;
   segments: TranscriptSegment[];
+  meetingSummary: MeetingSummary | null;
   playback: TranscriptPlayback;
   speakerAnalysis: {
     engine: {
@@ -251,10 +270,21 @@ export type RenameTranscriptSpeakerResult =
   | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
+export type UpdateTranscriptSegmentResult =
+  | {
+      outcome: 'updated';
+      segment: TranscriptSegment;
+      text: string;
+      preview: string;
+      meetingSummary: MeetingSummary | null;
+    }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
 export interface SottoDesktopApi {
   getAppState(): Promise<AppState>;
   importMedia(): Promise<ImportMediaResult>;
-  startLiveRecording(): Promise<StartLiveRecordingResult>;
+  startLiveRecording(kind?: RecordingKind): Promise<StartLiveRecordingResult>;
   appendLiveRecordingChunk(
     recordingId: string,
     chunk: ArrayBuffer,
@@ -267,6 +297,11 @@ export interface SottoDesktopApi {
   openRecordingSettings(): Promise<OpenRecordingSettingsResult>;
   cancelTranscription(jobId: string): Promise<CancelTranscriptionResult>;
   getTranscript(transcriptId: string): Promise<TranscriptDetail | null>;
+  updateTranscriptSegment(
+    transcriptId: string,
+    segmentIndex: number,
+    text: string,
+  ): Promise<UpdateTranscriptSegmentResult>;
   renameTranscriptSpeaker(
     transcriptId: string,
     speakerId: string,
@@ -278,5 +313,6 @@ export interface SottoDesktopApi {
     transcriptId: string,
     format: TranscriptExportFormat,
   ): Promise<ExportTranscriptResult>;
+  onDictationShortcut(listener: () => void): () => void;
   onAppStateChanged(listener: (state: AppState) => void): () => void;
 }

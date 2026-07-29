@@ -40,6 +40,10 @@ const MIN_TRANSITION_ADVANTAGE_MS = 300;
 const MIN_DIRECT_SUPPORT_MS = 200;
 const MIN_DIRECT_MARGIN_MS = 100;
 const MIN_DIRECT_DOMINANCE_RATIO = 1.5;
+export const MAX_RELIABLE_AUTOMATIC_SPEAKERS = 12;
+const MIN_RELIABLE_CLUSTER_SUPPORT_MS = 200;
+const MAX_RELIABLE_CLUSTER_SUPPORT_MS = 5_000;
+const RELIABLE_CLUSTER_SUPPORT_RATIO = 0.0025;
 
 interface ClusterChoice {
   cluster: number | null;
@@ -151,12 +155,48 @@ const clusterOrder = (
 
 const createSpeakerMap = (
   diarization: readonly SpeakerDiarizationSegment[],
+  words: readonly WhisperWord[],
   createId: SpeakerIdFactory,
 ): { speakers: TranscriptSpeaker[]; ids: Map<number, string> } => {
-  const clusters = clusterOrder(diarization);
-  if (clusters.length > MAX_TRANSCRIPT_SPEAKERS) {
-    return { speakers: [], ids: new Map() };
+  const supportByCluster = new Map<number, number>();
+  let totalSupportMs = 0;
+  for (const word of words) {
+    if (isPunctuationOnly(word.text)) continue;
+    const choice = chooseCluster(word.startMs, word.endMs, diarization);
+    if (choice.cluster === null || choice.directSupportMs <= 0) continue;
+    supportByCluster.set(
+      choice.cluster,
+      (supportByCluster.get(choice.cluster) ?? 0) + choice.directSupportMs,
+    );
+    totalSupportMs += choice.directSupportMs;
   }
+
+  const minimumSupportMs = Math.max(
+    MIN_RELIABLE_CLUSTER_SUPPORT_MS,
+    Math.min(
+      MAX_RELIABLE_CLUSTER_SUPPORT_MS,
+      Math.round(totalSupportMs * RELIABLE_CLUSTER_SUPPORT_RATIO),
+    ),
+  );
+  let supported = [...supportByCluster.entries()]
+    .filter(([, supportMs]) => supportMs >= minimumSupportMs)
+    .sort((left, right) => right[1] - left[1] || left[0] - right[0])
+    .slice(0, Math.min(MAX_RELIABLE_AUTOMATIC_SPEAKERS, MAX_TRANSCRIPT_SPEAKERS));
+  if (supported.length === 0 && diarization.length > 0) {
+    const diarizationSupport = new Map<number, number>();
+    for (const span of diarization) {
+      diarizationSupport.set(
+        span.cluster,
+        (diarizationSupport.get(span.cluster) ?? 0) + span.endMs - span.startMs,
+      );
+    }
+    supported = [...diarizationSupport.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0] - right[0])
+      .slice(0, 1);
+  }
+  const supportedClusters = new Set(supported.map(([cluster]) => cluster));
+  const clusters = clusterOrder(diarization)
+    .filter((cluster) => supportedClusters.has(cluster));
 
   const ids = new Map<number, string>();
   const speakers = clusters.map((cluster, index): TranscriptSpeaker => {
@@ -459,7 +499,7 @@ export const alignTranscriptSpeakers = (
     return unlabeled();
   }
 
-  const { speakers, ids } = createSpeakerMap(diarization, createId);
+  const { speakers, ids } = createSpeakerMap(diarization, words, createId);
   if (speakers.length === 0) {
     return unlabeled();
   }

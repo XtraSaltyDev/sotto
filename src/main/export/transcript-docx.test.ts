@@ -181,6 +181,24 @@ describe('createTranscriptDocx', () => {
     expect(coreXml).toContain('R&amp;D &lt;weekly sync&gt;');
   });
 
+  it('includes a timestamped local meeting summary when provided', async () => {
+    const documentXml = readXml(
+      extractZipEntries(await createTranscriptDocx(createRecord(), {
+        overview: 'The team reviewed launch readiness.',
+        keyPoints: [{ text: 'Security review is nearly complete.', startMs: 1_000, speakerId: 'speaker-1' }],
+        decisions: [{ text: 'We decided to launch Tuesday.', startMs: 60_000, speakerId: 'speaker-2' }],
+        actionItems: [{ text: 'Morgan will send the plan.', startMs: 61_000, speakerId: null }],
+      })),
+      'word/document.xml',
+    );
+
+    expect(documentXml).toContain('Meeting summary');
+    expect(documentXml).toContain('The team reviewed launch readiness.');
+    expect(documentXml).toContain('Me &amp; &lt;Team&gt;: ');
+    expect(documentXml).toContain('We decided to launch Tuesday.');
+    expect(documentXml).toContain('Morgan will send the plan.');
+  });
+
   it('encodes the compact transcript geometry and style tokens', async () => {
     const entries = extractZipEntries(await createTranscriptDocx(createRecord()));
     const documentXml = readXml(entries, 'word/document.xml');

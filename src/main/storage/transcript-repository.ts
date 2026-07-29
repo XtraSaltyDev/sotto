@@ -12,6 +12,7 @@ import path from 'node:path';
 import {
   isTranscriptSpeakerId,
   isTranscriptId,
+  normalizeTranscriptSegmentText,
   normalizeSpeakerLabel,
   parseTranscriptRecord,
   TranscriptValidationError,
@@ -28,6 +29,14 @@ export type RenameSpeakerLabelResult =
       outcome: 'renamed';
       record: TranscriptRecord;
       speaker: TranscriptSpeaker;
+    }
+  | { outcome: 'not-found' };
+
+export type UpdateSegmentTextResult =
+  | {
+      outcome: 'updated';
+      record: TranscriptRecord;
+      segment: TranscriptRecord['segments'][number];
     }
   | { outcome: 'not-found' };
 
@@ -123,11 +132,58 @@ export class TranscriptRepository {
     return this.readRecord(this.pathForId(id));
   }
 
-  /** Reads only after speaker-label or delete work already queued has settled. */
+  /** Reads only after transcript mutations already queued have settled. */
   getAfterPendingMutations(
     id: TranscriptId,
   ): Promise<TranscriptRecord | null> {
     return this.serializeMutation(() => this.get(id));
+  }
+
+  async updateSegmentText(
+    transcriptId: TranscriptId,
+    segmentIndex: number,
+    text: string,
+  ): Promise<UpdateSegmentTextResult> {
+    if (!isTranscriptId(transcriptId)) {
+      throw new TranscriptValidationError('Transcript id must be a UUID.');
+    }
+    if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0) {
+      throw new TranscriptValidationError('Transcript segment index is invalid.');
+    }
+
+    const normalizedTranscriptId = transcriptId.toLowerCase();
+    const normalizedText = normalizeTranscriptSegmentText(text);
+
+    return this.serializeMutation(async () => {
+      const current = await this.get(normalizedTranscriptId);
+      const currentSegment = current?.segments[segmentIndex];
+      if (!current || !currentSegment) return { outcome: 'not-found' };
+
+      if (currentSegment.text === normalizedText) {
+        return { outcome: 'updated', record: current, segment: currentSegment };
+      }
+
+      const segment = {
+        ...currentSegment,
+        text: normalizedText,
+        // Corrected prose no longer has a reliable one-to-one relationship
+        // with the original Whisper tokens. Segment-level seeking remains.
+        words: [],
+      };
+      const segments = current.segments.map((candidate, index) =>
+        index === segmentIndex ? segment : candidate,
+      );
+      const record = await this.save({
+        ...current,
+        text: segments
+          .map((candidate) => candidate.text)
+          .filter((candidate) => candidate.length > 0)
+          .join(' '),
+        segments,
+      });
+
+      return { outcome: 'updated', record, segment: record.segments[segmentIndex] };
+    });
   }
 
   async renameSpeakerLabel(

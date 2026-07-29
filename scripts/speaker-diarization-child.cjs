@@ -53,7 +53,9 @@ try {
       debug: 0,
       provider: 'cpu',
     },
-    clustering: { numClusters: -1, threshold: 0.5 },
+    // A higher distance threshold merges more same-voice embeddings. The old
+    // 0.5 default fragmented noisy meeting audio into dozens of tiny clusters.
+    clustering: { numClusters: -1, threshold: 0.75 },
     minDurationOn: 0.2,
     minDurationOff: 0.5,
   });

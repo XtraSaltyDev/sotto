@@ -7,6 +7,7 @@ import type {
   AppendLiveRecordingChunkResult,
   LiveRecordingErrorCode,
   LiveRecordingSnapshot,
+  RecordingKind,
   SavedRecordingSummary,
   TranscriptionErrorCode,
 } from '../../shared/contracts';
@@ -59,6 +60,7 @@ export interface LiveRecordingServiceOptions {
 
 interface ActiveRecording {
   readonly id: string;
+  readonly kind: RecordingKind;
   readonly sourceName: string;
   readonly startedAt: string;
   readonly stream: RecordingStream;
@@ -78,17 +80,18 @@ type LiveRecordingOperation =
 
 const snapshot = (recording: ActiveRecording): LiveRecordingSnapshot => ({
   id: recording.id,
+  kind: recording.kind,
   sourceName: recording.sourceName,
   startedAt: recording.startedAt,
   bytesWritten: recording.bytesWritten,
 });
 
-const sourceNameFor = (startedAt: string): string => {
+const sourceNameFor = (startedAt: string, kind: RecordingKind): string => {
   const stamp = startedAt
     .replace(/[:.]/gu, '-')
     .replace('T', '_')
     .replace('Z', '');
-  return `Live meeting ${stamp}.webm`;
+  return `${kind === 'dictation' ? 'Dictation' : 'Live meeting'} ${stamp}.webm`;
 };
 
 const asBuffer = (chunk: Uint8Array): Buffer =>
@@ -268,7 +271,10 @@ export class LiveRecordingService {
     return (await this.getRecordingMedia(id)) !== null;
   }
 
-  async start(): Promise<LiveRecordingSnapshot> {
+  async start(kind: RecordingKind = 'meeting'): Promise<LiveRecordingSnapshot> {
+    if (kind !== 'meeting' && kind !== 'dictation') {
+      throw new TypeError('Recording kind is not supported.');
+    }
     if (this.activeRecording || this.operation) {
       throw new LiveRecordingError('busy', 'A live recording is already in progress.');
     }
@@ -292,13 +298,14 @@ export class LiveRecordingService {
 
       const id = createTranscriptId();
       const startedAt = new Date().toISOString();
-      const sourceName = sourceNameFor(startedAt);
+      const sourceName = sourceNameFor(startedAt, kind);
       let recording: ActiveRecording | null = null;
       try {
         await this.repository.createPartial(metadataFor(id, sourceName, startedAt));
         const stream = this.createStream(this.repository.partialPath(id));
         recording = {
           id,
+          kind,
           sourceName,
           startedAt,
           stream,

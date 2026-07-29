@@ -19,10 +19,12 @@ import {
   type FinishLiveRecordingResult,
   type ImportMediaResult,
   type OpenRecordingSettingsResult,
+  type RecordingKind,
   type RetryRecordingResult,
   type RenameTranscriptSpeakerResult,
   type StartLiveRecordingResult,
   type TranscriptExportFormat,
+  type UpdateTranscriptSegmentResult,
 } from '../../shared/contracts';
 import { AppController } from '../app-controller';
 import {
@@ -34,6 +36,8 @@ import { TranscriptionStartError } from '../transcription/transcription-service'
 import {
   isTranscriptId,
   isTranscriptSpeakerId,
+  MAX_SEGMENT_TEXT_CHARACTERS,
+  MAX_TRANSCRIPT_SEGMENTS,
   MAX_SPEAKER_LABEL_CHARACTERS,
 } from '../transcription/transcript-types';
 import {
@@ -199,12 +203,24 @@ export const registerDesktopIpc = ({
 
   ipcMain.handle(
     IPC_CHANNELS.startLiveRecording,
-    async (event): Promise<StartLiveRecordingResult> => {
+    async (event, requestedKind: unknown): Promise<StartLiveRecordingResult> => {
       trust(event);
+      if (
+        requestedKind !== undefined &&
+        requestedKind !== 'meeting' &&
+        requestedKind !== 'dictation'
+      ) {
+        return {
+          outcome: 'rejected',
+          reason: 'That recording type is not supported.',
+          code: 'recording-failed',
+        };
+      }
+      const kind: RecordingKind = requestedKind ?? 'meeting';
       try {
         return {
           outcome: 'started',
-          recording: await controller.startLiveRecording(),
+          recording: await controller.startLiveRecording(kind),
         };
       } catch (error) {
         if (error instanceof LiveRecordingError) {
@@ -383,6 +399,38 @@ export const registerDesktopIpc = ({
   });
 
   ipcMain.handle(
+    IPC_CHANNELS.updateTranscriptSegment,
+    async (
+      event,
+      transcriptId: unknown,
+      segmentIndex: unknown,
+      text: unknown,
+    ): Promise<UpdateTranscriptSegmentResult> => {
+      trust(event);
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      if (
+        typeof segmentIndex !== 'number' ||
+        !Number.isSafeInteger(segmentIndex) ||
+        segmentIndex < 0 ||
+        segmentIndex >= MAX_TRANSCRIPT_SEGMENTS
+      ) {
+        return { outcome: 'not-found' };
+      }
+      if (
+        typeof text !== 'string' ||
+        text.length === 0 ||
+        text.length > MAX_SEGMENT_TEXT_CHARACTERS
+      ) {
+        return {
+          outcome: 'rejected',
+          reason: `Transcript corrections must be 1–${MAX_SEGMENT_TEXT_CHARACTERS.toLocaleString()} characters.`,
+        };
+      }
+      return controller.updateTranscriptSegment(transcriptId, segmentIndex, text);
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.renameTranscriptSpeaker,
     async (
       event,
@@ -511,6 +559,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.openRecordingSettings,
       IPC_CHANNELS.cancelTranscription,
       IPC_CHANNELS.getTranscript,
+      IPC_CHANNELS.updateTranscriptSegment,
       IPC_CHANNELS.renameTranscriptSpeaker,
       IPC_CHANNELS.deleteTranscript,
       IPC_CHANNELS.deletePlayback,

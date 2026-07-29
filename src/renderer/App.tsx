@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import type {
   AppState,
   LiveRecordingSnapshot,
+  MeetingSummary,
+  RecordingKind,
   SavedRecordingSummary,
   StartLiveRecordingResult,
   TranscriptDetail,
@@ -21,6 +30,10 @@ import {
   PLAYBACK_JUMP_SECONDS,
   shouldIgnorePlaybackShortcut,
 } from './playback';
+import {
+  adjacentSearchResult,
+  matchingTranscriptSegmentIndexes,
+} from './transcript-search';
 import {
   ArrowLeftIcon,
   AudioFileIcon,
@@ -94,7 +107,11 @@ const jobLabel = (job: TranscriptionJobSnapshot): string => {
 };
 
 const recordingLabel = (recording: LiveRecordingSnapshot | null): string =>
-  recording ? 'Recording live meeting audio' : 'Record live meeting';
+  recording?.kind === 'dictation'
+    ? 'Recording dictation'
+    : recording
+      ? 'Recording live meeting audio'
+      : 'Record live meeting';
 
 const savedRecordingLabel = (recording: SavedRecordingSummary): string => {
   if (recording.transcriptionState === 'completed') return 'Transcript ready';
@@ -316,6 +333,70 @@ const SpeakerEditor = ({
   );
 };
 
+const MeetingSummaryView = ({
+  onSeek,
+  playbackAvailable,
+  speakers,
+  summary,
+}: {
+  onSeek: (milliseconds: number) => void;
+  playbackAvailable: boolean;
+  speakers: TranscriptSpeaker[];
+  summary: MeetingSummary;
+}) => {
+  const speakerLabels = new Map(speakers.map((speaker) => [speaker.id, speaker.label]));
+  const renderItems = (
+    title: string,
+    items: MeetingSummary['keyPoints'],
+    emptyText: string,
+  ) => (
+    <section className="meeting-summary__group">
+      <h3>{title}</h3>
+      {items.length ? (
+        <ul>
+          {items.map((item, index) => (
+            <li key={`${item.startMs}-${index}-${item.text}`}>
+              <div>
+                {playbackAvailable ? (
+                  <button onClick={() => onSeek(item.startMs)} type="button">
+                    {formatDuration(item.startMs)}
+                  </button>
+                ) : (
+                  <time>{formatDuration(item.startMs)}</time>
+                )}
+                {item.speakerId && speakerLabels.get(item.speakerId) ? (
+                  <span>{speakerLabels.get(item.speakerId)}</span>
+                ) : null}
+              </div>
+              <p>{item.text}</p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="meeting-summary__empty">{emptyText}</p>
+      )}
+    </section>
+  );
+
+  return (
+    <section className="meeting-summary" aria-labelledby="meeting-summary-title">
+      <header>
+        <div>
+          <p className="eyebrow">Local draft</p>
+          <h2 id="meeting-summary-title">Meeting summary</h2>
+        </div>
+        <p>Extracted on this device from the transcript. Review against the linked timestamps.</p>
+      </header>
+      <p className="meeting-summary__overview">{summary.overview}</p>
+      <div className="meeting-summary__groups">
+        {renderItems('Key points', summary.keyPoints, 'No key points were found.')}
+        {renderItems('Decisions', summary.decisions, 'No clear decision language was found.')}
+        {renderItems('Action items', summary.actionItems, 'No clear action-item language was found.')}
+      </div>
+    </section>
+  );
+};
+
 const TranscriptView = ({
   transcript,
   loading,
@@ -326,6 +407,7 @@ const TranscriptView = ({
   onExport,
   onExportRecording,
   onRenameSpeaker,
+  onUpdateSegment,
 }: {
   transcript: TranscriptDetail | null;
   loading: boolean;
@@ -336,15 +418,34 @@ const TranscriptView = ({
   onExport: (format: TranscriptExportFormat) => void;
   onExportRecording: () => void;
   onRenameSpeaker: (speakerId: string, label: string) => Promise<string | null>;
+  onUpdateSegment: (segmentIndex: number, text: string) => Promise<string | null>;
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const segmentRefs = useRef(new Map<number, HTMLDivElement>());
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResultIndex, setSearchResultIndex] = useState(-1);
+  const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null);
+  const [segmentDraft, setSegmentDraft] = useState('');
+  const [savingSegmentIndex, setSavingSegmentIndex] = useState<number | null>(null);
+  const [segmentEditError, setSegmentEditError] = useState<string | null>(null);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const playbackAvailable = transcript?.playback.state === 'available';
   const activeSegmentIndex = transcript
     ? activeSegmentIndexAt(transcript.segments, currentTimeMs)
     : -1;
+  const searchMatches = useMemo(
+    () => matchingTranscriptSegmentIndexes(
+      transcript?.segments ?? [],
+      deferredSearchQuery,
+    ),
+    [deferredSearchQuery, transcript?.segments],
+  );
+  const searchMatchSet = useMemo(() => new Set(searchMatches), [searchMatches]);
+  const selectedSearchSegmentIndex =
+    searchResultIndex >= 0 ? (searchMatches[searchResultIndex] ?? -1) : -1;
 
   const seekTo = useCallback((milliseconds: number) => {
     const audio = audioRef.current;
@@ -379,7 +480,33 @@ const TranscriptView = ({
   useEffect(() => {
     setCurrentTimeMs(0);
     setPlaybackError(null);
+    setSearchQuery('');
+    setSearchResultIndex(-1);
+    setEditingSegmentIndex(null);
+    setSegmentDraft('');
+    setSegmentEditError(null);
   }, [transcript?.id]);
+
+  useEffect(() => {
+    setSearchResultIndex(-1);
+  }, [deferredSearchQuery, searchQuery, transcript?.segments]);
+
+  const moveToSearchResult = useCallback((direction: 1 | -1) => {
+    const nextResultIndex = adjacentSearchResult(
+      searchResultIndex,
+      searchMatches.length,
+      direction,
+    );
+    if (nextResultIndex < 0) return;
+    const segmentIndex = searchMatches[nextResultIndex];
+    setSearchResultIndex(nextResultIndex);
+    segmentRefs.current.get(segmentIndex)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+    const segment = transcript?.segments[segmentIndex];
+    if (segment && playbackAvailable) seekTo(segment.startMs);
+  }, [playbackAvailable, searchMatches, searchResultIndex, seekTo, transcript?.segments]);
 
   useEffect(() => {
     if (!playbackAvailable) return undefined;
@@ -464,6 +591,14 @@ const TranscriptView = ({
             <p className="engine-note">No reliable speaker labels were found.</p>
           )}
         </header>
+        {transcript.meetingSummary ? (
+          <MeetingSummaryView
+            onSeek={seekTo}
+            playbackAvailable={playbackAvailable}
+            speakers={transcript.speakerAnalysis?.speakers ?? []}
+            summary={transcript.meetingSummary}
+          />
+        ) : null}
         <section className="playback" aria-labelledby="playback-title">
           <div className="playback__heading">
             <div>
@@ -544,7 +679,58 @@ const TranscriptView = ({
             speakers={transcript.speakerAnalysis.speakers}
           />
         ) : null}
-        <div className="segments" aria-label="Transcript text">
+        <section className="transcript-find" aria-labelledby="transcript-find-title">
+          <div>
+            <h2 id="transcript-find-title">Find in transcript</h2>
+            <p>Search this transcript and jump between matching segments.</p>
+          </div>
+          <form
+            className="transcript-find__form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              moveToSearchResult(1);
+            }}
+          >
+            <label className="visually-hidden" htmlFor="transcript-search">
+              Find text in this transcript
+            </label>
+            <input
+              autoComplete="off"
+              aria-controls="transcript-segments"
+              id="transcript-search"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search transcript"
+              type="search"
+              value={searchQuery}
+            />
+            <span aria-live="polite" className="transcript-find__status">
+              {searchQuery.trim().length === 0
+                ? 'Enter a word or phrase'
+                : searchMatches.length === 0
+                  ? 'No matching segments'
+                  : searchResultIndex >= 0
+                    ? `${searchResultIndex + 1} of ${searchMatches.length}`
+                    : `${searchMatches.length} matching ${searchMatches.length === 1 ? 'segment' : 'segments'}`}
+            </span>
+            <button
+              aria-label="Previous match"
+              disabled={searchMatches.length === 0}
+              onClick={() => moveToSearchResult(-1)}
+              type="button"
+            >
+              Previous
+            </button>
+            <button
+              aria-label="Next match"
+              disabled={searchMatches.length === 0}
+              onClick={() => moveToSearchResult(1)}
+              type="button"
+            >
+              Next
+            </button>
+          </form>
+        </section>
+        <div className="segments" id="transcript-segments" aria-label="Transcript text">
           {transcript.segments.length === 0 ? (
             <p className="no-speech">No speech was detected in this recording.</p>
           ) : (
@@ -552,13 +738,24 @@ const TranscriptView = ({
               const speaker = transcript.speakerAnalysis?.speakers.find(
                 (candidate) => candidate.id === segment.speakerId,
               );
+              const isSearchMatch = searchMatchSet.has(index);
+              const isEditing = editingSegmentIndex === index;
               return (
               <div
-                className={`segment${transcript.speakerAnalysis ? ' segment--with-speaker' : ''}${activeSegmentIndex === index ? ' segment--active' : ''}${playbackAvailable ? ' segment--seekable' : ''}`}
+                aria-current={selectedSearchSegmentIndex === index ? 'true' : undefined}
+                className={`segment${transcript.speakerAnalysis ? ' segment--with-speaker' : ''}${activeSegmentIndex === index ? ' segment--active' : ''}${playbackAvailable && !isEditing ? ' segment--seekable' : ''}${isSearchMatch ? ' segment--search-match' : ''}${selectedSearchSegmentIndex === index ? ' segment--search-current' : ''}${isEditing ? ' segment--editing' : ''}`}
                 key={`${segment.startMs}-${index}`}
                 onClick={(event) => {
-                  if (!playbackAvailable || (event.target as HTMLElement).closest('button')) return;
+                  if (
+                    !playbackAvailable ||
+                    isEditing ||
+                    (event.target as HTMLElement).closest('button, input, textarea, select, a')
+                  ) return;
                   seekTo(segment.startMs);
+                }}
+                ref={(element) => {
+                  if (element) segmentRefs.current.set(index, element);
+                  else segmentRefs.current.delete(index);
                 }}
               >
                 <time>
@@ -573,9 +770,81 @@ const TranscriptView = ({
                     {speaker?.label ?? 'Unclear'}
                   </span>
                 ) : null}
-                <p>
-                  {playbackAvailable && segment.words.length > 0
-                    ? segment.words.map((word, wordIndex) => {
+                <div className="segment__content">
+                  {isEditing ? (
+                    <form
+                      className="segment-editor"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        setSavingSegmentIndex(index);
+                        setSegmentEditError(null);
+                        void onUpdateSegment(index, segmentDraft)
+                          .then((reason) => {
+                            setSavingSegmentIndex(null);
+                            setSegmentEditError(reason);
+                            if (!reason) {
+                              setEditingSegmentIndex(null);
+                              setSegmentDraft('');
+                            }
+                          })
+                          .catch(() => {
+                            setSavingSegmentIndex(null);
+                            setSegmentEditError(
+                              'Sotto could not save that transcript correction.',
+                            );
+                          });
+                      }}
+                    >
+                      <label htmlFor={`segment-text-${index}`}>
+                        Correct transcript text at {formatDuration(segment.startMs)}
+                      </label>
+                      <textarea
+                        autoFocus
+                        disabled={savingSegmentIndex === index}
+                        id={`segment-text-${index}`}
+                        maxLength={100_000}
+                        onChange={(event) => setSegmentDraft(event.target.value)}
+                        rows={Math.max(3, Math.min(8, Math.ceil(segmentDraft.length / 72)))}
+                        value={segmentDraft}
+                      />
+                      <p>
+                        Timing and speaker stay attached. Correcting text removes old
+                        word-level links for this segment.
+                      </p>
+                      <div className="segment-editor__actions">
+                        <button
+                          disabled={
+                            savingSegmentIndex === index ||
+                            segmentDraft.trim().length === 0 ||
+                            segmentDraft.trim() === segment.text
+                          }
+                          type="submit"
+                        >
+                          {savingSegmentIndex === index ? 'Saving…' : 'Save correction'}
+                        </button>
+                        <button
+                          disabled={savingSegmentIndex === index}
+                          onClick={() => {
+                            setEditingSegmentIndex(null);
+                            setSegmentDraft('');
+                            setSegmentEditError(null);
+                          }}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      {segmentEditError ? (
+                        <p className="segment-editor__error" role="alert">
+                          {segmentEditError}
+                        </p>
+                      ) : null}
+                    </form>
+                  ) : (
+                    <>
+                      <p>
+                        {playbackAvailable && segment.words.length > 0
+                          ? segment.words.map((word, wordIndex) => {
                         const key = `${word.startMs}-${word.endMs}-${wordIndex}`;
                         return word.text.trim().length === 0 || isPunctuationOnlyToken(word.text) ? (
                           <span className="transcript-word transcript-word--punctuation" key={key}>
@@ -595,9 +864,24 @@ const TranscriptView = ({
                             {wordIndex === 0 ? word.text.trimStart() : word.text}
                           </button>
                         );
-                      })
-                    : segment.text}
-                </p>
+                            })
+                          : segment.text}
+                      </p>
+                      <button
+                        className="segment__edit"
+                        onClick={() => {
+                          setEditingSegmentIndex(index);
+                          setSegmentDraft(segment.text);
+                          setSegmentEditError(null);
+                          if (playbackAvailable) seekTo(segment.startMs);
+                        }}
+                        type="button"
+                      >
+                        Edit segment
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
               );
             })
@@ -707,6 +991,13 @@ export const App = () => {
     !isStartingRecording &&
     !isStoppingRecording &&
     !isSelecting;
+  const canDictate =
+    appState?.engine.state === 'ready' &&
+    !running &&
+    !activeRecording &&
+    !isStartingRecording &&
+    !isStoppingRecording &&
+    !isSelecting;
   const progress = useMemo(
     () => Math.round(Math.min(1, Math.max(0, appState?.activeJob?.progress ?? 0)) * 100),
     [appState?.activeJob?.progress],
@@ -788,8 +1079,11 @@ export const App = () => {
     }
   };
 
-  const handleStartLiveRecording = async () => {
-    if (!window.sotto || !canRecord) return;
+  const handleStartRecording = async (kind: RecordingKind) => {
+    if (
+      !window.sotto ||
+      (kind === 'meeting' ? !canRecord : !canDictate)
+    ) return;
     setMessage(null);
     setIsStartingRecording(true);
 
@@ -799,18 +1093,23 @@ export const App = () => {
     let startRecording: Promise<StartLiveRecordingResult> | null = null;
     let startResultHandled = false;
     try {
-      if (!navigator.mediaDevices?.getDisplayMedia) {
-        throw new Error('This build cannot request desktop audio capture.');
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('This build cannot request microphone capture.');
       }
 
-      // Start the display request synchronously from the button gesture. An
-      // IPC round-trip before getDisplayMedia can consume the browser's
-      // transient user activation and make the OS prompt fail.
-      desktopCapture = navigator.mediaDevices.getDisplayMedia({
-        audio: true,
-        video: { frameRate: 1, height: 240, width: 320 },
-      });
-      startRecording = window.sotto.startLiveRecording();
+      if (kind === 'meeting') {
+        if (!navigator.mediaDevices.getDisplayMedia) {
+          throw new Error('This build cannot request desktop audio capture.');
+        }
+        // Start the display request synchronously from the button gesture. An
+        // IPC round-trip before getDisplayMedia can consume the browser's
+        // transient user activation and make the OS prompt fail.
+        desktopCapture = navigator.mediaDevices.getDisplayMedia({
+          audio: true,
+          video: { frameRate: 1, height: 240, width: 320 },
+        });
+      }
+      startRecording = window.sotto.startLiveRecording(kind);
       const started = await withTimeout(
         startRecording,
         20_000,
@@ -824,13 +1123,16 @@ export const App = () => {
       recordingId = started.recording.id;
       recordingIdRef.current = recordingId;
 
-      const desktopStream = await desktopCapture;
-      desktopStreamRef.current = desktopStream;
-      desktopStreamClaimed = true;
-      if (desktopStream.getAudioTracks().length === 0) {
-        throw new Error(
-          'Sotto did not receive Teams audio. Allow screen and system-audio capture, then try again.',
-        );
+      let desktopStream: MediaStream | null = null;
+      if (desktopCapture) {
+        desktopStream = await desktopCapture;
+        desktopStreamRef.current = desktopStream;
+        desktopStreamClaimed = true;
+        if (desktopStream.getAudioTracks().length === 0) {
+          throw new Error(
+            'Sotto did not receive Teams audio. Allow screen and system-audio capture, then try again.',
+          );
+        }
       }
 
       let microphoneStream: MediaStream | null = null;
@@ -841,16 +1143,21 @@ export const App = () => {
         });
         microphoneStreamRef.current = microphoneStream;
       } catch {
-        setMessage(
-          'Microphone access was not granted. Sotto will record Teams audio only for this meeting.',
-        );
+        if (kind === 'dictation') {
+          throw new Error(
+            'Microphone access is required for dictation. Allow it in system settings, then try again.',
+          );
+        }
+        setMessage('Microphone access was not granted. Sotto will record Teams audio only for this meeting.');
       }
 
       const context = new AudioContext();
       audioContextRef.current = context;
       await context.resume();
       const destination = context.createMediaStreamDestination();
-      context.createMediaStreamSource(desktopStream).connect(destination);
+      if (desktopStream?.getAudioTracks().length) {
+        context.createMediaStreamSource(desktopStream).connect(destination);
+      }
       if (microphoneStream?.getAudioTracks().length) {
         context.createMediaStreamSource(microphoneStream).connect(destination);
       }
@@ -912,7 +1219,7 @@ export const App = () => {
         );
       });
 
-      desktopStream.getTracks().forEach((track) => {
+      desktopStream?.getTracks().forEach((track) => {
         track.addEventListener('ended', () => {
           if (mediaRecorderRef.current?.state === 'recording') {
             void handleStopLiveRecording();
@@ -932,7 +1239,9 @@ export const App = () => {
       await cleanupCapture();
       recordingIdRef.current = null;
       setMessage(
-        liveRecordingStartErrorMessage(error, navigator.platform),
+        kind === 'dictation' && error instanceof Error
+          ? error.message
+          : liveRecordingStartErrorMessage(error, navigator.platform),
       );
     } finally {
       void releaseAbandonedLiveRecordingStart({
@@ -950,6 +1259,21 @@ export const App = () => {
       setIsStartingRecording(false);
     }
   };
+
+  useEffect(() => {
+    if (!window.sotto) return undefined;
+    return window.sotto.onDictationShortcut(() => {
+      if (activeRecording?.kind === 'dictation') {
+        void handleStopLiveRecording();
+      } else if (activeRecording) {
+        setMessage('Finish the live meeting recording before starting dictation.');
+      } else if (canDictate) {
+        void handleStartRecording('dictation');
+      } else if (running) {
+        setMessage('Wait for the current transcription to finish before starting dictation.');
+      }
+    });
+  }, [activeRecording, canDictate, running]);
 
   const handleOpenRecordingSettings = async () => {
     if (!window.sotto) return;
@@ -1018,6 +1342,37 @@ export const App = () => {
           }
         : current,
     );
+    return null;
+  };
+
+  const handleUpdateSegment = async (
+    segmentIndex: number,
+    text: string,
+  ): Promise<string | null> => {
+    if (!window.sotto || !selectedId) {
+      return 'Sotto could not save that transcript correction.';
+    }
+    const result = await window.sotto.updateTranscriptSegment(
+      selectedId,
+      segmentIndex,
+      text,
+    );
+    if (result.outcome === 'rejected') return result.reason;
+    if (result.outcome === 'not-found') {
+      return 'That transcript segment is no longer available.';
+    }
+
+    setTranscript((current) => current
+      ? {
+          ...current,
+          meetingSummary: result.meetingSummary,
+          preview: result.preview,
+          text: result.text,
+          segments: current.segments.map((segment, index) =>
+            index === segmentIndex ? result.segment : segment,
+          ),
+        }
+      : current);
     return null;
   };
 
@@ -1166,6 +1521,7 @@ export const App = () => {
             if (transcript?.recordingId) void exportRecording(transcript.recordingId);
           }}
           onRenameSpeaker={handleRenameSpeaker}
+          onUpdateSegment={handleUpdateSegment}
           transcript={transcript}
         />
       </div>
@@ -1193,7 +1549,11 @@ export const App = () => {
                   <span className="recording-card__dot" aria-label="Recording" />
                 </div>
                 <div className="recording-card__timer">{formatDuration(recordingElapsed)}</div>
-                <p>Teams/system audio and microphone are kept on this device.</p>
+                <p>
+                  {activeRecording.kind === 'dictation'
+                    ? 'Microphone audio is kept on this device and transcribed when you stop.'
+                    : 'Teams/system audio and microphone are kept on this device.'}
+                </p>
                 <button className="text-button" disabled={isStoppingRecording} onClick={() => void handleStopLiveRecording()} type="button">
                   <CancelIcon /> {isStoppingRecording ? 'Stopping and preparing transcript…' : 'Stop recording'}
                 </button>
@@ -1245,14 +1605,24 @@ export const App = () => {
               <span>{isSelecting ? 'Opening…' : running ? 'Transcription in progress' : 'Import Recording'}</span>
             </button>
             <button
-              className={`button button--record${activeRecording ? ' button--recording' : ''}`}
-              disabled={activeRecording ? isStoppingRecording : !canRecord}
-              onClick={() => void (activeRecording ? handleStopLiveRecording() : handleStartLiveRecording())}
+              className={`button button--record${activeRecording?.kind === 'meeting' ? ' button--recording' : ''}`}
+              disabled={activeRecording?.kind === 'meeting' ? isStoppingRecording : !canRecord}
+              onClick={() => void (activeRecording?.kind === 'meeting' ? handleStopLiveRecording() : handleStartRecording('meeting'))}
               type="button"
             >
               {isStartingRecording || isStoppingRecording ? <SpinnerIcon className="spinner" /> : <MicrophoneIcon />}
-              <span>{isStartingRecording ? 'Opening capture…' : activeRecording ? 'Stop recording' : needsRecordingSetup ? 'Set up live recording' : 'Record live meeting'}</span>
-              <span className="button__status">{activeRecording ? formatDuration(recordingElapsed) : needsRecordingSetup ? 'One-time macOS approval' : 'System + mic'}</span>
+              <span>{isStartingRecording ? 'Opening capture…' : activeRecording?.kind === 'meeting' ? 'Stop recording' : needsRecordingSetup ? 'Set up live recording' : 'Record live meeting'}</span>
+              <span className="button__status">{activeRecording?.kind === 'meeting' ? formatDuration(recordingElapsed) : needsRecordingSetup ? 'One-time macOS approval' : 'System + mic'}</span>
+            </button>
+            <button
+              className={`button button--dictation${activeRecording?.kind === 'dictation' ? ' button--recording' : ''}`}
+              disabled={activeRecording?.kind === 'dictation' ? isStoppingRecording : !canDictate}
+              onClick={() => void (activeRecording?.kind === 'dictation' ? handleStopLiveRecording() : handleStartRecording('dictation'))}
+              type="button"
+            >
+              {isStartingRecording || isStoppingRecording ? <SpinnerIcon className="spinner" /> : <MicrophoneIcon />}
+              <span>{isStartingRecording ? 'Opening microphone…' : activeRecording?.kind === 'dictation' ? 'Stop dictation' : 'Dictate'}</span>
+              <span className="button__status">{activeRecording?.kind === 'dictation' ? formatDuration(recordingElapsed) : '⌘/Ctrl + Shift + D · mic only'}</span>
             </button>
 
             {appState?.engine.state !== 'ready' ? (

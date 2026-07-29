@@ -6,7 +6,8 @@ builds can import real audio and video recordings—including downloaded
 Microsoft Teams MP4s—then
 extract audio, transcribe it with a bundled `whisper.cpp` engine, save the
 result locally, display synchronized timestamped text, play retained audio, and
-export a plain-text transcript.
+export a plain-text transcript. Saved transcript segments can be corrected
+without changing their timing or speaker assignment, and searched locally.
 It also clusters voices into transcript-local speaker labels that can be
 renamed, and exports Microsoft Word (`.docx`) transcripts.
 On macOS 13 or newer and Windows 11 x64 it can also record a live Teams
@@ -14,13 +15,16 @@ meeting's desktop audio and your microphone, then transcribe that capture when
 you stop.
 
 Nothing is uploaded. Sotto has no cloud service, accounts, analytics, updater,
-automatic summarization, or cloud capture.
+or cloud capture. Its meeting-summary draft is extracted locally from the saved
+transcript and links every listed point back to its timestamp.
 
 ## What works now
 
 - Common local audio and video import through the native file picker
 - Live Teams/system-audio plus microphone capture on macOS 13+ and Windows 11
   x64 (with explicit operating-system recording permissions)
+- Microphone-only dictation toggled with **Command/Ctrl + Shift + D** while
+  Sotto is running
 - Audio-track detection and duration probing
 - Offline conversion to mono 16 kHz PCM with a minimal, network-disabled FFmpeg
 - English transcription with `whisper.cpp` 1.9.1 and the `small.en` model
@@ -33,8 +37,10 @@ automatic summarization, or cloud capture.
   closed-file recovery for live recordings
 - Recoverable failed/cancelled live transcriptions with Retry Transcription,
   Export Recording, and intentional Delete Recording actions
-- Recent, timestamped transcript detail, delete, speaker rename, plain-text
-  export, and Microsoft Word export views
+- Recent, timestamped transcript detail, segment correction, transcript search,
+  delete, speaker rename, plain-text export, and Microsoft Word export views
+- Local meeting-summary drafts with an overview, key points, decisions, action
+  items, and transcript-linked timestamps
 - Synchronized local playback with clickable segment timestamps, clickable
   words on new transcripts, current-segment highlighting, 0.75x–2x speed, and
   keyboard play/pause and five-second jumps
@@ -75,10 +81,12 @@ it cannot read participant names from Teams: labels begin as `Speaker 1`,
 the meeting if desired. Sotto stores no reusable voiceprints. At the end of the
 local speaker pass, Sotto reviews short timing gaps beside reliable speaker
 turns so slightly delayed detections are less likely to strand their opening
-words. Overlapping speech, very short turns, longer gaps, music, and noisy mixed
-audio can remain labeled `Unclear`; Sotto does not guess when timing is still
-ambiguous. It produces
-timestamped speech, not meeting summaries or action items.
+words. Automatic clustering uses a more conservative merge threshold and only
+promotes clusters with meaningful word-timing support, capped at 12 reliable
+automatic labels. Tiny fragments become `Unclear` instead of creating dozens
+of phantom speakers. Overlapping speech, very short turns, longer gaps, music,
+and noisy mixed audio can remain labeled `Unclear`; Sotto does not guess when
+timing is still ambiguous.
 
 ## Use the current macOS build
 
@@ -100,7 +108,7 @@ out/Sotto-darwin-arm64/Sotto.app
 For local DMG validation, use the generated disk image:
 
 ```text
-out/make/Sotto-0.1.3-arm64.dmg
+out/make/Sotto-0.1.4-arm64.dmg
 ```
 
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
@@ -207,6 +215,34 @@ Deleting a live transcript keeps its original WebM ready for another
 transcription. If playback audio is missing, was deleted outside Sotto, or
 cannot be decoded, the transcript remains readable and exportable and the
 detail view shows a non-destructive explanation.
+
+Use **Find in transcript** to search without sending text anywhere. Results are
+case-insensitive matching segments; Previous, Next, or Enter moves through them,
+scrolls the selected segment into view, and seeks available playback to that
+segment without starting it. Use **Edit segment** to correct its text while the
+recording remains available for reference. Saving keeps that segment's start
+and end time and speaker label, refreshes Recent and future exports, and writes
+the full validated transcript atomically. Because corrected prose no longer has
+a reliable one-to-one relationship with the original Whisper tokens, Sotto
+removes old word-level click targets from that edited segment; its timestamp and
+whole-segment seeking continue to work. Corrections have explicit Save and
+Cancel actions. Sotto does not yet provide search-and-replace, annotations, or
+revision history.
+
+Press **Command + Shift + D** on macOS or **Ctrl + Shift + D** on Windows to
+start a microphone-only dictation from anywhere while Sotto is running. Press
+the same shortcut again to stop, save the private recording, and start local
+transcription. Dictation creates a normal saved transcript; it does not type
+into whichever app was previously active. The **Dictate** button provides the
+same flow without the shortcut.
+
+Each transcript includes a local draft summary. Sotto selects exact transcript
+sentences for the overview and key points and recognizes clear decision and
+action-item wording. Summary entries keep their source timestamp and speaker
+reference, so available playback can jump to the supporting audio. This is an
+extractive aid, not a generative model: it does not invent missing context, and
+the user should review the linked transcript before relying on it. TXT and DOCX
+exports include the same summary.
 
 Each saved live recording has its own private directory containing
 `recording.webm` and atomic, schema-validated `metadata.json`. Directories use
@@ -357,8 +393,9 @@ processes are invoked directly with `shell: false`; loader-injection and Node
 runtime environment variables are removed. The renderer has
 `contextIsolation: true`, `nodeIntegration: false`, and `sandbox: true`. Its
 preload exposes only state, import, live-recording chunks, retry/cancel,
-recording and transcript delete/export, record lookup, and state-change
-methods. Playback uses a separate `sotto-media` transport that accepts only a
+recording and transcript delete/export, validated segment correction and
+speaker rename, record lookup, and state-change methods. Playback uses a
+separate `sotto-media` transport that accepts only a
 validated transcript UUID and streams byte ranges from an app-owned file; raw
 filesystem paths never reach the renderer. IPC requests must come from the current window's main frame, IDs are
 validated UUIDs, new windows and unexpected navigation are denied, and only
@@ -462,7 +499,7 @@ installer also needs Authenticode code signing and an install/upgrade test.
 4. Evaluate speaker-label quality on representative multi-person Teams meetings
    and rebuild the native speaker runtime for older macOS versions if needed.
 
-Cloud sync, accounts, an updater, and automatic summarization remain
+Cloud sync, accounts, an updater, and generative summarization remain
 intentionally out of scope.
 
 ## Primary references

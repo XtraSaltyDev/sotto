@@ -23,6 +23,7 @@ const acceptedRecording = (): StartLiveRecordingResult => ({
   recording: {
     bytesWritten: 0,
     id: RECORDING_ID,
+    kind: 'meeting',
     sourceName: 'Live meeting.webm',
     startedAt: '2026-07-29T11:00:00.000Z',
   },

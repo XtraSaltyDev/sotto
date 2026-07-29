@@ -98,6 +98,15 @@ class FakeRecordingStream extends EventEmitter {
 }
 
 describe('LiveRecordingService', () => {
+  it('names and reports microphone-only dictation separately', async () => {
+    const { service } = await makeService();
+    const recording = await service.start('dictation');
+
+    expect(recording.kind).toBe('dictation');
+    expect(recording.sourceName).toMatch(/^Dictation /u);
+    await expect(service.cancel(recording.id)).resolves.toBe(true);
+  });
+
   it('atomically finalizes a private durable WebM and retains it after restart', async () => {
     const { changes, root, service } = await makeService();
     const { media, payload, recording } = await finalize(service);

@@ -124,6 +124,33 @@ describe('transcript presentation', () => {
     expect(toTranscriptDetail(record)).not.toHaveProperty('source');
   });
 
+  it('withholds an implausible legacy speaker count instead of showing phantom people', () => {
+    const speakers = Array.from({ length: 100 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      label: `Speaker ${index + 1}`,
+    }));
+    const fragmented: TranscriptRecord = {
+      ...record,
+      speakerAnalysis: {
+        engine: {
+          name: 'sherpa-onnx',
+          model: 'pyannote + 3D-Speaker',
+          version: '1.13.4',
+        },
+        speakers,
+      },
+      segments: record.segments.map((segment, index) => ({
+        ...segment,
+        speakerId: speakers[index].id,
+      })),
+    };
+
+    const detail = toTranscriptDetail(fragmented);
+    expect(detail.speakerAnalysis).toBeNull();
+    expect(detail.segments.every((segment) => segment.speakerId === null)).toBe(true);
+    expect(formatTranscriptForExport(fragmented)).not.toContain('Speaker 100');
+  });
+
   it('computes transcript previews during reload instead of rescanning records on state emits', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-summary-cache-'));
     temporaryRoots.push(root);
@@ -284,6 +311,44 @@ describe('transcript presentation', () => {
     const docx = await controller.getTranscriptExport(record.id, 'docx');
     expect(Buffer.isBuffer(docx?.content)).toBe(true);
     expect((docx?.content as Buffer).subarray(0, 2).toString('ascii')).toBe('PK');
+  });
+
+  it('updates transcript text, cached preview, and later exports together', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-corrections-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    await repository.save(record);
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    await expect(
+      controller.updateTranscriptSegment(record.id, 0, 'Corrected first item.'),
+    ).resolves.toEqual({
+      outcome: 'updated',
+      segment: {
+        startMs: 0,
+        endMs: 1_000,
+        text: 'Corrected first item.',
+        speakerId: null,
+        words: [],
+      },
+      text: 'Corrected first item. Second item.',
+      preview: 'Corrected first item. Second item.',
+      meetingSummary: expect.objectContaining({
+        overview: 'Corrected first item. Second item.',
+      }),
+    });
+    expect(controller.getState().transcripts[0]?.preview).toBe(
+      'Corrected first item. Second item.',
+    );
+    await expect(controller.getTranscriptExport(record.id, 'txt')).resolves.toMatchObject({
+      content: expect.stringContaining('[0:00] Corrected first item.'),
+    });
+    await controller.dispose();
   });
 
   it('does not let a slow rename reload resurrect a deleted transcript', async () => {
@@ -526,6 +591,28 @@ describe('transcript presentation', () => {
       code: 'permission-denied',
       message: capability.message,
     });
+  });
+
+  it('allows microphone-only dictation without screen-recording permission', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-dictation-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+      {
+        state: 'permission-required',
+        message: 'Allow Screen & System Audio Recording.',
+      },
+    );
+    await controller.initialize();
+
+    const recording = await controller.startLiveRecording('dictation');
+    expect(recording).toMatchObject({ kind: 'dictation' });
+    expect(recording.sourceName).toMatch(/^Dictation /u);
+    await expect(controller.cancelLiveRecording(recording.id)).resolves.toBe(true);
+    await controller.dispose();
   });
 
   it('allows a first live capture request to reach normal startup checks', async () => {

@@ -290,7 +290,8 @@ a:focus-visible {
   opacity: 0.62;
 }
 
-.button--record {
+.button--record,
+.button--dictation {
   margin-top: 10px;
   background: transparent;
   border: 1px solid var(--border);
@@ -298,13 +299,15 @@ a:focus-visible {
   cursor: pointer;
 }
 
-.button--record:hover:not(:disabled) {
+.button--record:hover:not(:disabled),
+.button--dictation:hover:not(:disabled) {
   background: #f8f0eb;
   border-color: rgb(217 82 63 / 45%);
   color: var(--accent-dark);
 }
 
-.button--record:disabled {
+.button--record:disabled,
+.button--dictation:disabled {
   cursor: not-allowed;
   opacity: 0.62;
 }
@@ -853,6 +856,17 @@ a:focus-visible {
   line-height: 1.45;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .transcript-detail__header {
   padding-bottom: 30px;
   border-bottom: 1px solid var(--border);
@@ -877,6 +891,106 @@ a:focus-visible {
   margin-top: 7px;
   color: var(--muted-light);
   font-size: 10px;
+}
+
+.meeting-summary {
+  padding: 28px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.meeting-summary > header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.meeting-summary > header h2 {
+  margin: 3px 0 0;
+  font-family: var(--serif);
+  font-size: 25px;
+  font-weight: 400;
+}
+
+.meeting-summary > header > p {
+  width: min(360px, 50%);
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.meeting-summary__overview {
+  max-width: 720px;
+  margin: 20px 0 0;
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.meeting-summary__groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.meeting-summary__group {
+  min-width: 0;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.meeting-summary__group h3 {
+  margin: 0 0 11px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.meeting-summary__group ul {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.meeting-summary__group li > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 4px;
+  color: var(--muted-light);
+  font-size: 9px;
+}
+
+.meeting-summary__group li button {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--accent-dark);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.meeting-summary__group li p,
+.meeting-summary__empty {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.meeting-summary__group .meeting-summary__empty {
+  color: var(--muted-light);
 }
 
 .speaker-editor {
@@ -962,6 +1076,86 @@ a:focus-visible {
   grid-column: 2;
   margin: -10px 0 0;
   color: var(--danger);
+}
+
+.transcript-find {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 20px 28px;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.transcript-find h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.transcript-find p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.transcript-find__form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.transcript-find__form input {
+  grid-row: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.transcript-find__form button {
+  grid-row: 1;
+}
+
+.transcript-find__form input:focus,
+.segment-editor textarea:focus {
+  border-color: var(--accent);
+  outline: 2px solid rgb(152 45 31 / 12%);
+  outline-offset: 1px;
+}
+
+.transcript-find__form button,
+.segment-editor__actions button,
+.segment__edit {
+  min-height: 32px;
+  padding: 0 10px;
+  background: var(--background-deep);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.transcript-find__form button:disabled,
+.segment-editor__actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.transcript-find__status {
+  grid-column: 1;
+  grid-row: 2;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .playback {
@@ -1061,6 +1255,8 @@ a:focus-visible {
   border-bottom: 1px solid rgb(216 211 203 / 65%);
   border-radius: 6px;
   transition: background 140ms ease, box-shadow 140ms ease;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 88px;
 }
 
 .segment--seekable {
@@ -1074,6 +1270,21 @@ a:focus-visible {
 .segment--active {
   background: #fff3ed;
   box-shadow: -10px 0 0 #fff3ed, 10px 0 0 #fff3ed;
+}
+
+.segment--search-match {
+  background: #fff9e8;
+}
+
+.segment--search-current {
+  outline: 2px solid rgb(166 122 24 / 48%);
+  outline-offset: 2px;
+}
+
+.segment--editing {
+  cursor: default;
+  background: var(--surface);
+  box-shadow: -10px 0 0 var(--surface), 10px 0 0 var(--surface);
 }
 
 .segment--with-speaker {
@@ -1123,6 +1334,71 @@ a:focus-visible {
   font-family: var(--serif);
   font-size: 18px;
   line-height: 1.55;
+}
+
+.segment__content {
+  min-width: 0;
+}
+
+.segment__edit {
+  min-height: 26px;
+  margin-top: 9px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  transition: color 120ms ease, opacity 120ms ease;
+}
+
+.segment:hover .segment__edit,
+.segment__edit:focus-visible {
+  opacity: 1;
+}
+
+.segment__edit:hover {
+  color: var(--accent-dark);
+}
+
+.segment-editor label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.segment-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 86px;
+  padding: 10px 11px;
+  resize: vertical;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.segment-editor > p {
+  margin-top: 7px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.segment-editor__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.segment-editor .segment-editor__error {
+  margin-top: 8px;
+  color: var(--danger);
 }
 
 .transcript-word {
@@ -1205,6 +1481,14 @@ a:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .transcript-find {
+    grid-template-columns: 1fr;
+  }
+
+  .meeting-summary__groups {
+    grid-template-columns: 1fr;
+  }
+
   .speaker-editor .speaker-editor__error {
     grid-column: 1;
   }
@@ -1221,6 +1505,12 @@ a:focus-visible {
   .segment--with-speaker {
     grid-template-columns: 52px 82px minmax(0, 1fr);
     gap: 12px;
+  }
+}
+
+@media (hover: none) {
+  .segment__edit {
+    opacity: 1;
   }
 }
 

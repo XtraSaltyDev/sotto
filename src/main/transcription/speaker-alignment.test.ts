@@ -5,6 +5,8 @@ import { alignTranscriptSpeakers } from './speaker-alignment';
 const IDS = [
   '11111111-1111-4111-8111-111111111111',
   '22222222-2222-4222-8222-222222222222',
+  '33333333-3333-4333-8333-333333333333',
+  '44444444-4444-4444-8444-444444444444',
 ];
 
 const withoutWordTimings = <T extends { words: unknown }>(segments: readonly T[]) =>
@@ -15,6 +17,41 @@ const withoutWordTimings = <T extends { words: unknown }>(segments: readonly T[]
   });
 
 describe('alignTranscriptSpeakers', () => {
+  it('drops tiny fragmentation clusters instead of showing dozens of speakers', () => {
+    const words = Array.from({ length: 24 }, (_, index) => ({
+      startMs: index * 500,
+      endMs: index * 500 + 400,
+      text: ` word${index}`,
+      segmentIndex: 0,
+    }));
+    const dominant = words.map((word, index) => ({
+      startMs: word.startMs,
+      endMs: word.endMs,
+      cluster: index % 4,
+    }));
+    const fragments = Array.from({ length: 100 }, (_, index) => ({
+      startMs: index * 115,
+      endMs: index * 115 + 50,
+      cluster: index + 10,
+    }));
+    let nextId = 0;
+
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 12_000, text: words.map((word) => word.text).join('').trim() }],
+      words,
+      [...dominant, ...fragments],
+      () => IDS[nextId++],
+    );
+
+    expect(result.speakerAnalysis?.speakers).toHaveLength(4);
+    expect(result.speakerAnalysis?.speakers.map((speaker) => speaker.label)).toEqual([
+      'Speaker 1',
+      'Speaker 2',
+      'Speaker 3',
+      'Speaker 4',
+    ]);
+  });
+
   it('creates labels by first appearance and splits text on word-level speaker changes', () => {
     let nextId = 0;
     const result = alignTranscriptSpeakers(

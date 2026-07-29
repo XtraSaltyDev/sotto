@@ -5,12 +5,14 @@ import type {
   AppendLiveRecordingChunkResult,
   LiveRecordingCapability,
   LiveRecordingSnapshot,
+  RecordingKind,
   SavedRecordingSummary,
   EngineStatus as RendererEngineStatus,
   TranscriptDetail,
   TranscriptSegment as RendererTranscriptSegment,
   TranscriptSummary,
   RenameTranscriptSpeakerResult,
+  UpdateTranscriptSegmentResult,
   TranscriptExportFormat,
   TranscriptionJobSnapshot,
 } from '../shared/contracts';
@@ -29,6 +31,8 @@ import {
 import type { TranscriptRecord } from './transcription/transcript-types';
 import { TranscriptValidationError } from './transcription/transcript-types';
 import { createTranscriptDocx } from './export/transcript-docx';
+import { buildMeetingSummary } from './summarization/meeting-summary';
+import { MAX_RELIABLE_AUTOMATIC_SPEAKERS } from './transcription/speaker-alignment';
 
 type StateListener = (state: AppState) => void;
 export type LiveRecordingCapabilitySource =
@@ -81,25 +85,46 @@ export const toTranscriptSummary = (record: TranscriptRecord): TranscriptSummary
   preview: previewFor(record.text),
 });
 
-export const toTranscriptDetail = (record: TranscriptRecord): TranscriptDetail => ({
-  ...toTranscriptSummary(record),
-  completedAt: record.completedAt,
-  text: record.text,
-  segments: record.segments.map(
-    (segment): RendererTranscriptSegment => ({
-      ...segment,
-      words: segment.words.map((word) => ({ ...word })),
-    }),
-  ),
-  playback: { state: 'unavailable', reason: 'not-retained' },
-  speakerAnalysis: record.speakerAnalysis
+const withReliableSpeakerPresentation = (
+  record: TranscriptRecord,
+): TranscriptRecord =>
+  (record.speakerAnalysis?.speakers.length ?? 0) >
+  MAX_RELIABLE_AUTOMATIC_SPEAKERS
     ? {
-        engine: { ...record.speakerAnalysis.engine },
-        speakers: record.speakerAnalysis.speakers.map((speaker) => ({ ...speaker })),
+        ...record,
+        speakerAnalysis: null,
+        segments: record.segments.map((segment) => ({
+          ...segment,
+          speakerId: null,
+        })),
       }
-    : null,
-  engine: { ...record.engine },
-});
+    : record;
+
+export const toTranscriptDetail = (record: TranscriptRecord): TranscriptDetail => {
+  const presented = withReliableSpeakerPresentation(record);
+  return {
+    ...toTranscriptSummary(presented),
+    completedAt: presented.completedAt,
+    text: presented.text,
+    segments: presented.segments.map(
+      (segment): RendererTranscriptSegment => ({
+        ...segment,
+        words: segment.words.map((word) => ({ ...word })),
+      }),
+    ),
+    meetingSummary: buildMeetingSummary(presented),
+    playback: { state: 'unavailable', reason: 'not-retained' },
+    speakerAnalysis: presented.speakerAnalysis
+      ? {
+          engine: { ...presented.speakerAnalysis.engine },
+          speakers: presented.speakerAnalysis.speakers.map((speaker) => ({
+            ...speaker,
+          })),
+        }
+      : null,
+    engine: { ...presented.engine },
+  };
+};
 
 const formatTimestamp = (milliseconds: number): string => {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000));
@@ -112,22 +137,46 @@ const formatTimestamp = (milliseconds: number): string => {
 };
 
 export const formatTranscriptForExport = (record: TranscriptRecord): string => {
+  const presented = withReliableSpeakerPresentation(record);
+  const meetingSummary = buildMeetingSummary(presented);
+  const speakerLabels = new Map(
+    presented.speakerAnalysis?.speakers.map((speaker) => [speaker.id, speaker.label]) ?? [],
+  );
   const lines = [
-    record.title,
-    `Completed: ${record.completedAt}`,
-    `Duration: ${formatTimestamp(record.durationMs)}`,
-    `Language: ${record.language ?? 'unknown'}`,
+    presented.title,
+    `Completed: ${presented.completedAt}`,
+    `Duration: ${formatTimestamp(presented.durationMs)}`,
+    `Language: ${presented.language ?? 'unknown'}`,
     '',
   ];
 
-  if (record.segments.length === 0) {
-    lines.push(record.text || 'No speech was detected.');
+  if (meetingSummary) {
+    const addSummaryItems = (
+      title: string,
+      items: typeof meetingSummary.keyPoints,
+    ): void => {
+      if (items.length === 0) return;
+      lines.push(title);
+      for (const item of items) {
+        const speaker = item.speakerId ? speakerLabels.get(item.speakerId) : null;
+        lines.push(
+          `- [${formatTimestamp(item.startMs)}] ${speaker ? `${speaker}: ` : ''}${item.text}`,
+        );
+      }
+      lines.push('');
+    };
+    lines.push('MEETING SUMMARY', meetingSummary.overview, '');
+    addSummaryItems('Key points', meetingSummary.keyPoints);
+    addSummaryItems('Decisions', meetingSummary.decisions);
+    addSummaryItems('Action items', meetingSummary.actionItems);
+    lines.push('TRANSCRIPT', '');
+  }
+
+  if (presented.segments.length === 0) {
+    lines.push(presented.text || 'No speech was detected.');
   } else {
-    const hasSpeakerAnalysis = record.speakerAnalysis !== null;
-    const speakerLabels = new Map(
-      record.speakerAnalysis?.speakers.map((speaker) => [speaker.id, speaker.label]) ?? [],
-    );
-    for (const segment of record.segments) {
+    const hasSpeakerAnalysis = presented.speakerAnalysis !== null;
+    for (const segment of presented.segments) {
       const speakerLabel = segment.speakerId
         ? speakerLabels.get(segment.speakerId)
         : null;
@@ -250,9 +299,15 @@ export class AppController {
     return this.runTranscriptionStart(() => service.start(media));
   }
 
-  async startLiveRecording(): Promise<LiveRecordingSnapshot> {
+  async startLiveRecording(
+    kind: RecordingKind = 'meeting',
+  ): Promise<LiveRecordingSnapshot> {
+    if (kind !== 'meeting' && kind !== 'dictation') {
+      throw new TypeError('Recording kind is not supported.');
+    }
     this.refreshRecordingCapability();
     if (
+      kind === 'meeting' &&
       this.recordingCapability.state !== 'ready' &&
       this.recordingCapability.state !== 'setup-required'
     ) {
@@ -279,7 +334,7 @@ export class AppController {
         'Wait for the current transcription to finish before recording another meeting.',
       );
     }
-    return this.recordingService.start();
+    return this.recordingService.start(kind);
   }
 
   appendLiveRecordingChunk(
@@ -425,12 +480,16 @@ export class AppController {
   ): Promise<{ title: string; content: string | Buffer } | null> {
     const record = await this.repository.getAfterPendingMutations(id);
     if (!record) return null;
+    const presented = withReliableSpeakerPresentation(record);
     return {
-      title: record.title,
+      title: presented.title,
       content:
         format === 'docx'
-          ? await createTranscriptDocx(record)
-          : formatTranscriptForExport(record),
+          ? await createTranscriptDocx(
+              presented,
+              buildMeetingSummary(presented),
+            )
+          : formatTranscriptForExport(presented),
     };
   }
 
@@ -456,6 +515,41 @@ export class AppController {
           error instanceof TranscriptValidationError
             ? error.message
             : 'Sotto could not rename that speaker.',
+      };
+    }
+  }
+
+  async updateTranscriptSegment(
+    transcriptId: string,
+    segmentIndex: number,
+    text: string,
+  ): Promise<UpdateTranscriptSegmentResult> {
+    try {
+      const result = await this.repository.updateSegmentText(
+        transcriptId,
+        segmentIndex,
+        text,
+      );
+      if (result.outcome === 'not-found') return result;
+      await this.reloadTranscripts();
+      this.emit();
+      return {
+        outcome: 'updated',
+        segment: {
+          ...result.segment,
+          words: result.segment.words.map((word) => ({ ...word })),
+        },
+        text: result.record.text,
+        preview: previewFor(result.record.text),
+        meetingSummary: buildMeetingSummary(result.record),
+      };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof TranscriptValidationError
+            ? error.message
+            : 'Sotto could not save that transcript correction.',
       };
     }
   }

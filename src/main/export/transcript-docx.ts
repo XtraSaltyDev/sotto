@@ -11,6 +11,7 @@ import {
   TabStopType,
   TextRun,
 } from 'docx';
+import type { MeetingSummary } from '../../shared/contracts';
 
 import type {
   TranscriptRecord,
@@ -486,7 +487,57 @@ const createStyles = () => ({
   ],
 });
 
-const transcriptBody = (record: TranscriptDocxRecord): Paragraph[] => {
+const summaryParagraphs = (
+  summary: MeetingSummary | null,
+  speakerLabelsById: ReadonlyMap<string, string>,
+): Paragraph[] => {
+  if (!summary) return [];
+  const itemGroup = (
+    title: string,
+    items: MeetingSummary['keyPoints'],
+  ): Paragraph[] => items.length === 0
+    ? []
+    : [
+        new Paragraph({
+          children: [new TextRun(title)],
+          heading: HeadingLevel.HEADING_2,
+        }),
+        ...items.map((item) => {
+          const speaker = item.speakerId
+            ? speakerLabelsById.get(item.speakerId)
+            : null;
+          return new Paragraph({
+            bullet: { level: 0 },
+            children: [
+              new TextRun({
+                color: STYLE.metadata.color,
+                text: `${formatTimestamp(item.startMs)}  `,
+              }),
+              ...(speaker
+                ? [new TextRun({ bold: true, text: `${speaker}: ` })]
+                : []),
+              ...segmentTextRuns(item.text),
+            ],
+          });
+        }),
+      ];
+
+  return [
+    new Paragraph({
+      children: [new TextRun('Meeting summary')],
+      heading: HeadingLevel.HEADING_1,
+    }),
+    new Paragraph({ children: segmentTextRuns(summary.overview) }),
+    ...itemGroup('Key points', summary.keyPoints),
+    ...itemGroup('Decisions', summary.decisions),
+    ...itemGroup('Action items', summary.actionItems),
+  ];
+};
+
+const transcriptBody = (
+  record: TranscriptDocxRecord,
+  summary: MeetingSummary | null,
+): Paragraph[] => {
   const speakerLabelsById = buildSpeakerLabelsById(record);
   const hasSpeakerAnalysis = record.speakerAnalysis != null;
   const speakerCount = record.speakerAnalysis?.speakers.length;
@@ -530,6 +581,7 @@ const transcriptBody = (record: TranscriptDocxRecord): Paragraph[] => {
         speakerCount === undefined ? 'Not analyzed' : String(speakerCount),
       ],
     ]),
+    ...summaryParagraphs(summary, speakerLabelsById),
     new Paragraph({
       children: [new TextRun('Transcript')],
       heading: HeadingLevel.HEADING_1,
@@ -541,6 +593,7 @@ const transcriptBody = (record: TranscriptDocxRecord): Paragraph[] => {
 /** Generates a professional transcript as an in-memory Word document. */
 export const createTranscriptDocx = async (
   record: TranscriptDocxRecord,
+  summary: MeetingSummary | null = null,
 ): Promise<Buffer> => {
   const document = new Document({
     compatabilityModeVersion: 15,
@@ -550,7 +603,7 @@ export const createTranscriptDocx = async (
     revision: 1,
     sections: [
       {
-        children: transcriptBody(record),
+        children: transcriptBody(record, summary),
         footers: {
           default: new Footer({
             children: [

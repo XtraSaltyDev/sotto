@@ -117,6 +117,20 @@ const readBoundedString = (
   return value;
 };
 
+export const normalizeTranscriptSegmentText = (value: unknown): string => {
+  const text = readBoundedString(
+    value,
+    'Transcript segment text',
+    MAX_SEGMENT_TEXT_CHARACTERS,
+    true,
+  );
+  const normalized = text.replace(/\s+/gu, ' ').trim();
+  if (normalized.length === 0) {
+    return fail('Transcript segment text cannot be empty.');
+  }
+  return normalized;
+};
+
 const readInteger = (
   value: unknown,
   field: string,
