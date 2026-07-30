@@ -9,7 +9,10 @@ import {
 
 import type {
   AppState,
+  ExpectedSpeakerCount,
   LiveRecordingSnapshot,
+  LocalAiConnectionSummary,
+  LocalAiMeetingSummary,
   MeetingSummary,
   RecordingKind,
   SavedRecordingSummary,
@@ -22,7 +25,12 @@ import type {
   TranscriptSummary,
   TranscriptionJobSnapshot,
 } from '../shared/contracts';
-import { MAX_TRANSCRIPT_LIBRARY_QUERY_CHARACTERS } from '../shared/contracts';
+import {
+  isExpectedSpeakerCount,
+  MAX_EXPECTED_SPEAKER_COUNT,
+  MAX_TRANSCRIPT_LIBRARY_QUERY_CHARACTERS,
+  MIN_EXPECTED_SPEAKER_COUNT,
+} from '../shared/contracts';
 import { clearSavedSpeakerDraft } from './speaker-drafts';
 import { liveRecordingStartErrorMessage } from './live-recording-errors';
 import { releaseAbandonedLiveRecordingStart } from './live-recording-start-cleanup';
@@ -42,6 +50,7 @@ import {
   parseTranscriptTagDraft,
   type TranscriptLibraryDateRange,
 } from './transcript-library';
+import { mergeMeetingLibraryItems } from './meeting-library';
 import {
   ArrowLeftIcon,
   AudioFileIcon,
@@ -54,9 +63,11 @@ import {
   InboxIcon,
   LockIcon,
   MicrophoneIcon,
+  ModelIcon,
   SpinnerIcon,
   TrashIcon,
 } from './icons';
+import { LocalAiSettings } from './LocalAiSettings';
 import {
   TRANSCRIPT_COPY_OPTIONS,
   TRANSCRIPT_EXPORT_OPTIONS,
@@ -133,6 +144,14 @@ const dictationShortcutLabel = (): string =>
     ? '⌘⇧D · mic only'
     : 'Ctrl+Shift+D · mic only';
 
+const EXPECTED_SPEAKER_OPTIONS = Array.from(
+  {
+    length:
+      MAX_EXPECTED_SPEAKER_COUNT - MIN_EXPECTED_SPEAKER_COUNT + 1,
+  },
+  (_, index) => MIN_EXPECTED_SPEAKER_COUNT + index,
+);
+
 const savedRecordingLabel = (recording: SavedRecordingSummary): string => {
   if (recording.transcriptionState === 'completed') return 'Transcript ready';
   if (recording.transcriptionState === 'transcribing') return 'Transcribing';
@@ -153,14 +172,28 @@ interface TranscriptLibraryViewState {
   tag: string;
 }
 
-const TranscriptLibrary = ({
+type AppPage = 'transcripts' | 'local-ai';
+
+const MeetingLibrary = ({
+  busyId,
+  recordings,
   transcripts,
+  onDeleteRecording,
+  onDeleteTranscript,
+  onExportRecording,
   onOpen,
+  onRetryRecording,
   onViewStateChange,
   viewState,
 }: {
+  busyId: string | null;
+  recordings: SavedRecordingSummary[];
   transcripts: TranscriptSummary[];
+  onDeleteRecording: (recording: SavedRecordingSummary) => void;
+  onDeleteTranscript: (transcript: TranscriptSummary) => void;
+  onExportRecording: (recording: SavedRecordingSummary) => void;
   onOpen: (id: string) => void;
+  onRetryRecording: (recording: SavedRecordingSummary) => void;
   onViewStateChange: (
     update: (current: TranscriptLibraryViewState) => TranscriptLibraryViewState,
   ) => void;
@@ -272,6 +305,28 @@ const TranscriptLibrary = ({
     dateRange !== 'all' ||
     speaker.length > 0 ||
     tag.length > 0;
+  const resultTranscriptIds = useMemo(
+    () => new Set(result.transcripts.map((candidate) => candidate.id)),
+    [result.transcripts],
+  );
+  const visibleRecordings = useMemo(
+    () => hasFilters
+      ? recordings.filter(
+          (recording) =>
+            recording.transcriptId &&
+            resultTranscriptIds.has(recording.transcriptId),
+        )
+      : recordings,
+    [hasFilters, recordings, resultTranscriptIds],
+  );
+  const meetings = useMemo(
+    () => mergeMeetingLibraryItems(result.transcripts, visibleRecordings),
+    [result.transcripts, visibleRecordings],
+  );
+  const totalMeetingCount = useMemo(
+    () => mergeMeetingLibraryItems(transcripts, recordings).length,
+    [recordings, transcripts],
+  );
 
   return (
     <section
@@ -281,13 +336,13 @@ const TranscriptLibrary = ({
     >
       <div className="section-heading">
         <div>
-          <h2 id="library-title">Transcript Library</h2>
-          <p>Search and organize every transcript kept on this device.</p>
+          <h2 id="library-title">Meeting Library</h2>
+          <p>Transcripts and original recordings, together in one place.</p>
         </div>
         <span aria-live="polite" className="library-count">
           {isSearching
             ? 'Searching…'
-            : `${result.transcripts.length} ${result.transcripts.length === 1 ? 'transcript' : 'transcripts'}`}
+            : `${meetings.length} ${meetings.length === 1 ? 'meeting' : 'meetings'}`}
         </span>
       </div>
       {transcripts.length > 0 ? (
@@ -383,147 +438,150 @@ const TranscriptLibrary = ({
         </div>
       ) : null}
       {searchError ? <p className="library-error" role="alert">{searchError}</p> : null}
-      {transcripts.length === 0 ? (
+      {totalMeetingCount === 0 ? (
         <div className="empty-state">
           <InboxIcon />
-          <h3>No transcripts yet</h3>
-          <p>Import a meeting or recording. The finished transcript will appear here.</p>
+          <h3>No meetings yet</h3>
+          <p>Import a file or record a meeting. It will appear here when saved.</p>
         </div>
-      ) : result.transcripts.length === 0 ? (
+      ) : meetings.length === 0 ? (
         <div className="empty-state empty-state--compact">
           <InboxIcon />
-          <h3>No matching transcripts</h3>
+          <h3>No matching meetings</h3>
           <p>Try a different word, date, speaker, or tag.</p>
         </div>
       ) : (
-        <div className="transcript-list" aria-label="Transcript search results">
-          {result.transcripts.map((transcript) => (
-            <button
-              aria-label={`Open ${transcript.title}`}
-              className="transcript-row"
-              data-transcript-id={transcript.id}
-              key={transcript.id}
-              onClick={() => onOpen(transcript.id)}
-              type="button"
-            >
-              <DocumentIcon />
-              <span className="transcript-row__body">
-                <strong>{transcript.title}</strong>
-                <span>{transcript.preview || 'No speech detected'}</span>
-                {transcript.tags.length ? (
-                  <span className="tag-list" aria-label={`Tags: ${transcript.tags.join(', ')}`}>
-                    {transcript.tags.map((transcriptTag) => (
-                      <span className="tag" key={transcriptTag}>{transcriptTag}</span>
-                    ))}
+        <div className="meeting-list" aria-label="Meeting search results">
+          {meetings.map(({ key, recording, transcript }) => {
+            const busy = recording ? busyId === recording.id : false;
+            const canRetry = recording
+              ? ['ready', 'failed', 'cancelled'].includes(
+                  recording.transcriptionState,
+                )
+              : false;
+            const title = transcript?.title ?? recording?.sourceName ?? 'Untitled meeting';
+            const date = transcript?.createdAt ?? recording?.completedAt ?? '';
+            const detail = transcript
+              ? formatDuration(transcript.durationMs)
+              : recording
+                ? formatFileSize(recording.sizeBytes)
+                : '';
+            return (
+              <article className="meeting-row" key={key}>
+                <span className="meeting-row__icon">
+                  {transcript ? <DocumentIcon /> : <AudioFileIcon />}
+                </span>
+                {transcript ? (
+                  <button
+                    aria-label={`Open ${title}`}
+                    className="meeting-row__open"
+                    data-transcript-id={transcript.id}
+                    onClick={() => onOpen(transcript.id)}
+                    type="button"
+                  >
+                    <span className="meeting-row__body">
+                      <strong>{title}</strong>
+                      <span>{transcript.preview || 'No speech detected'}</span>
+                      {transcript.tags.length ? (
+                        <span className="tag-list" aria-label={`Tags: ${transcript.tags.join(', ')}`}>
+                          {transcript.tags.map((transcriptTag) => (
+                            <span className="tag" key={transcriptTag}>{transcriptTag}</span>
+                          ))}
+                        </span>
+                      ) : null}
+                    </span>
+                  </button>
+                ) : (
+                  <div className="meeting-row__open meeting-row__open--static">
+                    <span className="meeting-row__body">
+                      <strong>{title}</strong>
+                      <span>{recording?.message}</span>
+                    </span>
+                  </div>
+                )}
+                <div className="meeting-row__meta">
+                  <span>{formatDate(date)}</span>
+                  <span>{detail}</span>
+                  <span className="meeting-row__capabilities">
+                    {transcript ? <span>Transcript ready</span> : null}
+                    {recording ? <span>Audio retained</span> : null}
                   </span>
-                ) : null}
-              </span>
-              <span className="transcript-row__meta">
-                <span>{formatDate(transcript.createdAt)}</span>
-                <span>{formatDuration(transcript.durationMs)}</span>
-              </span>
-            </button>
-          ))}
+                  {recording && recording.transcriptionState !== 'completed' ? (
+                    <span className={`status-pill status-pill--${recording.transcriptionState}`}>
+                      {savedRecordingLabel(recording)}
+                    </span>
+                  ) : null}
+                </div>
+                <details className="meeting-row__menu output-menu">
+                  <summary aria-label={`More actions for ${title}`}>More</summary>
+                  <div className="output-menu__panel meeting-row__menu-panel">
+                    {transcript ? (
+                      <button
+                        onClick={(event) => {
+                          closeOutputMenu(event.currentTarget);
+                          onOpen(transcript.id);
+                        }}
+                        type="button"
+                      >
+                        Open transcript
+                      </button>
+                    ) : null}
+                    {recording && canRetry ? (
+                      <button
+                        disabled={busy}
+                        onClick={(event) => {
+                          closeOutputMenu(event.currentTarget);
+                          onRetryRecording(recording);
+                        }}
+                        type="button"
+                      >
+                        Retry transcription
+                      </button>
+                    ) : null}
+                    {recording ? (
+                      <button
+                        disabled={busy}
+                        onClick={(event) => {
+                          closeOutputMenu(event.currentTarget);
+                          onExportRecording(recording);
+                        }}
+                        type="button"
+                      >
+                        Export original recording
+                      </button>
+                    ) : null}
+                    {recording ? (
+                      <button
+                        className="meeting-row__danger"
+                        disabled={busy || recording.transcriptionState === 'transcribing'}
+                        onClick={(event) => {
+                          closeOutputMenu(event.currentTarget);
+                          onDeleteRecording(recording);
+                        }}
+                        type="button"
+                      >
+                        Delete saved recording
+                      </button>
+                    ) : null}
+                    {transcript ? (
+                      <button
+                        className="meeting-row__danger"
+                        onClick={(event) => {
+                          closeOutputMenu(event.currentTarget);
+                          onDeleteTranscript(transcript);
+                        }}
+                        type="button"
+                      >
+                        Delete transcript
+                      </button>
+                    ) : null}
+                  </div>
+                </details>
+              </article>
+            );
+          })}
         </div>
       )}
-    </section>
-  );
-};
-
-const SavedRecordingList = ({
-  busyId,
-  onDelete,
-  onExport,
-  onOpenTranscript,
-  onRetry,
-  recordings,
-}: {
-  busyId: string | null;
-  onDelete: (recording: SavedRecordingSummary) => void;
-  onExport: (recording: SavedRecordingSummary) => void;
-  onOpenTranscript: (id: string) => void;
-  onRetry: (recording: SavedRecordingSummary) => void;
-  recordings: SavedRecordingSummary[];
-}) => {
-  if (recordings.length === 0) return null;
-
-  return (
-    <section
-      className="saved-recordings"
-      aria-labelledby="saved-recordings-title"
-    >
-      <div className="section-heading">
-        <div>
-          <h2 id="saved-recordings-title">Saved recordings</h2>
-          <p>Original live WebM files kept privately on this device.</p>
-        </div>
-      </div>
-      <div className="recording-list">
-        {recordings.map((recording) => {
-          const busy = busyId === recording.id;
-          const canRetry = ['ready', 'failed', 'cancelled'].includes(
-            recording.transcriptionState,
-          );
-          return (
-            <article className="saved-recording-row" key={recording.id}>
-              <AudioFileIcon />
-              <div className="saved-recording-row__body">
-                <strong>{recording.sourceName}</strong>
-                <span>
-                  {formatDate(recording.completedAt)} ·{' '}
-                  {formatFileSize(recording.sizeBytes)}
-                </span>
-                <p>{recording.message}</p>
-              </div>
-              <div className="saved-recording-row__status">
-                <span
-                  className={`status-pill status-pill--${recording.transcriptionState}`}
-                >
-                  {savedRecordingLabel(recording)}
-                </span>
-                <div className="recording-actions">
-                  {recording.transcriptId ? (
-                    <button
-                      disabled={busy}
-                      onClick={() => onOpenTranscript(recording.transcriptId as string)}
-                      type="button"
-                    >
-                      <DocumentIcon /> Open transcript
-                    </button>
-                  ) : null}
-                  {canRetry ? (
-                    <button
-                      disabled={busy}
-                      onClick={() => onRetry(recording)}
-                      type="button"
-                    >
-                      {busy ? <SpinnerIcon className="spinner" /> : <MicrophoneIcon />}
-                      Retry transcription
-                    </button>
-                  ) : null}
-                  <button
-                    disabled={busy}
-                    onClick={() => onExport(recording)}
-                    type="button"
-                  >
-                    <DownloadIcon /> Export recording
-                  </button>
-                  <button
-                    className="recording-action--danger"
-                    disabled={
-                      busy || recording.transcriptionState === 'transcribing'
-                    }
-                    onClick={() => onDelete(recording)}
-                    type="button"
-                  >
-                    <TrashIcon /> Delete recording
-                  </button>
-                </div>
-              </div>
-            </article>
-          );
-        })}
-      </div>
     </section>
   );
 };
@@ -715,16 +773,36 @@ const TranscriptMetadataEditor = ({
 };
 
 const MeetingSummaryView = ({
+  connection,
+  error,
+  generating,
+  localAiSummary,
+  onGenerate,
+  onOpenLocalAi,
   onSeek,
   playbackAvailable,
   speakers,
   summary,
 }: {
+  connection: LocalAiConnectionSummary | null;
+  error: string | null;
+  generating: boolean;
+  localAiSummary: LocalAiMeetingSummary | null;
+  onGenerate: () => void;
+  onOpenLocalAi: () => void;
   onSeek: (milliseconds: number) => void;
   playbackAvailable: boolean;
   speakers: TranscriptSpeaker[];
   summary: MeetingSummary;
 }) => {
+  const [source, setSource] = useState<'sotto' | 'local-ai'>(
+    localAiSummary ? 'local-ai' : 'sotto',
+  );
+  useEffect(() => {
+    if (localAiSummary) setSource('local-ai');
+  }, [localAiSummary?.generatedAt]);
+  const showingLocalAi = source === 'local-ai' && localAiSummary !== null;
+  const selectedSummary = showingLocalAi ? localAiSummary.summary : summary;
   const speakerLabels = new Map(speakers.map((speaker) => [speaker.id, speaker.label]));
   const renderItems = (
     title: string,
@@ -763,16 +841,82 @@ const MeetingSummaryView = ({
     <section className="meeting-summary" aria-labelledby="meeting-summary-title">
       <header>
         <div>
-          <p className="eyebrow">Local draft</p>
+          <p className="eyebrow">
+            {showingLocalAi ? 'Local AI draft' : 'Sotto draft'}
+          </p>
           <h2 id="meeting-summary-title">Meeting summary</h2>
         </div>
-        <p>Extracted on this device from the transcript. Review against the linked timestamps.</p>
+        <p>
+          {showingLocalAi
+            ? `Generated on this device with ${localAiSummary.model}. Review against the linked timestamps.`
+            : 'Generated by Sotto from explicit transcript language. Review against the linked timestamps.'}
+        </p>
       </header>
-      <p className="meeting-summary__overview">{summary.overview}</p>
+      <div className={`meeting-summary__upgrade${showingLocalAi ? ' meeting-summary__upgrade--active' : ''}`}>
+        <div>
+          <strong>
+            {showingLocalAi
+              ? 'Higher-quality Local AI summary'
+              : 'Sotto summary is always available'}
+          </strong>
+          <p>
+            {showingLocalAi
+              ? 'The model considered the meeting in context. Sotto still anchors every item to the original transcript.'
+              : 'Sotto can find Key Points, Decisions, and Action Items on its own. For stronger context and more natural results, connect a local model.'}
+          </p>
+          {error ? <p className="meeting-summary__error" role="alert">{error}</p> : null}
+        </div>
+        <div className="meeting-summary__upgrade-actions">
+          {localAiSummary ? (
+            <div className="meeting-summary__source" aria-label="Summary source">
+              <button
+                aria-pressed={!showingLocalAi}
+                onClick={() => setSource('sotto')}
+                type="button"
+              >
+                Sotto
+              </button>
+              <button
+                aria-pressed={showingLocalAi}
+                onClick={() => setSource('local-ai')}
+                type="button"
+              >
+                Local AI
+              </button>
+            </div>
+          ) : null}
+          {connection?.configured ? (
+            <button
+              className="meeting-summary__generate"
+              disabled={generating}
+              onClick={onGenerate}
+              type="button"
+            >
+              {generating ? (
+                <><SpinnerIcon className="spinner" /> Improving summary…</>
+              ) : localAiSummary ? (
+                'Regenerate with Local AI'
+              ) : (
+                'Improve with Local AI'
+              )}
+            </button>
+          ) : (
+            <button
+              className="meeting-summary__generate"
+              disabled={connection === null}
+              onClick={onOpenLocalAi}
+              type="button"
+            >
+              {connection === null ? 'Checking Local AI…' : 'Connect a local model'}
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="meeting-summary__overview">{selectedSummary.overview}</p>
       <div className="meeting-summary__groups">
-        {renderItems('Key points', summary.keyPoints, 'No key points were found.')}
-        {renderItems('Decisions', summary.decisions, 'No clear decision language was found.')}
-        {renderItems('Action items', summary.actionItems, 'No clear action-item language was found.')}
+        {renderItems('Key points', selectedSummary.keyPoints, 'No key points were found.')}
+        {renderItems('Decisions', selectedSummary.decisions, 'No clear decision language was found.')}
+        {renderItems('Action items', selectedSummary.actionItems, 'No clear action-item language was found.')}
       </div>
     </section>
   );
@@ -849,6 +993,9 @@ export const TranscriptOutputMenus = ({
 );
 
 const TranscriptView = ({
+  localAiConnection,
+  localAiError,
+  localAiGenerating,
   transcript,
   loading,
   message,
@@ -858,10 +1005,15 @@ const TranscriptView = ({
   onCopy,
   onExport,
   onExportRecording,
+  onGenerateLocalAiSummary,
+  onOpenLocalAi,
   onRenameSpeaker,
   onUpdateMetadata,
   onUpdateSegment,
 }: {
+  localAiConnection: LocalAiConnectionSummary | null;
+  localAiError: string | null;
+  localAiGenerating: boolean;
   transcript: TranscriptDetail | null;
   loading: boolean;
   message: string | null;
@@ -871,6 +1023,8 @@ const TranscriptView = ({
   onCopy: (kind: TranscriptCopyKind) => void;
   onExport: (format: TranscriptExportFormat) => void;
   onExportRecording: () => void;
+  onGenerateLocalAiSummary: () => void;
+  onOpenLocalAi: () => void;
   onRenameSpeaker: (speakerId: string, label: string) => Promise<string | null>;
   onUpdateMetadata: (metadata: {
     title?: string;
@@ -889,6 +1043,7 @@ const TranscriptView = ({
   const [segmentDraft, setSegmentDraft] = useState('');
   const [savingSegmentIndex, setSavingSegmentIndex] = useState<number | null>(null);
   const [segmentEditError, setSegmentEditError] = useState<string | null>(null);
+  const [detailMode, setDetailMode] = useState<'summary' | 'transcript'>('summary');
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const playbackAvailable = transcript?.playback.state === 'available';
   const activeSegmentIndex = transcript
@@ -943,6 +1098,7 @@ const TranscriptView = ({
     setEditingSegmentIndex(null);
     setSegmentDraft('');
     setSegmentEditError(null);
+    setDetailMode('summary');
   }, [transcript?.id]);
 
   useEffect(() => {
@@ -1046,20 +1202,54 @@ const TranscriptView = ({
             <p className="engine-note">No reliable speaker labels were found.</p>
           )}
         </header>
-        <TranscriptMetadataEditor
-          key={transcript.id}
-          onUpdate={onUpdateMetadata}
-          tags={transcript.tags}
-          title={transcript.title}
-        />
-        {transcript.meetingSummary ? (
+        <details className="transcript-secondary">
+          <summary>
+            <span>Meeting details</span>
+            <span>Edit title and tags</span>
+          </summary>
+          <TranscriptMetadataEditor
+            key={transcript.id}
+            onUpdate={onUpdateMetadata}
+            tags={transcript.tags}
+            title={transcript.title}
+          />
+        </details>
+        <div className="transcript-mode-tabs" aria-label="Meeting view">
+          <button
+            aria-pressed={detailMode === 'summary'}
+            onClick={() => setDetailMode('summary')}
+            type="button"
+          >
+            Summary
+          </button>
+          <button
+            aria-pressed={detailMode === 'transcript'}
+            onClick={() => setDetailMode('transcript')}
+            type="button"
+          >
+            Transcript
+          </button>
+        </div>
+        {detailMode === 'summary' && transcript.meetingSummary ? (
           <MeetingSummaryView
+            connection={localAiConnection}
+            error={localAiError}
+            generating={localAiGenerating}
+            localAiSummary={transcript.localAiMeetingSummary}
+            onGenerate={onGenerateLocalAiSummary}
+            onOpenLocalAi={onOpenLocalAi}
             onSeek={seekTo}
             playbackAvailable={playbackAvailable}
             speakers={transcript.speakerAnalysis?.speakers ?? []}
             summary={transcript.meetingSummary}
           />
+        ) : detailMode === 'summary' ? (
+          <section className="summary-unavailable">
+            <h2>Summary unavailable</h2>
+            <p>This transcript does not contain enough speech to create a meeting summary.</p>
+          </section>
         ) : null}
+        {detailMode === 'transcript' ? (
         <section className="playback" aria-labelledby="playback-title">
           <div className="playback__heading">
             <div>
@@ -1133,12 +1323,21 @@ const TranscriptView = ({
           )}
           {playbackError ? <p className="playback__error" role="alert">{playbackError}</p> : null}
         </section>
+        ) : null}
+        {detailMode === 'transcript' ? (
+          <>
         {transcript.speakerAnalysis?.speakers.length ? (
+          <details className="transcript-secondary transcript-secondary--speakers">
+            <summary>
+              <span>Speakers</span>
+              <span>{transcript.speakerAnalysis.speakers.length} identified</span>
+            </summary>
           <SpeakerEditor
             key={transcript.id}
             onRename={onRenameSpeaker}
             speakers={transcript.speakerAnalysis.speakers}
           />
+          </details>
         ) : null}
         <section className="transcript-find" aria-labelledby="transcript-find-title">
           <div>
@@ -1348,6 +1547,8 @@ const TranscriptView = ({
             })
           )}
         </div>
+          </>
+        ) : null}
       </article>
     ) : (
       <div className="detail-loading">That transcript is no longer available.</div>
@@ -1357,6 +1558,7 @@ const TranscriptView = ({
 };
 
 export const App = () => {
+  const [currentPage, setCurrentPage] = useState<AppPage>('transcripts');
   const [appState, setAppState] = useState<AppState | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<TranscriptDetail | null>(null);
@@ -1366,6 +1568,12 @@ export const App = () => {
   const [isStartingRecording, setIsStartingRecording] = useState(false);
   const [isStoppingRecording, setIsStoppingRecording] = useState(false);
   const [isRepairingPermissions, setIsRepairingPermissions] = useState(false);
+  const [localAiConnection, setLocalAiConnection] =
+    useState<LocalAiConnectionSummary | null>(null);
+  const [localAiGenerating, setLocalAiGenerating] = useState(false);
+  const [localAiError, setLocalAiError] = useState<string | null>(null);
+  const [expectedSpeakerCount, setExpectedSpeakerCount] =
+    useState<ExpectedSpeakerCount>(null);
   const [recordingActionId, setRecordingActionId] = useState<string | null>(null);
   const [recordingTick, setRecordingTick] = useState(() => Date.now());
   const [libraryViewState, setLibraryViewState] =
@@ -1380,6 +1588,9 @@ export const App = () => {
   const recordingChunkQueueRef = useRef<Promise<void>>(Promise.resolve());
   const recordingChunkErrorRef = useRef<string | null>(null);
   const recordingIdRef = useRef<string | null>(null);
+  const recordingExpectedSpeakerCountRef =
+    useRef<ExpectedSpeakerCount>(null);
+  const pendingDictationInsertionRef = useRef<string | null>(null);
   const returnFocusTranscriptIdRef = useRef<string | null>(null);
   const stoppingRecordingRef = useRef(false);
   const desktopStreamRef = useRef<MediaStream | null>(null);
@@ -1414,8 +1625,46 @@ export const App = () => {
   }, [appState?.recording.active]);
 
   useEffect(() => {
+    const job = appState?.activeJob;
+    const pendingRecordingId = pendingDictationInsertionRef.current;
+    if (
+      !window.sotto ||
+      !job ||
+      !pendingRecordingId ||
+      job.recordingId !== pendingRecordingId ||
+      !['completed', 'failed', 'cancelled'].includes(job.stage)
+    ) {
+      return;
+    }
+
+    pendingDictationInsertionRef.current = null;
+    if (job.stage !== 'completed' || !job.transcriptId) return;
+
+    void window.sotto
+      .insertDictationText(job.transcriptId)
+      .then((result) => {
+        if (result.outcome === 'inserted') {
+          setMessage('Dictation inserted at the cursor.');
+        } else if (result.outcome === 'copied' || result.outcome === 'failed') {
+          setMessage(result.reason);
+        } else {
+          setMessage('The dictation transcript could not be found for insertion.');
+        }
+      })
+      .catch(() => {
+        setMessage('Sotto could not insert the dictation. Open Sotto to copy the saved transcript.');
+      });
+  }, [
+    appState?.activeJob?.recordingId,
+    appState?.activeJob?.stage,
+    appState?.activeJob?.transcriptId,
+  ]);
+
+  useEffect(() => {
     if (!selectedId || !window.sotto) {
       setTranscript(null);
+      setLocalAiConnection(null);
+      setLocalAiError(null);
       return undefined;
     }
 
@@ -1438,6 +1687,34 @@ export const App = () => {
       cancelled = true;
     };
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId || currentPage !== 'transcripts' || !window.sotto) {
+      return undefined;
+    }
+    let cancelled = false;
+    setLocalAiConnection(null);
+    window.sotto
+      .getLocalAiConnection()
+      .then((connection) => {
+        if (!cancelled) setLocalAiConnection(connection);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLocalAiConnection({
+            configured: false,
+            baseUrl: '',
+            selectedModel: null,
+            hasApiKey: false,
+            verifiedAt: null,
+          });
+          setLocalAiError('Sotto could not check the Local AI connection.');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPage, selectedId]);
 
   useEffect(() => {
     const transcriptId = returnFocusTranscriptIdRef.current;
@@ -1539,15 +1816,24 @@ export const App = () => {
 
       await cleanupCapture();
       const result = await withTimeout(
-        window.sotto.finishLiveRecording(recordingId),
+        window.sotto.finishLiveRecording(
+          recordingId,
+          recordingExpectedSpeakerCountRef.current,
+        ),
         25_000,
         'Sotto timed out while finalizing the recording. Restart Sotto to check for a recovered saved recording.',
       );
+      if (result.outcome !== 'started' && pendingDictationInsertionRef.current === recordingId) {
+        pendingDictationInsertionRef.current = null;
+      }
       if (result.outcome === 'rejected') setMessage(result.reason);
       if (result.outcome === 'not-found') {
         setMessage('That live recording was already closed.');
       }
     } catch (error) {
+      if (pendingDictationInsertionRef.current === recordingId) {
+        pendingDictationInsertionRef.current = null;
+      }
       await withTimeout(
         window.sotto.cancelLiveRecording(recordingId),
         5_000,
@@ -1561,6 +1847,7 @@ export const App = () => {
       );
     } finally {
       recordingIdRef.current = null;
+      recordingExpectedSpeakerCountRef.current = null;
       recordingStopPromiseRef.current = null;
       recordingChunkQueueRef.current = Promise.resolve();
       recordingChunkErrorRef.current = null;
@@ -1612,6 +1899,11 @@ export const App = () => {
       }
       recordingId = started.recording.id;
       recordingIdRef.current = recordingId;
+      recordingExpectedSpeakerCountRef.current =
+        kind === 'dictation' ? 1 : expectedSpeakerCount;
+      if (kind === 'dictation') {
+        pendingDictationInsertionRef.current = recordingId;
+      }
 
       let desktopStream: MediaStream | null = null;
       if (desktopCapture) {
@@ -1718,6 +2010,9 @@ export const App = () => {
       });
       mediaRecorderRef.current = recorder;
       recorder.start(1_000);
+      if (kind === 'dictation') {
+        await window.sotto.hideForDictation().catch(() => undefined);
+      }
     } catch (error) {
       if (recordingId && window.sotto) {
         await withTimeout(
@@ -1728,6 +2023,10 @@ export const App = () => {
       }
       await cleanupCapture();
       recordingIdRef.current = null;
+      recordingExpectedSpeakerCountRef.current = null;
+      if (pendingDictationInsertionRef.current === recordingId) {
+        pendingDictationInsertionRef.current = null;
+      }
       setMessage(
         kind === 'dictation' && error instanceof Error
           ? error.message
@@ -1806,7 +2105,7 @@ export const App = () => {
     setIsSelecting(true);
 
     try {
-      const result = await window.sotto.importMedia();
+      const result = await window.sotto.importMedia(expectedSpeakerCount);
       if (result.outcome === 'rejected') setMessage(result.reason);
     } catch {
       setMessage('Sotto could not open the recording picker. Please try again.');
@@ -1856,6 +2155,31 @@ export const App = () => {
     }
   };
 
+  const handleGenerateLocalAiSummary = async () => {
+    if (!window.sotto || !selectedId || localAiGenerating) return;
+    setLocalAiError(null);
+    setLocalAiGenerating(true);
+    try {
+      const result = await window.sotto.generateLocalAiMeetingSummary(selectedId);
+      if (result.outcome === 'generated') {
+        setTranscript((current) => current
+          ? {
+              ...current,
+              localAiMeetingSummary: result.localAiMeetingSummary,
+            }
+          : current);
+      } else if (result.outcome === 'not-found') {
+        setLocalAiError('That transcript is no longer available.');
+      } else {
+        setLocalAiError(result.reason);
+      }
+    } catch {
+      setLocalAiError('Sotto could not improve this summary with Local AI.');
+    } finally {
+      setLocalAiGenerating(false);
+    }
+  };
+
   const handleRenameSpeaker = async (
     speakerId: string,
     label: string,
@@ -1873,6 +2197,7 @@ export const App = () => {
       current?.speakerAnalysis
         ? {
             ...current,
+            localAiMeetingSummary: null,
             speakerAnalysis: {
               ...current.speakerAnalysis,
               speakers: current.speakerAnalysis.speakers.map((speaker) =>
@@ -1933,6 +2258,7 @@ export const App = () => {
       ? {
           ...current,
           meetingSummary: result.meetingSummary,
+          localAiMeetingSummary: result.localAiMeetingSummary,
           preview: result.preview,
           text: result.text,
           segments: current.segments.map((segment, index) =>
@@ -1963,6 +2289,35 @@ export const App = () => {
       returnFocusTranscriptIdRef.current = null;
       setSelectedId(null);
       setTranscript(null);
+    }
+  };
+
+  const deleteTranscriptFromLibrary = async (
+    transcriptSummary: TranscriptSummary,
+  ) => {
+    if (!window.sotto) return;
+    const linkedRecording = appState?.recordings.some(
+      (recording) => recording.transcriptId === transcriptSummary.id,
+    );
+    const recordingNote = linkedRecording
+      ? ' The original recording will stay saved and can be transcribed again.'
+      : '';
+    if (
+      !window.confirm(
+        `Delete “${transcriptSummary.title}”?${recordingNote} This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    setMessage(null);
+    try {
+      const result = await window.sotto.deleteTranscript(transcriptSummary.id);
+      if (result.outcome === 'not-found') {
+        setMessage('That transcript is no longer available.');
+      }
+    } catch {
+      setMessage('Sotto could not delete that transcript.');
     }
   };
 
@@ -2010,7 +2365,10 @@ export const App = () => {
     setMessage(null);
     setRecordingActionId(recordingId);
     try {
-      const result = await window.sotto.retryRecording(recordingId);
+      const result = await window.sotto.retryRecording(
+        recordingId,
+        expectedSpeakerCount,
+      );
       if (result.outcome === 'rejected') setMessage(result.reason);
       if (result.outcome === 'not-found') {
         setMessage('That saved recording is no longer available.');
@@ -2071,11 +2429,23 @@ export const App = () => {
     }
   };
 
+  if (currentPage === 'local-ai') {
+    return (
+      <div className="app-shell">
+        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+        <LocalAiSettings />
+      </div>
+    );
+  }
+
   if (selectedId) {
     return (
       <div className="app-shell">
-        <Sidebar />
+        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
         <TranscriptView
+          localAiConnection={localAiConnection}
+          localAiError={localAiError}
+          localAiGenerating={localAiGenerating}
           loading={isLoadingTranscript}
           message={message}
           onBack={() => {
@@ -2089,6 +2459,8 @@ export const App = () => {
           onExportRecording={() => {
             if (transcript?.recordingId) void exportRecording(transcript.recordingId);
           }}
+          onGenerateLocalAiSummary={() => void handleGenerateLocalAiSummary()}
+          onOpenLocalAi={() => setCurrentPage('local-ai')}
           onRenameSpeaker={handleRenameSpeaker}
           onUpdateMetadata={handleUpdateMetadata}
           onUpdateSegment={handleUpdateSegment}
@@ -2100,7 +2472,7 @@ export const App = () => {
 
   return (
     <div className="app-shell">
-      <Sidebar />
+      <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
       <main className="workspace">
         <header className="topbar"><h1>Transcripts</h1></header>
         <section className="intro" aria-labelledby="intro-title">
@@ -2169,6 +2541,35 @@ export const App = () => {
             ) : (
               <p className="import-panel__prompt">Choose a recording with an audio track.</p>
             )}
+
+            {!activeRecording && !running ? (
+              <label className="speaker-count-control">
+                <span>
+                  <strong>Expected speakers</strong>
+                  <small>A known count prevents extra speaker labels.</small>
+                </span>
+                <select
+                  disabled={isSelecting || isStartingRecording || isStoppingRecording}
+                  onChange={(event) => {
+                    const nextValue =
+                      event.target.value === 'auto'
+                        ? null
+                        : Number(event.target.value);
+                    if (isExpectedSpeakerCount(nextValue)) {
+                      setExpectedSpeakerCount(nextValue);
+                    }
+                  }}
+                  value={expectedSpeakerCount ?? 'auto'}
+                >
+                  <option value="auto">Auto</option>
+                  {EXPECTED_SPEAKER_OPTIONS.map((count) => (
+                    <option key={count} value={count}>
+                      {count}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
 
             <button className="button button--primary" disabled={!canImport} onClick={() => void handleImport()} type="button">
               {isSelecting ? <SpinnerIcon className="spinner" /> : <FolderIcon />}
@@ -2241,16 +2642,16 @@ export const App = () => {
             </div>
           </div>
         </section>
-        <SavedRecordingList
+        <MeetingLibrary
           busyId={recordingActionId}
-          onDelete={(recording) => void deleteRecording(recording.id)}
-          onExport={(recording) => void exportRecording(recording.id)}
-          onOpenTranscript={openTranscript}
-          onRetry={(recording) => void retryRecording(recording.id)}
-          recordings={appState?.recordings ?? []}
-        />
-        <TranscriptLibrary
+          onDeleteRecording={(recording) => void deleteRecording(recording.id)}
+          onDeleteTranscript={(transcriptSummary) =>
+            void deleteTranscriptFromLibrary(transcriptSummary)
+          }
+          onExportRecording={(recording) => void exportRecording(recording.id)}
           onOpen={openTranscript}
+          onRetryRecording={(recording) => void retryRecording(recording.id)}
+          recordings={appState?.recordings ?? []}
           onViewStateChange={setLibraryViewState}
           transcripts={appState?.transcripts ?? []}
           viewState={libraryViewState}
@@ -2260,11 +2661,30 @@ export const App = () => {
   );
 };
 
-const Sidebar = () => (
+const Sidebar = ({
+  currentPage,
+  onNavigate,
+}: {
+  currentPage: AppPage;
+  onNavigate: (page: AppPage) => void;
+}) => (
   <aside className="sidebar" aria-label="Sotto navigation">
     <div className="brand"><BrandIcon className="brand__mark" /><span>Sotto</span></div>
     <nav className="navigation" aria-label="Primary">
-      <a className="navigation__item navigation__item--active" href="#transcript-library"><DocumentIcon /><span>Transcripts</span></a>
+      <button
+        className={`navigation__item${currentPage === 'transcripts' ? ' navigation__item--active' : ''}`}
+        onClick={() => onNavigate('transcripts')}
+        type="button"
+      >
+        <DocumentIcon /><span>Transcripts</span>
+      </button>
+      <button
+        className={`navigation__item${currentPage === 'local-ai' ? ' navigation__item--active' : ''}`}
+        onClick={() => onNavigate('local-ai')}
+        type="button"
+      >
+        <ModelIcon /><span>Local AI</span>
+      </button>
     </nav>
     <div className="privacy-note"><LockIcon /><span>Media and transcripts stay on this device.</span></div>
   </aside>

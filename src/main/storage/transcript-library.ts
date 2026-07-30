@@ -1,4 +1,5 @@
 import type { TranscriptLibraryQuery } from '../../shared/contracts';
+import { fingerprintTranscriptForLocalAi } from '../local-ai/local-ai-meeting-summary';
 import { buildMeetingSummary } from '../summarization/meeting-summary';
 import { MAX_RELIABLE_AUTOMATIC_SPEAKERS } from '../transcription/speaker-alignment';
 import type { TranscriptRecord } from '../transcription/transcript-types';
@@ -35,7 +36,11 @@ const searchableSpeakerLabels = (record: TranscriptRecord): string[] =>
     : [];
 
 const searchableMeetingSummaryText = (record: TranscriptRecord): string[] => {
-  const summary = buildMeetingSummary(record);
+  const summary =
+    record.localAiMeetingSummary?.inputFingerprint ===
+    fingerprintTranscriptForLocalAi(record)
+      ? record.localAiMeetingSummary.summary
+      : buildMeetingSummary(record);
   if (!summary) return [];
   return [
     summary.overview,

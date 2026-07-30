@@ -165,6 +165,74 @@ describe('alignTranscriptSpeakers', () => {
     );
   });
 
+  it('repairs a tiny filtered cluster enclosed by strong same-speaker evidence', () => {
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 1_200, text: 'Before glitch after' }],
+      [
+        { startMs: 0, endMs: 500, text: 'Before', segmentIndex: 0 },
+        { startMs: 500, endMs: 650, text: ' glitch', segmentIndex: 0 },
+        { startMs: 650, endMs: 1_200, text: ' after', segmentIndex: 0 },
+      ],
+      [
+        { startMs: 0, endMs: 500, cluster: 0 },
+        { startMs: 500, endMs: 650, cluster: 99 },
+        { startMs: 650, endMs: 1_200, cluster: 0 },
+      ],
+      () => IDS[0],
+    );
+
+    expect(result.speakerAnalysis?.speakers).toHaveLength(1);
+    expect(result.segments.every((segment) => segment.speakerId === IDS[0])).toBe(
+      true,
+    );
+  });
+
+  it('does not absorb a filtered cluster between different reliable speakers', () => {
+    let nextId = 0;
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 1_200, text: 'Alpha glitch bravo' }],
+      [
+        { startMs: 0, endMs: 500, text: 'Alpha', segmentIndex: 0 },
+        { startMs: 500, endMs: 650, text: ' glitch', segmentIndex: 0 },
+        { startMs: 650, endMs: 1_200, text: ' bravo', segmentIndex: 0 },
+      ],
+      [
+        { startMs: 0, endMs: 500, cluster: 0 },
+        { startMs: 500, endMs: 650, cluster: 99 },
+        { startMs: 650, endMs: 1_200, cluster: 1 },
+      ],
+      () => IDS[nextId++],
+    );
+
+    expect(
+      result.segments.find((segment) => segment.text === 'glitch')?.speakerId,
+    ).toBeNull();
+  });
+
+  it('does not move a filtered cluster across a Whisper segment boundary', () => {
+    const result = alignTranscriptSpeakers(
+      [
+        { startMs: 0, endMs: 650, text: 'Before glitch' },
+        { startMs: 700, endMs: 1_200, text: 'After' },
+      ],
+      [
+        { startMs: 0, endMs: 500, text: 'Before', segmentIndex: 0 },
+        { startMs: 500, endMs: 650, text: ' glitch', segmentIndex: 0 },
+        { startMs: 700, endMs: 1_200, text: 'After', segmentIndex: 1 },
+      ],
+      [
+        { startMs: 0, endMs: 500, cluster: 0 },
+        { startMs: 500, endMs: 650, cluster: 99 },
+        { startMs: 700, endMs: 1_200, cluster: 0 },
+      ],
+      () => IDS[0],
+    );
+
+    expect(
+      result.segments.find((segment) => segment.text === 'glitch')?.speakerId,
+    ).toBeNull();
+  });
+
   it('leaves equally overlapping speech unlabeled instead of guessing', () => {
     let nextId = 0;
     const result = alignTranscriptSpeakers(
@@ -178,6 +246,36 @@ describe('alignTranscriptSpeakers', () => {
     );
 
     expect(result.segments[0].speakerId).toBeNull();
+  });
+
+  it('leaves a narrow overlap winner unlabeled instead of guessing', () => {
+    let nextId = 0;
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 1_000, text: 'Hello' }],
+      [{ startMs: 100, endMs: 900, text: ' Hello', segmentIndex: 0 }],
+      [
+        { startMs: 100, endMs: 700, cluster: 0 },
+        { startMs: 350, endMs: 900, cluster: 1 },
+      ],
+      () => IDS[nextId++],
+    );
+
+    expect(result.segments[0].speakerId).toBeNull();
+  });
+
+  it('keeps a clearly dominant overlap winner', () => {
+    let nextId = 0;
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 1_000, text: 'Hello' }],
+      [{ startMs: 100, endMs: 900, text: ' Hello', segmentIndex: 0 }],
+      [
+        { startMs: 100, endMs: 900, cluster: 0 },
+        { startMs: 700, endMs: 900, cluster: 1 },
+      ],
+      () => IDS[nextId++],
+    );
+
+    expect(result.segments[0].speakerId).toBe(IDS[0]);
   });
 
   it('does not recover an overlap tie between matching speaker anchors', () => {

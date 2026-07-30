@@ -6,6 +6,7 @@ import {
   desktopCapturer,
   globalShortcut,
   protocol,
+  safeStorage,
   session,
   shell,
   systemPreferences,
@@ -28,6 +29,7 @@ import { requestMacScreenRecordingAccess } from './main/recording/macos-screen-r
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
 import { TranscriptRepository } from './main/storage/transcript-repository';
 import { createPlaybackResponse } from './main/media/playback-response';
+import { LocalAiConnectionService } from './main/local-ai/local-ai-connection';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -136,7 +138,7 @@ const isTrustedMediaRequester = (
   webContents === mainWindow.webContents &&
   isAllowedNavigation(webContents.getURL());
 
-const createWindow = (): BrowserWindow => {
+const createWindow = (showWhenReady = true): BrowserWindow => {
   const window = new BrowserWindow({
     title: 'Sotto',
     backgroundColor: '#f7f5f1',
@@ -162,7 +164,9 @@ const createWindow = (): BrowserWindow => {
   window.webContents.on('will-navigate', (event, url) => {
     if (!isAllowedNavigation(url)) event.preventDefault();
   });
-  window.once('ready-to-show', () => window.show());
+  if (showWhenReady) {
+    window.once('ready-to-show', () => window.show());
+  }
   window.once('closed', () => {
     if (mainWindow === window) mainWindow = null;
   });
@@ -171,11 +175,8 @@ const createWindow = (): BrowserWindow => {
 };
 
 const requestDictationToggle = (): void => {
-  const window = mainWindow ?? (controller ? createWindow() : null);
+  const window = mainWindow ?? (controller ? createWindow(false) : null);
   if (!window || window.isDestroyed()) return;
-  if (window.isMinimized()) window.restore();
-  window.show();
-  window.focus();
 
   const sendShortcut = (): void => {
     if (!window.isDestroyed()) {
@@ -220,6 +221,23 @@ const initialize = async (): Promise<void> => {
     liveRecordingCapability,
   );
   await controller.initialize();
+  const localAiService = new LocalAiConnectionService({
+    filePath: path.join(app.getPath('userData'), 'local-ai', 'connection.json'),
+    credentialCipher: {
+      encrypt: (value) => {
+        if (!safeStorage.isEncryptionAvailable()) {
+          throw new Error('Secure API-key storage is not available on this computer.');
+        }
+        return safeStorage.encryptString(value).toString('base64');
+      },
+      decrypt: (value) => {
+        if (!safeStorage.isEncryptionAvailable()) {
+          throw new Error('The saved API key cannot be unlocked on this computer.');
+        }
+        return safeStorage.decryptString(Buffer.from(value, 'base64'));
+      },
+    },
+  });
 
   session.defaultSession.protocol.handle('sotto-media', async (request) => {
     if (!controller) return new Response(null, { status: 503 });
@@ -245,6 +263,7 @@ const initialize = async (): Promise<void> => {
 
   removeIpcHandlers = registerDesktopIpc({
     controller,
+    localAiService,
     getMainWindow: () => mainWindow,
     openRecordingSettings,
     requestRecordingPermissions: async () => {

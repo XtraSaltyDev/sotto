@@ -26,7 +26,7 @@ transcript and links every listed point back to its timestamp.
 - Live Teams/system-audio plus microphone capture on macOS 13+ and Windows 11
   x64 (with explicit operating-system recording permissions)
 - Microphone-only dictation toggled with **Command/Ctrl + Shift + D** while
-  Sotto is running
+  Sotto is running, with cursor insertion and a safe clipboard fallback
 - Audio-track detection and duration probing
 - Offline conversion to mono 16 kHz PCM with a minimal, network-disabled FFmpeg
 - English transcription with `whisper.cpp` 1.9.1 and the `small.en` model
@@ -51,6 +51,8 @@ transcript and links every listed point back to its timestamp.
 - One active job at a time, bounded diagnostics, abandoned-job cleanup, and no
   persisted source paths
 - A sandboxed renderer and narrow typed IPC boundary
+- An optional Local AI connection surface for Ollama and private-network
+  OpenAI-compatible endpoints, with model discovery and protected API keys
 - Reproducible, checksummed macOS arm64 and Windows x64 runtime builds
 
 On macOS 13 and newer and Windows 11, **Record live meeting** captures the desktop/system audio
@@ -82,15 +84,22 @@ actionable error and is never modified.
 The transcription model is English-only. Sotto separates voices locally, but
 it cannot read participant names from Teams: labels begin as `Speaker 1`,
 `Speaker 2`, and so on, and apply only within that transcript. Rename them after
-the meeting if desired. Sotto stores no reusable voiceprints. At the end of the
+the meeting if desired. Before importing or recording, **Expected speakers** can
+be left on **Auto** or set from 1 to 12 when the count is known. A known count
+constrains the existing clustering step, which can prevent noisy recordings
+from producing extra speaker labels without running another model pass.
+Microphone-only dictation uses one expected speaker automatically. Sotto stores
+no reusable voiceprints. At the end of the
 local speaker pass, Sotto reviews short timing gaps beside reliable speaker
 turns so slightly delayed detections are less likely to strand their opening
-words. Automatic clustering uses a more conservative merge threshold and only
+words. It also folds a tiny filtered cluster back into a speaker only when
+strong matching turns tightly enclose it within the same transcription turn.
+Automatic clustering uses a more conservative merge threshold and only
 promotes clusters with meaningful word-timing support, capped at 12 reliable
-automatic labels. Tiny fragments become `Unclear` instead of creating dozens
-of phantom speakers. Overlapping speech, very short turns, longer gaps, music,
-and noisy mixed audio can remain labeled `Unclear`; Sotto does not guess when
-timing is still ambiguous.
+automatic labels. Other tiny fragments become `Unclear` instead of creating
+dozens of phantom speakers. Overlapping speech, very short turns, longer gaps,
+music, and noisy mixed audio can remain labeled `Unclear`; Sotto does not guess
+when timing is still ambiguous.
 
 ## Use the current macOS build
 
@@ -181,6 +190,33 @@ retained copy is about 115 MB per hour and is normally much smaller than source
 video; temporary engine output is removed after every terminal job. Failed or
 cancelled imports do not retain a playback copy.
 
+### Local AI connections
+
+Open **Local AI** from the sidebar to connect Ollama or another
+OpenAI-compatible endpoint running on this computer or a private network.
+**Use Ollama default** fills `http://127.0.0.1:11434/v1`. Sotto also accepts
+private IPv4/IPv6 addresses and `.local` hosts, including authenticated LAN
+controllers. Public internet endpoints, credentials embedded in URLs, query
+strings, redirects, and non-HTTP protocols are rejected.
+
+**Connect and find models** makes a bounded, eight-second `GET /v1/models`
+request and validates the OpenAI model-list shape before saving anything. An
+optional bearer key is encrypted through the operating system and the renderer
+only learns whether a key exists; it never receives the saved value. The
+connection file is written atomically with owner-only permissions where the
+operating system supports them. Disconnect removes the saved endpoint and
+encrypted key.
+
+Sotto always creates its own private meeting draft with Key Points, Decisions,
+and Action Items. From a transcript, click **Improve with Local AI** to ask the
+selected model for a richer draft. That action sends the transcript text and
+speaker labels only to the configured endpoint; it does not change the original
+transcript. Sotto maps every generated item back to a real transcript segment,
+so its timestamp and speaker link come from the recording rather than the
+model. The built-in draft remains available for comparison. Editing transcript
+text or a speaker label clears the AI draft so stale results are not shown or
+exported.
+
 For a live Teams call on macOS 13+, complete the Screen & System Audio
 Recording setup above, then click **Record live meeting** before the call
 begins. Approve the microphone prompt if you want your side of the conversation
@@ -268,9 +304,17 @@ revision history.
 Press **Command + Shift + D** on macOS or **Ctrl + Shift + D** on Windows to
 start a microphone-only dictation from anywhere while Sotto is running. Press
 the same shortcut again to stop, save the private recording, and start local
-transcription. Dictation creates a normal saved transcript; it does not type
-into whichever app was previously active. The **Dictate** button provides the
-same flow without the shortcut.
+transcription. Sotto stays in the background and, when transcription finishes,
+inserts the converted text at the cursor in the currently focused app. The
+**Dictate** button starts the same flow and hides Sotto so you can place the
+cursor in the destination app before stopping.
+
+On macOS, automatic insertion requires Sotto under **Privacy & Security →
+Accessibility** because the operating system protects simulated paste actions.
+If access is missing, or if Windows cannot send the paste action, Sotto leaves
+the completed text on the clipboard and keeps the normal saved transcript so
+nothing is lost. Paste it manually with **Command+V** or **Ctrl+V**. Cursor
+insertion replaces the current clipboard text with the completed dictation.
 
 Each transcript includes a local draft summary. Sotto selects exact transcript
 sentences for the overview and key points and recognizes clear decision and
@@ -333,8 +377,9 @@ The summary and minutes remain extractive: short transcripts may have a sparse
 overview, and decisions or action items appear only when the saved wording
 matches Sotto's local rules. Timestamp references point to the start of the
 supporting transcript sentence, not a new factual claim. Export stays on the
-device, but anything copied to the operating-system clipboard can be read by
-other local applications according to the operating system's clipboard rules.
+device, but anything copied to the operating-system clipboard—including text
+placed there for cursor dictation—can be read by other local applications
+according to the operating system's clipboard rules.
 
 Each saved live recording has its own private directory containing
 `recording.webm` and atomic, schema-validated `metadata.json`. Directories use
@@ -591,8 +636,10 @@ installer also needs Authenticode code signing and an install/upgrade test.
    scope.
 4. Evaluate speaker-label quality on representative multi-person Teams meetings
    and rebuild the native speaker runtime for older macOS versions if needed.
+5. Add cancellation and a pre-send transcript preview to the Local AI summary
+   action.
 
-Cloud sync, accounts, an updater, and generative summarization remain
+Cloud sync, accounts, an updater, and internet-hosted summarization remain
 intentionally out of scope.
 
 ## Primary references

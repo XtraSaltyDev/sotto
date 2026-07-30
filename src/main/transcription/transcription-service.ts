@@ -2,10 +2,12 @@ import { mkdir, readdir, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { availableParallelism as readAvailableParallelism } from 'node:os';
 import path from 'node:path';
 
-import type {
-  TranscriptionErrorCode,
-  TranscriptionJobSnapshot,
-  TranscriptionStage,
+import {
+  isExpectedSpeakerCount,
+  type ExpectedSpeakerCount,
+  type TranscriptionErrorCode,
+  type TranscriptionJobSnapshot,
+  type TranscriptionStage,
 } from '../../shared/contracts';
 import { normalizeMediaToWav, MediaNormalizationError } from '../media/media-normalizer';
 import { MediaProbeError, probeMedia } from '../media/media-probe';
@@ -141,7 +143,13 @@ export class LocalTranscriptionService {
     return this.activeJob ? snapshot(this.activeJob) : null;
   }
 
-  async start(media: SelectedMedia): Promise<TranscriptionJobSnapshot> {
+  async start(
+    media: SelectedMedia,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
+  ): Promise<TranscriptionJobSnapshot> {
+    if (!isExpectedSpeakerCount(expectedSpeakerCount)) {
+      throw new TypeError('Expected speaker count must be Auto or an integer from 1 to 12.');
+    }
     if (this.activeJob && isActiveStage(this.activeJob.stage)) {
       throw new TranscriptionStartError('busy', 'Another recording is already being transcribed.');
     }
@@ -172,7 +180,12 @@ export class LocalTranscriptionService {
     this.activeAbortController = controller;
     this.publish();
 
-    this.activeTask = this.execute(job, media, controller.signal).finally(() => {
+    this.activeTask = this.execute(
+      job,
+      media,
+      expectedSpeakerCount,
+      controller.signal,
+    ).finally(() => {
       if (this.activeJob?.id === id) {
         this.activeAbortController = null;
       }
@@ -224,6 +237,7 @@ export class LocalTranscriptionService {
   private async execute(
     job: TranscriptionJobSnapshot,
     media: SelectedMedia,
+    expectedSpeakerCount: ExpectedSpeakerCount,
     signal: AbortSignal,
   ): Promise<void> {
     const jobDirectory = path.join(this.options.jobsRoot, job.id);
@@ -279,6 +293,7 @@ export class LocalTranscriptionService {
             segmentationModelPath: speakerRuntime.segmentationModelPath,
             embeddingModelPath: speakerRuntime.embeddingModelPath,
             modulePath: speakerRuntime.modulePath,
+            expectedSpeakerCount,
             signal,
           });
         } catch (error) {
@@ -332,6 +347,7 @@ export class LocalTranscriptionService {
         speakerAnalysis: aligned.speakerAnalysis,
         text: normalized.text,
         segments: aligned.segments,
+        localAiMeetingSummary: null,
       };
       let retainedPlayback = false;
       try {

@@ -15,6 +15,7 @@ import type {
   SavedRecordingSummary,
 } from '../shared/contracts';
 import type { SelectedMedia } from './media/media-import';
+import { LocalAiConnectionService } from './local-ai/local-ai-connection';
 import { RecordingRepository } from './recording/recording-repository';
 import { RECORDING_METADATA_SCHEMA_VERSION } from './recording/recording-metadata';
 import { resolveEngineRuntime } from './runtime/engine-runtime';
@@ -413,6 +414,12 @@ describe('transcript presentation', () => {
     await expect(
       controller.getTranscriptCopyText(record.id, 'meeting-minutes'),
     ).resolves.toContain('Teams planning meeting');
+    await expect(controller.getDictationText(record.id)).resolves.toBe(
+      record.text,
+    );
+    await expect(
+      controller.getDictationText('5f04a88f-5f68-4ff8-a6e3-bc58414087b2'),
+    ).resolves.toBeNull();
     await controller.dispose();
   });
 
@@ -441,6 +448,7 @@ describe('transcript presentation', () => {
       },
       text: 'Corrected first item. Second item.',
       preview: 'Corrected first item. Second item.',
+      localAiMeetingSummary: null,
       meetingSummary: expect.objectContaining({
         overview: 'Corrected first item. Second item.',
       }),
@@ -450,6 +458,79 @@ describe('transcript presentation', () => {
     );
     await expect(controller.getTranscriptExport(record.id, 'txt')).resolves.toMatchObject({
       content: expect.stringContaining('[0:00] Corrected first item.'),
+    });
+    await controller.dispose();
+  });
+
+  it('generates, persists, presents, and exports a Local AI meeting draft', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-local-ai-summary-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    await repository.save(record);
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/models')) {
+        return new Response(JSON.stringify({
+          data: [{ id: 'gemma3:4b', object: 'model', owned_by: 'library' }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              overview: 'The team reviewed two agenda items.',
+              keyPoints: [{ segmentIndex: 1, text: 'The second item was discussed.' }],
+              decisions: [],
+              actionItems: [],
+            }),
+          },
+        }],
+      }), { status: 200 });
+    });
+    const localAiService = new LocalAiConnectionService({
+      filePath: path.join(root, 'local-ai', 'connection.json'),
+      credentialCipher: {
+        encrypt: (value) => value,
+        decrypt: (value) => value,
+      },
+      fetcher: fetcher as typeof fetch,
+      now: () => new Date('2026-07-29T20:00:00.000Z'),
+    });
+    await expect(localAiService.connect({
+      baseUrl: 'http://127.0.0.1:11434',
+      selectedModel: 'gemma3:4b',
+    })).resolves.toMatchObject({ outcome: 'connected' });
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    await expect(
+      controller.generateLocalAiMeetingSummary(record.id, localAiService),
+    ).resolves.toMatchObject({
+      outcome: 'generated',
+      localAiMeetingSummary: {
+        model: 'gemma3:4b',
+        summary: {
+          overview: 'The team reviewed two agenda items.',
+          keyPoints: [{
+            text: 'The second item was discussed.',
+            startMs: 3_660_000,
+            speakerId: null,
+          }],
+        },
+      },
+    });
+    await expect(controller.getTranscript(record.id)).resolves.toMatchObject({
+      localAiMeetingSummary: {
+        model: 'gemma3:4b',
+        summary: { overview: 'The team reviewed two agenda items.' },
+      },
+    });
+    await expect(controller.getTranscriptExport(record.id, 'txt')).resolves.toMatchObject({
+      content: expect.stringContaining('The team reviewed two agenda items.'),
     });
     await controller.dispose();
   });

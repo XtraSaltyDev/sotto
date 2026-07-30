@@ -11,6 +11,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { fingerprintTranscriptForLocalAi } from '../local-ai/local-ai-meeting-summary';
 import {
   LEGACY_TRANSCRIPT_SCHEMA_VERSION,
   MAX_SPEAKER_LABEL_CHARACTERS,
@@ -566,6 +567,62 @@ describe('TranscriptRepository', () => {
         record.segments[1],
       ],
     });
+  });
+
+  it('persists a grounded Local AI draft and invalidates it after transcript edits', async () => {
+    const record = createSpeakerRecord();
+    await repository.save(record);
+    const fingerprint = fingerprintTranscriptForLocalAi(record);
+
+    await expect(repository.saveLocalAiMeetingSummary(record.id, {
+      model: 'gemma3:4b',
+      generatedAt: '2026-07-29T20:00:00.000Z',
+      summary: {
+        overview: 'The group reviewed Sotto privacy.',
+        keyPoints: [{
+          text: 'Sotto stays private.',
+          startMs: 1_250,
+          speakerId: SECOND_SPEAKER_ID,
+        }],
+        decisions: [],
+        actionItems: [],
+      },
+    }, fingerprint)).resolves.toMatchObject({
+      outcome: 'saved',
+      record: {
+        localAiMeetingSummary: {
+          model: 'gemma3:4b',
+          inputFingerprint: fingerprint,
+        },
+      },
+    });
+
+    await repository.updateMetadata(record.id, { title: 'Private review' });
+    await expect(repository.get(record.id)).resolves.toMatchObject({
+      title: 'Private review',
+      localAiMeetingSummary: { inputFingerprint: fingerprint },
+    });
+
+    await repository.updateSegmentText(record.id, 0, 'Corrected welcome.');
+    expect((await repository.get(record.id))?.localAiMeetingSummary).toBeUndefined();
+  });
+
+  it('refuses to save a Local AI draft when its transcript fingerprint is stale', async () => {
+    const record = createSpeakerRecord();
+    await repository.save(record);
+    const fingerprint = fingerprintTranscriptForLocalAi(record);
+    await repository.updateSegmentText(record.id, 0, 'Corrected welcome.');
+
+    await expect(repository.saveLocalAiMeetingSummary(record.id, {
+      model: 'gemma3:4b',
+      generatedAt: '2026-07-29T20:00:00.000Z',
+      summary: {
+        overview: 'A stale draft.',
+        keyPoints: [],
+        decisions: [],
+        actionItems: [],
+      },
+    }, fingerprint)).resolves.toEqual({ outcome: 'stale' });
   });
 
   it('rejects empty corrections and missing segment indexes without rewriting', async () => {

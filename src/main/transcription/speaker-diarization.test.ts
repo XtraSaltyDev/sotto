@@ -110,7 +110,12 @@ describe('speaker diarization child process', () => {
     const options = await makeChildOptions(`
       exports.readWave = () => ({ sampleRate: 16000, samples: new Float32Array([0]) });
       exports.OfflineSpeakerDiarization = class {
-        constructor() { this.sampleRate = 16000; }
+        constructor(options) {
+          if (options.clustering.numClusters !== -1) {
+            throw new Error('automatic clustering was not preserved');
+          }
+          this.sampleRate = 16000;
+        }
         process() { return [{ start: 1.25, end: 2.5, speaker: 3 }]; }
       };
     `);
@@ -118,6 +123,25 @@ describe('speaker diarization child process', () => {
     await expect(runSpeakerDiarization(options)).resolves.toEqual([
       { startMs: 1_250, endMs: 2_500, cluster: 3 },
     ]);
+  });
+
+  it('uses a fixed cluster count when the expected speakers are known', async () => {
+    const options = await makeChildOptions(`
+      exports.readWave = () => ({ sampleRate: 16000, samples: new Float32Array([0]) });
+      exports.OfflineSpeakerDiarization = class {
+        constructor(options) {
+          if (options.clustering.numClusters !== 3) {
+            throw new Error('fixed cluster count was not forwarded');
+          }
+          this.sampleRate = 16000;
+        }
+        process() { return []; }
+      };
+    `);
+
+    await expect(
+      runSpeakerDiarization({ ...options, expectedSpeakerCount: 3 }),
+    ).resolves.toEqual([]);
   });
 
   it('contains a child crash and reports it as an unavailable speaker pass', async () => {
@@ -178,6 +202,14 @@ describe('speaker diarization child process', () => {
     await expect(
       runSpeakerDiarization({ ...options, timeoutMs: 0 }),
     ).rejects.toThrow('positive safe integer');
+  });
+
+  it('rejects an invalid expected speaker count before launching a child', async () => {
+    const options = await makeChildOptions('');
+
+    await expect(
+      runSpeakerDiarization({ ...options, expectedSpeakerCount: 0 as never }),
+    ).rejects.toThrow('integer from 1 to 12');
   });
 
   it('kills a child whose JSON output exceeds the protocol bound', async () => {

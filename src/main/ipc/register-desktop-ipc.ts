@@ -1,25 +1,36 @@
 import { lstat } from 'node:fs/promises';
 
 import {
+  app,
   BrowserWindow,
   clipboard,
   dialog,
   ipcMain,
+  Notification,
+  systemPreferences,
   type IpcMainInvokeEvent,
 } from 'electron';
 
 import {
   IPC_CHANNELS,
+  isExpectedSpeakerCount,
   type AppendLiveRecordingChunkResult,
   type CancelLiveRecordingResult,
+  type ConnectLocalAiInput,
+  type ConnectLocalAiResult,
   type CopyTranscriptOutputResult,
   type DeleteRecordingResult,
   type DeletePlaybackResult,
   type DeleteTranscriptResult,
+  type DisconnectLocalAiResult,
   type ExportRecordingResult,
   type ExportTranscriptResult,
+  type ExpectedSpeakerCount,
   type FinishLiveRecordingResult,
+  type GenerateLocalAiMeetingSummaryResult,
   type ImportMediaResult,
+  type InsertDictationTextResult,
+  type LocalAiConnectionSummary,
   type OpenRecordingSettingsResult,
   type RecordingKind,
   type RetryRecordingResult,
@@ -52,6 +63,8 @@ import {
 } from '../recording/live-recording-service';
 import { copyRecordingForExport } from '../recording/recording-export';
 import { writeTranscriptExport } from '../export/transcript-export';
+import { insertTextAtCursor } from '../dictation/cursor-insertion';
+import type { LocalAiConnectionService } from '../local-ai/local-ai-connection';
 import {
   isTranscriptCopyKind,
   isTranscriptExportFormat,
@@ -61,12 +74,36 @@ import {
 
 export interface DesktopIpcOptions {
   controller: AppController;
+  localAiService: LocalAiConnectionService;
   getMainWindow: () => BrowserWindow | null;
   openRecordingSettings: () => Promise<void>;
   requestRecordingPermissions: () => Promise<
     'native-requested' | 'settings-opened'
   >;
 }
+
+const EXPECTED_SPEAKER_COUNT_REASON =
+  'Choose Auto or an expected speaker count from 1 to 12.';
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const notifyDictationFallback = (reason: string): void => {
+  if (!Notification.isSupported()) return;
+  new Notification({
+    title: 'Sotto dictation saved',
+    body: reason,
+  }).show();
+};
+
+const parseExpectedSpeakerCount = (
+  value: unknown,
+): { ok: true; value: ExpectedSpeakerCount } | { ok: false } => {
+  const normalized = value === undefined ? null : value;
+  return isExpectedSpeakerCount(normalized)
+    ? { ok: true, value: normalized }
+    : { ok: false };
+};
 
 const assertTrustedSender = (
   event: IpcMainInvokeEvent,
@@ -180,6 +217,7 @@ const asChunk = (value: unknown): Uint8Array | null => {
 
 export const registerDesktopIpc = ({
   controller,
+  localAiService,
   getMainWindow,
   openRecordingSettings,
   requestRecordingPermissions,
@@ -191,6 +229,49 @@ export const registerDesktopIpc = ({
     trust(event);
     return controller.getState();
   });
+
+  ipcMain.handle(
+    IPC_CHANNELS.getLocalAiConnection,
+    async (event): Promise<LocalAiConnectionSummary> => {
+      trust(event);
+      return localAiService.getSummary();
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.connectLocalAi,
+    async (event, input: unknown): Promise<ConnectLocalAiResult> => {
+      trust(event);
+      if (!isRecord(input)) {
+        return { outcome: 'rejected', reason: 'Enter a local AI connection.' };
+      }
+      return localAiService.connect(input as unknown as ConnectLocalAiInput);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.disconnectLocalAi,
+    async (event): Promise<DisconnectLocalAiResult> => {
+      trust(event);
+      await localAiService.disconnect();
+      return { outcome: 'disconnected' };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.generateLocalAiMeetingSummary,
+    async (
+      event,
+      transcriptId: unknown,
+    ): Promise<GenerateLocalAiMeetingSummaryResult> => {
+      trust(event);
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      return controller.generateLocalAiMeetingSummary(
+        transcriptId,
+        localAiService,
+      );
+    },
+  );
 
   ipcMain.handle(
     IPC_CHANNELS.openRecordingSettings,
@@ -235,8 +316,21 @@ export const registerDesktopIpc = ({
 
   ipcMain.handle(
     IPC_CHANNELS.importMedia,
-    async (event): Promise<ImportMediaResult> => {
+    async (
+      event,
+      rawExpectedSpeakerCount: unknown,
+    ): Promise<ImportMediaResult> => {
       const window = trust(event);
+      const expectedSpeakerCount = parseExpectedSpeakerCount(
+        rawExpectedSpeakerCount,
+      );
+      if (!expectedSpeakerCount.ok) {
+        return {
+          outcome: 'rejected',
+          reason: EXPECTED_SPEAKER_COUNT_REASON,
+          code: 'invalid-media',
+        };
+      }
       const selection = await dialog.showOpenDialog(window, {
         buttonLabel: 'Import Recording',
         filters: [
@@ -276,7 +370,10 @@ export const registerDesktopIpc = ({
           };
         }
 
-        const job = await controller.startTranscription(validation.media);
+        const job = await controller.startTranscription(
+          validation.media,
+          expectedSpeakerCount.value,
+        );
         return { outcome: 'started', job };
       } catch (error) {
         if (error instanceof TranscriptionStartError) {
@@ -362,13 +459,30 @@ export const registerDesktopIpc = ({
 
   ipcMain.handle(
     IPC_CHANNELS.finishLiveRecording,
-    async (event, recordingId: unknown): Promise<FinishLiveRecordingResult> => {
+    async (
+      event,
+      recordingId: unknown,
+      rawExpectedSpeakerCount: unknown,
+    ): Promise<FinishLiveRecordingResult> => {
       trust(event);
       if (!isTranscriptId(recordingId)) return { outcome: 'not-found' };
+      const expectedSpeakerCount = parseExpectedSpeakerCount(
+        rawExpectedSpeakerCount,
+      );
+      if (!expectedSpeakerCount.ok) {
+        return {
+          outcome: 'rejected',
+          reason: EXPECTED_SPEAKER_COUNT_REASON,
+          code: 'invalid-media',
+        };
+      }
       try {
         return {
           outcome: 'started',
-          job: await controller.finishLiveRecording(recordingId),
+          job: await controller.finishLiveRecording(
+            recordingId,
+            expectedSpeakerCount.value,
+          ),
         };
       } catch (error) {
         if (error instanceof LiveRecordingError || error instanceof TranscriptionStartError) {
@@ -395,11 +509,28 @@ export const registerDesktopIpc = ({
 
   ipcMain.handle(
     IPC_CHANNELS.retryRecording,
-    async (event, recordingId: unknown): Promise<RetryRecordingResult> => {
+    async (
+      event,
+      recordingId: unknown,
+      rawExpectedSpeakerCount: unknown,
+    ): Promise<RetryRecordingResult> => {
       trust(event);
       if (!isTranscriptId(recordingId)) return { outcome: 'not-found' };
+      const expectedSpeakerCount = parseExpectedSpeakerCount(
+        rawExpectedSpeakerCount,
+      );
+      if (!expectedSpeakerCount.ok) {
+        return {
+          outcome: 'rejected',
+          reason: EXPECTED_SPEAKER_COUNT_REASON,
+          code: 'invalid-media',
+        };
+      }
       try {
-        const job = await controller.retryRecording(recordingId);
+        const job = await controller.retryRecording(
+          recordingId,
+          expectedSpeakerCount.value,
+        );
         return job
           ? { outcome: 'started', job }
           : { outcome: 'not-found' };
@@ -700,6 +831,50 @@ export const registerDesktopIpc = ({
     },
   );
 
+  ipcMain.handle(
+    IPC_CHANNELS.insertDictationText,
+    async (
+      event,
+      id: unknown,
+    ): Promise<InsertDictationTextResult> => {
+      trust(event);
+      if (!isTranscriptId(id)) return { outcome: 'not-found' };
+
+      try {
+        const text = await controller.getDictationText(id);
+        if (text === null) return { outcome: 'not-found' };
+        const result = await insertTextAtCursor(text, {
+          platform: process.platform,
+          windowsRoot: process.env.SystemRoot,
+          writeClipboardText: (value) => clipboard.writeText(value),
+          isMacAccessibilityTrusted: () =>
+            process.platform === 'darwin' &&
+            systemPreferences.isTrustedAccessibilityClient(true),
+        });
+        if (result.outcome === 'copied' || result.outcome === 'failed') {
+          notifyDictationFallback(result.reason);
+        }
+        return result;
+      } catch {
+        const result: InsertDictationTextResult = {
+          outcome: 'failed',
+          reason: 'Sotto could not prepare the completed dictation for insertion.',
+        };
+        notifyDictationFallback(result.reason);
+        return result;
+      }
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.hideForDictation, (event): void => {
+    const window = trust(event);
+    if (process.platform === 'darwin') {
+      app.hide();
+    } else {
+      window.hide();
+    }
+  });
+
   const unsubscribe = controller.subscribe((state) => {
     const window = getMainWindow();
     if (window && !window.isDestroyed()) {
@@ -711,6 +886,10 @@ export const registerDesktopIpc = ({
     unsubscribe();
     for (const channel of [
       IPC_CHANNELS.getAppState,
+      IPC_CHANNELS.getLocalAiConnection,
+      IPC_CHANNELS.connectLocalAi,
+      IPC_CHANNELS.disconnectLocalAi,
+      IPC_CHANNELS.generateLocalAiMeetingSummary,
       IPC_CHANNELS.importMedia,
       IPC_CHANNELS.startLiveRecording,
       IPC_CHANNELS.appendLiveRecordingChunk,
@@ -731,6 +910,8 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.deletePlayback,
       IPC_CHANNELS.exportTranscript,
       IPC_CHANNELS.copyTranscriptOutput,
+      IPC_CHANNELS.insertDictationText,
+      IPC_CHANNELS.hideForDictation,
     ]) {
       ipcMain.removeHandler(channel);
     }

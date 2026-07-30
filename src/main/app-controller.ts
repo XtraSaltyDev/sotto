@@ -3,6 +3,8 @@ import path from 'node:path';
 import type {
   AppState,
   AppendLiveRecordingChunkResult,
+  ExpectedSpeakerCount,
+  GenerateLocalAiMeetingSummaryResult,
   LiveRecordingCapability,
   LiveRecordingSnapshot,
   RecordingKind,
@@ -19,6 +21,7 @@ import type {
   UpdateTranscriptSegmentResult,
   TranscriptExportFormat,
   TranscriptionJobSnapshot,
+  LocalAiMeetingSummary,
 } from '../shared/contracts';
 import type { SelectedMedia } from './media/media-import';
 import {
@@ -47,6 +50,8 @@ import {
 } from './export/transcript-useful-output';
 import { buildMeetingSummary } from './summarization/meeting-summary';
 import { MAX_RELIABLE_AUTOMATIC_SPEAKERS } from './transcription/speaker-alignment';
+import type { LocalAiConnectionService } from './local-ai/local-ai-connection';
+import { fingerprintTranscriptForLocalAi } from './local-ai/local-ai-meeting-summary';
 
 type StateListener = (state: AppState) => void;
 export type LiveRecordingCapabilitySource =
@@ -117,6 +122,27 @@ const withReliableSpeakerPresentation = (
 
 export const toTranscriptDetail = (record: TranscriptRecord): TranscriptDetail => {
   const presented = withReliableSpeakerPresentation(record);
+  const localAiMeetingSummary =
+    presented.localAiMeetingSummary &&
+    presented.localAiMeetingSummary.inputFingerprint ===
+      fingerprintTranscriptForLocalAi(record)
+      ? {
+          summary: {
+            ...presented.localAiMeetingSummary.summary,
+            keyPoints: presented.localAiMeetingSummary.summary.keyPoints.map(
+              (item) => ({ ...item }),
+            ),
+            decisions: presented.localAiMeetingSummary.summary.decisions.map(
+              (item) => ({ ...item }),
+            ),
+            actionItems: presented.localAiMeetingSummary.summary.actionItems.map(
+              (item) => ({ ...item }),
+            ),
+          },
+          model: presented.localAiMeetingSummary.model,
+          generatedAt: presented.localAiMeetingSummary.generatedAt,
+        }
+      : null;
   return {
     ...toTranscriptSummary(presented),
     completedAt: presented.completedAt,
@@ -128,6 +154,7 @@ export const toTranscriptDetail = (record: TranscriptRecord): TranscriptDetail =
       }),
     ),
     meetingSummary: buildMeetingSummary(presented),
+    localAiMeetingSummary,
     playback: { state: 'unavailable', reason: 'not-retained' },
     speakerAnalysis: presented.speakerAnalysis
       ? {
@@ -151,9 +178,12 @@ const formatTimestamp = (milliseconds: number): string => {
     : `${minutes}:${String(seconds).padStart(2, '0')}`;
 };
 
-export const formatTranscriptForExport = (record: TranscriptRecord): string => {
+export const formatTranscriptForExport = (
+  record: TranscriptRecord,
+  selectedSummary?: TranscriptDetail['meetingSummary'],
+): string => {
   const presented = withReliableSpeakerPresentation(record);
-  const meetingSummary = buildMeetingSummary(presented);
+  const meetingSummary = selectedSummary ?? buildMeetingSummary(presented);
   const speakerLabels = new Map(
     presented.speakerAnalysis?.speakers.map((speaker) => [speaker.id, speaker.label]) ?? [],
   );
@@ -306,7 +336,10 @@ export class AppController {
     };
   }
 
-  async startTranscription(media: SelectedMedia): Promise<TranscriptionJobSnapshot> {
+  async startTranscription(
+    media: SelectedMedia,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
+  ): Promise<TranscriptionJobSnapshot> {
     const service = this.service;
     if (!service) {
       throw new TranscriptionStartError(
@@ -315,7 +348,9 @@ export class AppController {
       );
     }
 
-    return this.runTranscriptionStart(() => service.start(media));
+    return this.runTranscriptionStart(() =>
+      service.start(media, expectedSpeakerCount),
+    );
   }
 
   async startLiveRecording(
@@ -363,7 +398,10 @@ export class AppController {
     return this.recordingService.append(recordingId, chunk);
   }
 
-  async finishLiveRecording(recordingId: string): Promise<TranscriptionJobSnapshot> {
+  async finishLiveRecording(
+    recordingId: string,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
+  ): Promise<TranscriptionJobSnapshot> {
     if (this.finalizingRecordingId !== null) {
       throw new LiveRecordingError(
         'busy',
@@ -383,6 +421,7 @@ export class AppController {
       return await this.startRecordingTranscription(
         normalizedRecordingId,
         media,
+        expectedSpeakerCount,
         true,
       );
     } finally {
@@ -403,6 +442,7 @@ export class AppController {
 
   async retryRecording(
     recordingId: string,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
   ): Promise<TranscriptionJobSnapshot | null> {
     this.assertNoLiveRecordingForTranscription();
     await this.recordingUpdateChain;
@@ -421,7 +461,7 @@ export class AppController {
 
     const media = await this.recordingService.getMediaForTranscription(recordingId);
     return media
-      ? this.startRecordingTranscription(recordingId, media)
+      ? this.startRecordingTranscription(recordingId, media, expectedSpeakerCount)
       : null;
   }
 
@@ -514,7 +554,9 @@ export class AppController {
     const record = await this.repository.getAfterPendingMutations(id);
     if (!record) return null;
     const presented = withReliableSpeakerPresentation(record);
-    const summary = buildMeetingSummary(presented);
+    const summary =
+      toTranscriptDetail(presented).localAiMeetingSummary?.summary ??
+      buildMeetingSummary(presented);
     let content: string | Buffer;
     switch (format) {
       case 'docx':
@@ -533,7 +575,7 @@ export class AppController {
         content = await createMeetingMinutesDocx(presented, summary);
         break;
       case 'txt':
-        content = formatTranscriptForExport(presented);
+        content = formatTranscriptForExport(presented, summary);
         break;
     }
     return {
@@ -551,9 +593,63 @@ export class AppController {
     const presented = withReliableSpeakerPresentation(record);
     return formatTranscriptCopyText(
       presented,
-      buildMeetingSummary(presented),
+      toTranscriptDetail(presented).localAiMeetingSummary?.summary ??
+        buildMeetingSummary(presented),
       kind,
     );
+  }
+
+  async generateLocalAiMeetingSummary(
+    id: string,
+    localAiService: LocalAiConnectionService,
+  ): Promise<GenerateLocalAiMeetingSummaryResult> {
+    const record = await this.repository.getAfterPendingMutations(id);
+    if (!record) return { outcome: 'not-found' };
+    const fingerprint = fingerprintTranscriptForLocalAi(record);
+    try {
+      const generated = await localAiService.generateMeetingSummary(
+        withReliableSpeakerPresentation(record),
+      );
+      const saved = await this.repository.saveLocalAiMeetingSummary(
+        id,
+        generated,
+        fingerprint,
+      );
+      if (saved.outcome === 'not-found') return { outcome: 'not-found' };
+      if (saved.outcome === 'stale') {
+        return {
+          outcome: 'rejected',
+          reason:
+            'The transcript changed while Local AI was working. Generate the summary again.',
+        };
+      }
+      await this.reloadTranscripts();
+      this.emit();
+      const localAiMeetingSummary: LocalAiMeetingSummary = {
+        summary: {
+          ...generated.summary,
+          keyPoints: generated.summary.keyPoints.map((item) => ({ ...item })),
+          decisions: generated.summary.decisions.map((item) => ({ ...item })),
+          actionItems: generated.summary.actionItems.map((item) => ({ ...item })),
+        },
+        model: generated.model,
+        generatedAt: generated.generatedAt,
+      };
+      return { outcome: 'generated', localAiMeetingSummary };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Sotto could not improve this summary with the local model.',
+      };
+    }
+  }
+
+  async getDictationText(id: string): Promise<string | null> {
+    const record = await this.repository.getAfterPendingMutations(id);
+    return record?.text.trim() || null;
   }
 
   async renameTranscriptSpeaker(
@@ -633,6 +729,7 @@ export class AppController {
         text: result.record.text,
         preview: previewFor(result.record.text),
         meetingSummary: buildMeetingSummary(result.record),
+        localAiMeetingSummary: null,
       };
     } catch (error) {
       return {
@@ -787,6 +884,7 @@ export class AppController {
   private async startRecordingTranscription(
     recordingId: string,
     media: SelectedMedia,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
     allowFinalizationHandoff = false,
   ): Promise<TranscriptionJobSnapshot> {
     const service = this.service;
@@ -808,7 +906,7 @@ export class AppController {
       await this.reloadRecordings();
       this.emit();
       try {
-        return await service.start(media);
+        return await service.start(media, expectedSpeakerCount);
       } catch (error) {
         const code =
           error instanceof TranscriptionStartError

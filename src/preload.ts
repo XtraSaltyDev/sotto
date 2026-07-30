@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   IPC_CHANNELS,
   type AppState,
+  type ConnectLocalAiInput,
+  type ExpectedSpeakerCount,
   type RecordingKind,
   type SottoDesktopApi,
   type TranscriptCopyKind,
@@ -12,7 +14,8 @@ import {
 
 const api: SottoDesktopApi = Object.freeze({
   getAppState: () => ipcRenderer.invoke(IPC_CHANNELS.getAppState),
-  importMedia: () => ipcRenderer.invoke(IPC_CHANNELS.importMedia),
+  importMedia: (expectedSpeakerCount: ExpectedSpeakerCount = null) =>
+    ipcRenderer.invoke(IPC_CHANNELS.importMedia, expectedSpeakerCount),
   startLiveRecording: (kind: RecordingKind = 'meeting') =>
     ipcRenderer.invoke(IPC_CHANNELS.startLiveRecording, kind),
   appendLiveRecordingChunk: (recordingId: string, chunk: ArrayBuffer) =>
@@ -21,12 +24,26 @@ const api: SottoDesktopApi = Object.freeze({
       recordingId,
       chunk,
     ),
-  finishLiveRecording: (recordingId: string) =>
-    ipcRenderer.invoke(IPC_CHANNELS.finishLiveRecording, recordingId),
+  finishLiveRecording: (
+    recordingId: string,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.finishLiveRecording,
+      recordingId,
+      expectedSpeakerCount,
+    ),
   cancelLiveRecording: (recordingId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.cancelLiveRecording, recordingId),
-  retryRecording: (recordingId: string) =>
-    ipcRenderer.invoke(IPC_CHANNELS.retryRecording, recordingId),
+  retryRecording: (
+    recordingId: string,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.retryRecording,
+      recordingId,
+      expectedSpeakerCount,
+    ),
   deleteRecording: (recordingId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.deleteRecording, recordingId),
   exportRecording: (recordingId: string) =>
@@ -80,6 +97,21 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.exportTranscript, transcriptId, format),
   copyTranscriptOutput: (transcriptId: string, kind: TranscriptCopyKind) =>
     ipcRenderer.invoke(IPC_CHANNELS.copyTranscriptOutput, transcriptId, kind),
+  insertDictationText: (transcriptId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.insertDictationText, transcriptId),
+  hideForDictation: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.hideForDictation),
+  getLocalAiConnection: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getLocalAiConnection),
+  connectLocalAi: (input: ConnectLocalAiInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.connectLocalAi, input),
+  disconnectLocalAi: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.disconnectLocalAi),
+  generateLocalAiMeetingSummary: (transcriptId: string) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.generateLocalAiMeetingSummary,
+      transcriptId,
+    ),
   onDictationShortcut: (listener: () => void) => {
     const wrapped = () => listener();
     ipcRenderer.on(IPC_CHANNELS.dictationShortcut, wrapped);

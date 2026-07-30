@@ -26,6 +26,13 @@ export const DocumentIcon = (props: IconProps) => (
   </svg>
 );
 
+export const ModelIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <rect x="4" y="5" width="16" height="14" rx="3" />
+    <path d="M9 10h.01M15 10h.01M8.5 15h7M12 2v3M2 11h2M20 11h2" />
+  </svg>
+);
+
 export const AudioFileIcon = (props: IconProps) => (
   <svg {...iconDefaults} {...props}>
     <path d="M5.5 2.75h7l5 5V21h-12z" />

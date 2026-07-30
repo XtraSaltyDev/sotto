@@ -1,9 +1,16 @@
 import { randomUUID } from 'node:crypto';
 
+import type {
+  LocalAiMeetingSummary,
+  MeetingSummary,
+  MeetingSummaryItem,
+} from '../../shared/contracts';
+
 export const LEGACY_TRANSCRIPT_SCHEMA_VERSION = 1 as const;
 export const SPEAKER_TRANSCRIPT_SCHEMA_VERSION = 2 as const;
 export const WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION = 3 as const;
-export const TRANSCRIPT_SCHEMA_VERSION = 4 as const;
+export const METADATA_TRANSCRIPT_SCHEMA_VERSION = 4 as const;
+export const TRANSCRIPT_SCHEMA_VERSION = 5 as const;
 
 // These limits are deliberately generous enough for day-long recordings while
 // still bounding data that originated in an external process or a local file.
@@ -20,6 +27,8 @@ export const MAX_SPEAKER_LABEL_CHARACTERS = 100;
 export const MAX_TRANSCRIPT_WORDS = 1_000_000;
 export const MAX_TRANSCRIPT_TAGS = 32;
 export const MAX_TRANSCRIPT_TAG_CHARACTERS = 48;
+export const MAX_LOCAL_AI_SUMMARY_ITEMS = 20;
+export const MAX_LOCAL_AI_SUMMARY_TEXT_CHARACTERS = 4_000;
 
 export type TranscriptId = string;
 export type TranscriptSpeakerId = string;
@@ -80,6 +89,11 @@ export interface TranscriptRecord {
   speakerAnalysis: TranscriptSpeakerAnalysis | null;
   text: string;
   segments: TranscriptSegment[];
+  localAiMeetingSummary?: StoredLocalAiMeetingSummary | null;
+}
+
+export interface StoredLocalAiMeetingSummary extends LocalAiMeetingSummary {
+  inputFingerprint: string;
 }
 
 export class TranscriptValidationError extends Error {
@@ -389,6 +403,7 @@ const parseSegments = (
     | typeof LEGACY_TRANSCRIPT_SCHEMA_VERSION
     | typeof SPEAKER_TRANSCRIPT_SCHEMA_VERSION
     | typeof WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION
+    | typeof METADATA_TRANSCRIPT_SCHEMA_VERSION
     | typeof TRANSCRIPT_SCHEMA_VERSION,
   speakerIds: ReadonlySet<TranscriptSpeakerId>,
 ): TranscriptSegment[] => {
@@ -452,6 +467,7 @@ const parseSegments = (
 
     const rawWords =
       schemaVersion === WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION ||
+      schemaVersion === METADATA_TRANSCRIPT_SCHEMA_VERSION ||
       schemaVersion === TRANSCRIPT_SCHEMA_VERSION
         ? candidate.words
         : [];
@@ -498,6 +514,110 @@ const parseSegments = (
   });
 };
 
+const parseMeetingSummaryItems = (
+  value: unknown,
+  field: string,
+  durationMs: number,
+  speakerIds: ReadonlySet<TranscriptSpeakerId>,
+): MeetingSummaryItem[] => {
+  if (!Array.isArray(value) || value.length > MAX_LOCAL_AI_SUMMARY_ITEMS) {
+    return fail(
+      `${field} must be an array with at most ${MAX_LOCAL_AI_SUMMARY_ITEMS} items.`,
+    );
+  }
+  return value.map((candidate, index): MeetingSummaryItem => {
+    if (!isRecord(candidate)) {
+      return fail(`${field}[${index}] must be an object.`);
+    }
+    const speakerId =
+      candidate.speakerId === null
+        ? null
+        : isTranscriptSpeakerId(candidate.speakerId)
+          ? candidate.speakerId.toLowerCase()
+          : fail(`${field}[${index}].speakerId must be a UUID or null.`);
+    if (speakerId !== null && !speakerIds.has(speakerId)) {
+      return fail(`${field}[${index}].speakerId must reference a declared speaker.`);
+    }
+    return {
+      text: readBoundedString(
+        candidate.text,
+        `${field}[${index}].text`,
+        MAX_LOCAL_AI_SUMMARY_TEXT_CHARACTERS,
+      ).replace(/\s+/gu, ' ').trim(),
+      startMs: readInteger(
+        candidate.startMs,
+        `${field}[${index}].startMs`,
+        0,
+        durationMs,
+      ),
+      speakerId,
+    };
+  });
+};
+
+const parseMeetingSummary = (
+  value: unknown,
+  durationMs: number,
+  speakerIds: ReadonlySet<TranscriptSpeakerId>,
+): MeetingSummary => {
+  if (!isRecord(value)) return fail('localAiMeetingSummary.summary must be an object.');
+  return {
+    overview: readBoundedString(
+      value.overview,
+      'localAiMeetingSummary.summary.overview',
+      MAX_LOCAL_AI_SUMMARY_TEXT_CHARACTERS,
+    ).replace(/\s+/gu, ' ').trim(),
+    keyPoints: parseMeetingSummaryItems(
+      value.keyPoints,
+      'localAiMeetingSummary.summary.keyPoints',
+      durationMs,
+      speakerIds,
+    ),
+    decisions: parseMeetingSummaryItems(
+      value.decisions,
+      'localAiMeetingSummary.summary.decisions',
+      durationMs,
+      speakerIds,
+    ),
+    actionItems: parseMeetingSummaryItems(
+      value.actionItems,
+      'localAiMeetingSummary.summary.actionItems',
+      durationMs,
+      speakerIds,
+    ),
+  };
+};
+
+const parseLocalAiMeetingSummary = (
+  value: unknown,
+  durationMs: number,
+  speakerIds: ReadonlySet<TranscriptSpeakerId>,
+): StoredLocalAiMeetingSummary | null => {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) return fail('localAiMeetingSummary must be an object or null.');
+  const inputFingerprint = readBoundedString(
+    value.inputFingerprint,
+    'localAiMeetingSummary.inputFingerprint',
+    64,
+  ).toLowerCase();
+  if (!/^[0-9a-f]{64}$/u.test(inputFingerprint)) {
+    return fail('localAiMeetingSummary.inputFingerprint must be a SHA-256 hash.');
+  }
+  return {
+    summary: parseMeetingSummary(value.summary, durationMs, speakerIds),
+    model: readBoundedString(
+      value.model,
+      'localAiMeetingSummary.model',
+      MAX_ENGINE_FIELD_CHARACTERS,
+    ),
+    generatedAt: parseDateTime(
+      value.generatedAt,
+      'localAiMeetingSummary.generatedAt',
+    ),
+    inputFingerprint,
+  };
+};
+
 /**
  * Validates and returns a sanitized canonical record. Schema-v1 files are
  * migrated in memory without being rewritten merely because they were read.
@@ -513,6 +633,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     value.schemaVersion !== LEGACY_TRANSCRIPT_SCHEMA_VERSION &&
     value.schemaVersion !== SPEAKER_TRANSCRIPT_SCHEMA_VERSION &&
     value.schemaVersion !== WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION &&
+    value.schemaVersion !== METADATA_TRANSCRIPT_SCHEMA_VERSION &&
     value.schemaVersion !== TRANSCRIPT_SCHEMA_VERSION
   ) {
     return fail(`Unsupported transcript schema version: ${String(value.schemaVersion)}.`);
@@ -525,6 +646,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
 
   const title = normalizeTranscriptTitle(value.title);
   const tags =
+    sourceSchemaVersion === METADATA_TRANSCRIPT_SCHEMA_VERSION ||
     sourceSchemaVersion === TRANSCRIPT_SCHEMA_VERSION
       ? normalizeTranscriptTags(value.tags)
       : [];
@@ -579,6 +701,15 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     return fail('completedAt cannot be earlier than createdAt.');
   }
 
+  const localAiMeetingSummary =
+    sourceSchemaVersion === TRANSCRIPT_SCHEMA_VERSION
+      ? parseLocalAiMeetingSummary(
+          value.localAiMeetingSummary,
+          durationMs,
+          speakerIds,
+        )
+      : null;
+
   return {
     schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
     id: value.id.toLowerCase(),
@@ -594,5 +725,6 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     speakerAnalysis,
     text,
     segments,
+    ...(localAiMeetingSummary ? { localAiMeetingSummary } : {}),
   };
 };

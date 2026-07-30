@@ -30,6 +30,9 @@ const isPunctuationOnly = (value: string): boolean =>
 const MAX_SAME_SPEAKER_RUN_DURATION_MS = 750;
 const MAX_SAME_SPEAKER_TEXT_CHARACTERS = 60;
 const MAX_SAME_SPEAKER_NEIGHBOR_GAP_MS = 750;
+const MAX_DROPPED_FRAGMENT_RUN_DURATION_MS = 300;
+const MAX_DROPPED_FRAGMENT_TEXT_CHARACTERS = 30;
+const MAX_DROPPED_FRAGMENT_NEIGHBOR_GAP_MS = 150;
 const MAX_OPENING_RUN_DURATION_MS = 1_000;
 const MAX_OPENING_TEXT_CHARACTERS = 60;
 const MAX_OPENING_NEIGHBOR_GAP_MS = 1_000;
@@ -123,19 +126,25 @@ const chooseCluster = (
     }
     return indirectChoice(null, 'timing-gap');
   }
-  if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) {
+  const strongest = ranked[0];
+  const competing = ranked[1];
+  if (
+    competing &&
+    (strongest[1] - competing[1] < MIN_DIRECT_MARGIN_MS ||
+      strongest[1] / competing[1] < MIN_DIRECT_DOMINANCE_RATIO)
+  ) {
     return {
       cluster: null,
       evidence: 'ambiguous-overlap',
-      directSupportMs: ranked[0][1],
-      competingSupportMs: ranked[1][1],
+      directSupportMs: strongest[1],
+      competingSupportMs: competing[1],
     };
   }
   return {
-    cluster: ranked[0][0],
+    cluster: strongest[0],
     evidence: 'overlap',
-    directSupportMs: ranked[0][1],
-    competingSupportMs: ranked[1]?.[1] ?? 0,
+    directSupportMs: strongest[1],
+    competingSupportMs: competing?.[1] ?? 0,
   };
 };
 
@@ -209,7 +218,11 @@ const createSpeakerMap = (
 
 type AssignedWord = WhisperWord & ClusterChoice;
 
-type UnclearReason = 'ambiguous-overlap' | 'missing-timing' | 'timing-gap';
+type UnclearReason =
+  | 'ambiguous-overlap'
+  | 'dropped-fragment'
+  | 'missing-timing'
+  | 'timing-gap';
 
 interface AlignedTranscriptSegment extends TranscriptSegment {
   unclearReason: UnclearReason | null;
@@ -277,8 +290,9 @@ const stripAlignmentEvidence = (
   }));
 
 /**
- * Reconciles short timing-gap runs only after the whole transcript has been
- * aligned. Direct overlap ties and missing token timing stay unclear.
+ * Reconciles short timing gaps and isolated filtered clusters only after the
+ * whole transcript has been aligned. Ambiguous overlap and missing token
+ * timing stay unclear.
  */
 const finalizeSpeakerAssignments = (
   segments: readonly AlignedTranscriptSegment[],
@@ -300,7 +314,13 @@ const finalizeSpeakerAssignments = (
     }
 
     const run = finalized.slice(runStart, runEnd);
-    if (run.some((segment) => segment.unclearReason !== 'timing-gap')) {
+    const unclearReasons = new Set(run.map((segment) => segment.unclearReason));
+    if (unclearReasons.size !== 1) {
+      runStart = runEnd;
+      continue;
+    }
+    const unclearReason = run[0].unclearReason;
+    if (unclearReason !== 'timing-gap' && unclearReason !== 'dropped-fragment') {
       runStart = runEnd;
       continue;
     }
@@ -316,6 +336,23 @@ const finalizeSpeakerAssignments = (
     let recoveredSpeakerId: string | null = null;
 
     if (
+      unclearReason === 'dropped-fragment' &&
+      isSingleShortRun(
+        run,
+        MAX_DROPPED_FRAGMENT_RUN_DURATION_MS,
+        MAX_DROPPED_FRAGMENT_TEXT_CHARACTERS,
+      ) &&
+      leftNeighbor &&
+      rightNeighbor &&
+      leftNeighbor.speakerId === rightNeighbor.speakerId &&
+      leftGapMs <= MAX_DROPPED_FRAGMENT_NEIGHBOR_GAP_MS &&
+      rightGapMs <= MAX_DROPPED_FRAGMENT_NEIGHBOR_GAP_MS &&
+      sharesSourceSegment(run, leftNeighbor.boundary) &&
+      sharesSourceSegment(run, rightNeighbor.boundary)
+    ) {
+      recoveredSpeakerId = leftNeighbor.speakerId;
+    } else if (
+      unclearReason === 'timing-gap' &&
       isSingleShortRun(
         run,
         MAX_SAME_SPEAKER_RUN_DURATION_MS,
@@ -329,6 +366,7 @@ const finalizeSpeakerAssignments = (
     ) {
       recoveredSpeakerId = leftNeighbor.speakerId;
     } else if (
+      unclearReason === 'timing-gap' &&
       isSingleShortRun(
         run,
         MAX_OPENING_RUN_DURATION_MS,
@@ -341,6 +379,7 @@ const finalizeSpeakerAssignments = (
     ) {
       recoveredSpeakerId = rightNeighbor.speakerId;
     } else if (
+      unclearReason === 'timing-gap' &&
       isSingleShortRun(
         run,
         MAX_TRANSITION_RUN_DURATION_MS,
@@ -416,7 +455,11 @@ const alignWhisperSegment = (
   const groups: AssignedWord[][] = [];
   for (const word of assigned) {
     const current = groups.at(-1);
-    if (!current || current[0].cluster !== word.cluster) {
+    if (
+      !current ||
+      current[0].cluster !== word.cluster ||
+      (word.cluster === null && current[0].evidence !== word.evidence)
+    ) {
       groups.push([word]);
     } else {
       current.push(word);
@@ -428,6 +471,9 @@ const alignWhisperSegment = (
     const text = normalizeText(group.map((word) => word.text).join(''));
     if (!text) return [];
 
+    const cluster = group[0].cluster;
+    const speakerId = cluster === null ? null : (ids.get(cluster) ?? null);
+
     const startMs = Math.max(previousEndMs, segment.startMs, group[0].startMs);
     const endMs = Math.max(
       startMs,
@@ -438,14 +484,16 @@ const alignWhisperSegment = (
       startMs,
       endMs,
       text,
-      speakerId: group[0].cluster === null ? null : (ids.get(group[0].cluster) ?? null),
+      speakerId,
       words: persistedWords(group),
       unclearReason:
-        group[0].cluster === null
-          ? group.every((word) => word.evidence === 'timing-gap')
-            ? 'timing-gap'
-            : 'ambiguous-overlap'
-          : null,
+        speakerId !== null
+          ? null
+          : cluster !== null
+            ? 'dropped-fragment'
+            : group.every((word) => word.evidence === 'timing-gap')
+              ? 'timing-gap'
+              : 'ambiguous-overlap',
       directSupportMs: group.reduce(
         (total, word) => total + word.directSupportMs,
         0,

@@ -4,6 +4,8 @@ const path = require('node:path');
 
 const PROTOCOL_VERSION = 1;
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
+const MIN_EXPECTED_SPEAKERS = 1;
+const MAX_EXPECTED_SPEAKERS = 12;
 const utilityParentPort = process.parentPort;
 const isUtilityProcess =
   utilityParentPort && typeof utilityParentPort.postMessage === 'function';
@@ -31,11 +33,30 @@ const fail = (message) => {
 };
 
 try {
-  const [modulePath, wavPath, segmentationModelPath, embeddingModelPath] =
+  const [
+    modulePath,
+    wavPath,
+    segmentationModelPath,
+    embeddingModelPath,
+    expectedSpeakerCountArgument,
+  ] =
     process.argv.slice(2);
   const paths = [modulePath, wavPath, segmentationModelPath, embeddingModelPath];
   if (paths.some((value) => typeof value !== 'string' || !path.isAbsolute(value))) {
     throw new Error('Speaker separation requires four absolute input paths.');
+  }
+  const expectedSpeakerCount =
+    expectedSpeakerCountArgument === undefined
+      ? -1
+      : Number(expectedSpeakerCountArgument);
+  if (
+    expectedSpeakerCount !== -1 &&
+    (!Number.isSafeInteger(expectedSpeakerCount) ||
+      expectedSpeakerCount < MIN_EXPECTED_SPEAKERS ||
+      expectedSpeakerCount > MAX_EXPECTED_SPEAKERS ||
+      String(expectedSpeakerCount) !== expectedSpeakerCountArgument)
+  ) {
+    throw new Error('Expected speaker count must be an integer from 1 to 12.');
   }
 
   const sherpa = require(modulePath);
@@ -55,7 +76,7 @@ try {
     },
     // A higher distance threshold merges more same-voice embeddings. The old
     // 0.5 default fragmented noisy meeting audio into dozens of tiny clusters.
-    clustering: { numClusters: -1, threshold: 0.75 },
+    clustering: { numClusters: expectedSpeakerCount, threshold: 0.75 },
     minDurationOn: 0.2,
     minDurationOff: 0.5,
   });

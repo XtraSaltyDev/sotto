@@ -19,6 +19,12 @@ export const IPC_CHANNELS = {
   deleteTranscript: 'sotto:transcript:delete',
   exportTranscript: 'sotto:transcript:export',
   copyTranscriptOutput: 'sotto:transcript:copy-output',
+  insertDictationText: 'sotto:dictation:insert-text',
+  hideForDictation: 'sotto:dictation:hide-window',
+  getLocalAiConnection: 'sotto:local-ai:get',
+  connectLocalAi: 'sotto:local-ai:connect',
+  disconnectLocalAi: 'sotto:local-ai:disconnect',
+  generateLocalAiMeetingSummary: 'sotto:local-ai:meeting-summary:generate',
   deletePlayback: 'sotto:playback:delete',
   stateChanged: 'sotto:state:changed',
   dictationShortcut: 'sotto:dictation:shortcut',
@@ -78,6 +84,18 @@ export interface LiveRecordingSnapshot {
 }
 
 export type RecordingKind = 'meeting' | 'dictation';
+
+export const MIN_EXPECTED_SPEAKER_COUNT = 1;
+export const MAX_EXPECTED_SPEAKER_COUNT = 12;
+export type ExpectedSpeakerCount = number | null;
+
+export const isExpectedSpeakerCount = (
+  value: unknown,
+): value is ExpectedSpeakerCount =>
+  value === null ||
+  (Number.isSafeInteger(value) &&
+    (value as number) >= MIN_EXPECTED_SPEAKER_COUNT &&
+    (value as number) <= MAX_EXPECTED_SPEAKER_COUNT);
 
 export interface LiveRecordingStatus {
   capability: LiveRecordingCapability;
@@ -184,11 +202,18 @@ export interface MeetingSummary {
   actionItems: MeetingSummaryItem[];
 }
 
+export interface LocalAiMeetingSummary {
+  summary: MeetingSummary;
+  model: string;
+  generatedAt: string;
+}
+
 export interface TranscriptDetail extends TranscriptSummary {
   completedAt: string;
   text: string;
   segments: TranscriptSegment[];
   meetingSummary: MeetingSummary | null;
+  localAiMeetingSummary: LocalAiMeetingSummary | null;
   playback: TranscriptPlayback;
   speakerAnalysis: {
     engine: {
@@ -213,6 +238,45 @@ export interface AppState {
   recordings: SavedRecordingSummary[];
   transcripts: TranscriptSummary[];
 }
+
+export const OLLAMA_OPENAI_BASE_URL = 'http://127.0.0.1:11434/v1';
+
+export interface LocalAiModel {
+  id: string;
+  ownedBy: string | null;
+}
+
+export interface LocalAiConnectionSummary {
+  configured: boolean;
+  baseUrl: string;
+  selectedModel: string | null;
+  hasApiKey: boolean;
+  verifiedAt: string | null;
+}
+
+export interface ConnectLocalAiInput {
+  baseUrl: string;
+  apiKey?: string;
+  selectedModel?: string | null;
+}
+
+export type ConnectLocalAiResult =
+  | {
+      outcome: 'connected';
+      connection: LocalAiConnectionSummary;
+      models: LocalAiModel[];
+    }
+  | { outcome: 'rejected'; reason: string };
+
+export type DisconnectLocalAiResult = { outcome: 'disconnected' };
+
+export type GenerateLocalAiMeetingSummaryResult =
+  | {
+      outcome: 'generated';
+      localAiMeetingSummary: LocalAiMeetingSummary;
+    }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
 
 export type ImportMediaResult =
   | { outcome: 'cancelled' }
@@ -308,6 +372,12 @@ export type CopyTranscriptOutputResult =
   | { outcome: 'not-found' }
   | { outcome: 'failed'; reason: string };
 
+export type InsertDictationTextResult =
+  | { outcome: 'inserted' }
+  | { outcome: 'copied'; reason: string }
+  | { outcome: 'not-found' }
+  | { outcome: 'failed'; reason: string };
+
 export type RenameTranscriptSpeakerResult =
   | { outcome: 'renamed'; speaker: TranscriptSpeaker }
   | { outcome: 'not-found' }
@@ -325,21 +395,30 @@ export type UpdateTranscriptSegmentResult =
       text: string;
       preview: string;
       meetingSummary: MeetingSummary | null;
+      localAiMeetingSummary: null;
     }
   | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
 export interface SottoDesktopApi {
   getAppState(): Promise<AppState>;
-  importMedia(): Promise<ImportMediaResult>;
+  importMedia(
+    expectedSpeakerCount?: ExpectedSpeakerCount,
+  ): Promise<ImportMediaResult>;
   startLiveRecording(kind?: RecordingKind): Promise<StartLiveRecordingResult>;
   appendLiveRecordingChunk(
     recordingId: string,
     chunk: ArrayBuffer,
   ): Promise<AppendLiveRecordingChunkResult>;
-  finishLiveRecording(recordingId: string): Promise<FinishLiveRecordingResult>;
+  finishLiveRecording(
+    recordingId: string,
+    expectedSpeakerCount?: ExpectedSpeakerCount,
+  ): Promise<FinishLiveRecordingResult>;
   cancelLiveRecording(recordingId: string): Promise<CancelLiveRecordingResult>;
-  retryRecording(recordingId: string): Promise<RetryRecordingResult>;
+  retryRecording(
+    recordingId: string,
+    expectedSpeakerCount?: ExpectedSpeakerCount,
+  ): Promise<RetryRecordingResult>;
   deleteRecording(recordingId: string): Promise<DeleteRecordingResult>;
   exportRecording(recordingId: string): Promise<ExportRecordingResult>;
   openRecordingSettings(): Promise<OpenRecordingSettingsResult>;
@@ -373,6 +452,16 @@ export interface SottoDesktopApi {
     transcriptId: string,
     kind: TranscriptCopyKind,
   ): Promise<CopyTranscriptOutputResult>;
+  insertDictationText(
+    transcriptId: string,
+  ): Promise<InsertDictationTextResult>;
+  hideForDictation(): Promise<void>;
+  getLocalAiConnection(): Promise<LocalAiConnectionSummary>;
+  connectLocalAi(input: ConnectLocalAiInput): Promise<ConnectLocalAiResult>;
+  disconnectLocalAi(): Promise<DisconnectLocalAiResult>;
+  generateLocalAiMeetingSummary(
+    transcriptId: string,
+  ): Promise<GenerateLocalAiMeetingSummaryResult>;
   onDictationShortcut(listener: () => void): () => void;
   onAppStateChanged(listener: (state: AppState) => void): () => void;
 }

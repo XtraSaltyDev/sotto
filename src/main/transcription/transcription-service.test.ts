@@ -429,12 +429,17 @@ describe('LocalTranscriptionService durable recording behavior', () => {
   });
 
   it('saves stable speaker references when local clustering succeeds', async () => {
-    const context = await setup(makeRunner(() => false), async () => [
+    const speakerDiarizationRunner = vi.fn(async () => [
       { startMs: 0, endMs: 1_000, cluster: 4 },
     ]);
+    const context = await setup(makeRunner(() => false), speakerDiarizationRunner);
     const terminal = context.nextTerminal();
-    await context.service.start(context.media);
+    await context.service.start(context.media, 3);
     await expect(terminal).resolves.toMatchObject({ stage: 'completed' });
+
+    expect(speakerDiarizationRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedSpeakerCount: 3 }),
+    );
 
     const saved = await context.repository.get(RECORDING_ID);
     expect(saved?.schemaVersion).toBe(TRANSCRIPT_SCHEMA_VERSION);
@@ -447,6 +452,15 @@ describe('LocalTranscriptionService durable recording behavior', () => {
         speakerId: saved?.speakerAnalysis?.speakers[0].id,
       }),
     ]);
+  });
+
+  it('rejects an invalid expected speaker count before starting work', async () => {
+    const context = await setup(makeRunner(() => false));
+
+    await expect(
+      context.service.start(context.media, 0 as never),
+    ).rejects.toThrow('integer from 1 to 12');
+    expect(context.service.getActiveJob()).toBeNull();
   });
 
   it('uses normalized duration for silent media with an unknown container duration', async () => {

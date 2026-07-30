@@ -4,6 +4,10 @@ import path from 'node:path';
 
 import type { UtilityProcess } from 'electron';
 
+import {
+  isExpectedSpeakerCount,
+  type ExpectedSpeakerCount,
+} from '../../shared/contracts';
 import { sanitizeProcessEnvironment } from '../process/process-runner';
 import { MAX_TRANSCRIPT_OFFSET_MS, MAX_TRANSCRIPT_SEGMENTS } from './transcript-types';
 
@@ -33,6 +37,7 @@ export interface RunSpeakerDiarizationOptions {
   signal?: AbortSignal;
   modulePath?: string;
   timeoutMs?: number;
+  expectedSpeakerCount?: ExpectedSpeakerCount;
 }
 
 export class SpeakerDiarizationError extends Error {
@@ -240,6 +245,11 @@ export const runSpeakerDiarization = async (
     throw new TypeError('Speaker separation timeout must be a positive safe integer.');
   }
 
+  const expectedSpeakerCount = options.expectedSpeakerCount ?? null;
+  if (!isExpectedSpeakerCount(expectedSpeakerCount)) {
+    throw new TypeError('Expected speaker count must be Auto or an integer from 1 to 12.');
+  }
+
   const modulePath = options.modulePath ?? runtimeRequire.resolve('sherpa-onnx-node');
   if (!path.isAbsolute(modulePath)) {
     throw new TypeError('The speaker engine module path must be absolute.');
@@ -251,6 +261,7 @@ export const runSpeakerDiarization = async (
       options.wavPath,
       options.segmentationModelPath,
       options.embeddingModelPath,
+      ...(expectedSpeakerCount === null ? [] : [String(expectedSpeakerCount)]),
     ]);
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];

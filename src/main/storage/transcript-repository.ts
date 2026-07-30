@@ -9,6 +9,8 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 
+import type { LocalAiMeetingSummary } from '../../shared/contracts';
+import { fingerprintTranscriptForLocalAi } from '../local-ai/local-ai-meeting-summary';
 import {
   isTranscriptSpeakerId,
   isTranscriptId,
@@ -48,6 +50,10 @@ export type UpdateTranscriptMetadataResult =
       record: TranscriptRecord;
     }
   | { outcome: 'not-found' };
+
+export type SaveLocalAiMeetingSummaryResult =
+  | { outcome: 'saved'; record: TranscriptRecord }
+  | { outcome: 'not-found' | 'stale' };
 
 const isMissingFileError = (error: unknown): boolean =>
   error instanceof Error && 'code' in error && error.code === 'ENOENT';
@@ -189,6 +195,7 @@ export class TranscriptRepository {
           .filter((candidate) => candidate.length > 0)
           .join(' '),
         segments,
+        localAiMeetingSummary: null,
       });
 
       return { outcome: 'updated', record, segment: record.segments[segmentIndex] };
@@ -247,6 +254,7 @@ export class TranscriptRepository {
           ...speakerAnalysis,
           speakers: nextSpeakers,
         },
+        localAiMeetingSummary: null,
       });
 
       return { outcome: 'renamed', record, speaker };
@@ -297,6 +305,42 @@ export class TranscriptRepository {
       return {
         outcome: 'updated',
         record: await this.save({ ...current, title, tags }),
+      };
+    });
+  }
+
+  async saveLocalAiMeetingSummary(
+    transcriptId: TranscriptId,
+    summary: LocalAiMeetingSummary,
+    expectedFingerprint: string,
+  ): Promise<SaveLocalAiMeetingSummaryResult> {
+    if (!isTranscriptId(transcriptId)) {
+      throw new TranscriptValidationError('Transcript id must be a UUID.');
+    }
+    if (!/^[0-9a-f]{64}$/u.test(expectedFingerprint)) {
+      throw new TranscriptValidationError('Transcript fingerprint is invalid.');
+    }
+    return this.serializeMutation(async () => {
+      const current = await this.get(transcriptId.toLowerCase());
+      if (!current) return { outcome: 'not-found' };
+      if (fingerprintTranscriptForLocalAi(current) !== expectedFingerprint) {
+        return { outcome: 'stale' };
+      }
+      return {
+        outcome: 'saved',
+        record: await this.save({
+          ...current,
+          localAiMeetingSummary: {
+            ...summary,
+            summary: {
+              ...summary.summary,
+              keyPoints: summary.summary.keyPoints.map((item) => ({ ...item })),
+              decisions: summary.summary.decisions.map((item) => ({ ...item })),
+              actionItems: summary.summary.actionItems.map((item) => ({ ...item })),
+            },
+            inputFingerprint: expectedFingerprint,
+          },
+        }),
       };
     });
   }
