@@ -143,25 +143,29 @@ const parseStoredModels = (
   value: unknown,
   selectedModel: string,
 ): LocalAiModel[] => {
-  if (value === undefined) {
-    return [{ id: selectedModel, ownedBy: null }];
-  }
-  if (!Array.isArray(value) || value.length > MAX_MODELS) {
-    throw new TypeError('The saved local AI model list is invalid.');
-  }
-  const models = value.map((candidate): LocalAiModel => {
-    if (!isRecord(candidate)) {
-      throw new TypeError('The saved local AI model list is invalid.');
+  // The stored model list is only a cache of the last discovery. A malformed
+  // list must not invalidate the whole saved connection, so fall back to the
+  // verified selected model instead of throwing.
+  const fallback: LocalAiModel[] = [{ id: selectedModel, ownedBy: null }];
+  if (value === undefined) return fallback;
+  if (!Array.isArray(value) || value.length > MAX_MODELS) return fallback;
+  const models: LocalAiModel[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate)) continue;
+    let id: string;
+    try {
+      id = parseModelId(candidate.id) as string;
+    } catch {
+      continue;
     }
-    const id = parseModelId(candidate.id) as string;
     const ownedBy =
       typeof candidate.ownedBy === 'string' &&
       candidate.ownedBy.length <= 200 &&
       ![...candidate.ownedBy].some((character) => character.charCodeAt(0) < 32)
         ? candidate.ownedBy
         : null;
-    return { id, ownedBy };
-  });
+    models.push({ id, ownedBy });
+  }
   const uniqueModels = Array.from(
     new Map(models.map((model) => [model.id, model])).values(),
   );

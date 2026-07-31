@@ -133,7 +133,7 @@ export const CaptureFailureNotice = ({
   return (
     <aside
       className={`capture-notice capture-notice--${presentation.kind}`}
-      role="alert"
+      role={presentation.kind === 'recovery' ? 'status' : 'alert'}
     >
       <div>
         <strong>{presentation.title}</strong>
@@ -146,25 +146,26 @@ export const CaptureFailureNotice = ({
   );
 };
 
-export const isFailureNoticeMessage = (message: string): boolean =>
-  /could not|cannot|failed|timed out|not found|not available|denied|not granted|required|must|wait for|busy|unsupported|no recording was started/iu
-    .test(message);
+export interface AppNotice {
+  kind: 'error' | 'info';
+  text: string;
+}
 
-const HomeNotice = ({
-  message,
+export const HomeNotice = ({
+  notice,
   onDismiss,
 }: {
-  message: string;
+  notice: AppNotice;
   onDismiss?: () => void;
 }) =>
-  isFailureNoticeMessage(message) ? (
+  notice.kind === 'error' ? (
     <CaptureFailureNotice
-      message={message}
+      message={notice.text}
       onDismiss={onDismiss}
       platform={navigator.platform}
     />
   ) : (
-    <p className="home-status" role="status" aria-live="polite">{message}</p>
+    <p className="home-status" role="status" aria-live="polite">{notice.text}</p>
   );
 
 const isRunningJob = (job: TranscriptionJobSnapshot | null): boolean =>
@@ -230,10 +231,9 @@ export const meetingDetailModeForKey = (
 ): MeetingDetailMode | null => {
   if (key === 'Home') return 'summary';
   if (key === 'End') return 'transcript';
-  if (key === 'ArrowLeft' || key === 'ArrowUp') {
-    return current === 'summary' ? 'transcript' : 'summary';
-  }
-  if (key === 'ArrowRight' || key === 'ArrowDown') {
+  // With exactly two tabs, every arrow key wraps to the other tab. Revisit
+  // this if the meeting detail view ever gains a third mode.
+  if (['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(key)) {
     return current === 'summary' ? 'transcript' : 'summary';
   }
   return null;
@@ -1278,21 +1278,25 @@ const TranscriptView = ({
             title={transcript.title}
           />
         </details>
-        <div className="transcript-mode-tabs" aria-label="Meeting view" role="tablist">
+        <div
+          aria-label="Meeting view"
+          className="transcript-mode-tabs"
+          onKeyDown={(event) => {
+            const nextMode = meetingDetailModeForKey(detailMode, event.key);
+            if (!nextMode) return;
+            event.preventDefault();
+            setDetailMode(nextMode);
+            event.currentTarget
+              .querySelector<HTMLButtonElement>(`[data-mode="${nextMode}"]`)
+              ?.focus();
+          }}
+          role="tablist"
+        >
           <button
             aria-controls="meeting-summary-panel"
             aria-selected={detailMode === 'summary'}
             data-mode="summary"
             id="meeting-summary-tab"
-            onKeyDown={(event) => {
-              const nextMode = meetingDetailModeForKey(detailMode, event.key);
-              if (!nextMode) return;
-              event.preventDefault();
-              setDetailMode(nextMode);
-              event.currentTarget.parentElement
-                ?.querySelector<HTMLButtonElement>(`[data-mode="${nextMode}"]`)
-                ?.focus();
-            }}
             onClick={() => setDetailMode('summary')}
             role="tab"
             tabIndex={detailMode === 'summary' ? 0 : -1}
@@ -1305,15 +1309,6 @@ const TranscriptView = ({
             aria-selected={detailMode === 'transcript'}
             data-mode="transcript"
             id="meeting-transcript-tab"
-            onKeyDown={(event) => {
-              const nextMode = meetingDetailModeForKey(detailMode, event.key);
-              if (!nextMode) return;
-              event.preventDefault();
-              setDetailMode(nextMode);
-              event.currentTarget.parentElement
-                ?.querySelector<HTMLButtonElement>(`[data-mode="${nextMode}"]`)
-                ?.focus();
-            }}
             onClick={() => setDetailMode('transcript')}
             role="tab"
             tabIndex={detailMode === 'transcript' ? 0 : -1}
@@ -1662,7 +1657,7 @@ export const App = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<TranscriptDetail | null>(null);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<AppNotice | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
   const [isStartingRecording, setIsStartingRecording] = useState(false);
   const [isStoppingRecording, setIsStoppingRecording] = useState(false);
@@ -1676,6 +1671,8 @@ export const App = () => {
   const [recordingActionId, setRecordingActionId] = useState<string | null>(null);
   const [recordingTick, setRecordingTick] = useState(() => Date.now());
   const [isNewTranscriptionOpen, setIsNewTranscriptionOpen] = useState(false);
+  const [dismissedStorageMessage, setDismissedStorageMessage] =
+    useState<string | null>(null);
   const [libraryViewState, setLibraryViewState] =
     useState<TranscriptLibraryViewState>({
       query: '',
@@ -1698,18 +1695,27 @@ export const App = () => {
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
+  const showError = useCallback(
+    (text: string) => setNotice({ kind: 'error', text }),
+    [],
+  );
+  const showInfo = useCallback(
+    (text: string) => setNotice({ kind: 'info', text }),
+    [],
+  );
+
   const refresh = useCallback(async () => {
     if (!window.sotto) {
-      setMessage('Sotto must run in its desktop window.');
+      showError('Sotto must run in its desktop window.');
       return;
     }
 
     try {
       setAppState(await window.sotto.getAppState());
     } catch {
-      setMessage('Sotto could not load its local state.');
+      showError('Sotto could not load its local state.');
     }
-  }, []);
+  }, [showError]);
 
   useEffect(() => {
     void refresh();
@@ -1753,15 +1759,15 @@ export const App = () => {
       .insertDictationText(job.transcriptId)
       .then((result) => {
         if (result.outcome === 'inserted') {
-          setMessage('Dictation inserted at the cursor.');
+          showInfo('Dictation inserted at the cursor.');
         } else if (result.outcome === 'copied' || result.outcome === 'failed') {
-          setMessage(result.reason);
+          showError(result.reason);
         } else {
-          setMessage('The dictation transcript could not be found for insertion.');
+          showError('The dictation transcript could not be found for insertion.');
         }
       })
       .catch(() => {
-        setMessage('Sotto could not insert the dictation. Open Sotto to copy the saved transcript.');
+        showError('Sotto could not insert the dictation. Open Sotto to copy the saved transcript.');
       });
   }, [
     appState?.activeJob?.recordingId,
@@ -1778,7 +1784,7 @@ export const App = () => {
     }
 
     let cancelled = false;
-    setMessage(null);
+    setNotice(null);
     setIsLoadingTranscript(true);
     window.sotto
       .getTranscript(selectedId)
@@ -1786,7 +1792,7 @@ export const App = () => {
         if (!cancelled) setTranscript(detail);
       })
       .catch(() => {
-        if (!cancelled) setMessage('Sotto could not open that transcript.');
+        if (!cancelled) showError('Sotto could not open that transcript.');
       })
       .finally(() => {
         if (!cancelled) setIsLoadingTranscript(false);
@@ -1848,10 +1854,15 @@ export const App = () => {
 
   const running = isRunningJob(appState?.activeJob ?? null);
   const activeRecording = appState?.recording.active ?? null;
+  const storageMessage = appState?.recording.storageMessage ?? null;
+  const visibleStorageMessage =
+    storageMessage && storageMessage !== dismissedStorageMessage
+      ? storageMessage
+      : null;
   const captureMustStayOpen = Boolean(
     activeRecording ||
     running ||
-    appState?.recording.storageMessage ||
+    visibleStorageMessage ||
     isSelecting ||
     isStartingRecording ||
     isStoppingRecording,
@@ -1946,9 +1957,9 @@ export const App = () => {
       if (result.outcome !== 'started' && pendingDictationInsertionRef.current === recordingId) {
         pendingDictationInsertionRef.current = null;
       }
-      if (result.outcome === 'rejected') setMessage(result.reason);
+      if (result.outcome === 'rejected') showError(result.reason);
       if (result.outcome === 'not-found') {
-        setMessage('That live recording was already closed.');
+        showError('That live recording was already closed.');
       }
     } catch (error) {
       if (pendingDictationInsertionRef.current === recordingId) {
@@ -1960,7 +1971,7 @@ export const App = () => {
         'Sotto timed out while clearing the incomplete recording.',
       ).catch(() => undefined);
       await cleanupCapture();
-      setMessage(
+      showError(
         error instanceof Error
           ? error.message
           : 'Sotto could not finish the live recording.',
@@ -1981,7 +1992,7 @@ export const App = () => {
       !window.sotto ||
       (kind === 'meeting' ? !canRecord : !canDictate)
     ) return;
-    setMessage(null);
+    setNotice(null);
     setIsStartingRecording(true);
 
     let recordingId: string | null = null;
@@ -2014,7 +2025,7 @@ export const App = () => {
       );
       startResultHandled = true;
       if (started.outcome === 'rejected') {
-        setMessage(started.reason);
+        showError(started.reason);
         return;
       }
       recordingId = started.recording.id;
@@ -2050,7 +2061,7 @@ export const App = () => {
             'Microphone access is required for dictation. Allow it in system settings, then try again.',
           );
         }
-        setMessage('Microphone access was not granted. Sotto will record Teams audio only for this meeting.');
+        showError('Microphone access was not granted. Sotto will record Teams audio only for this meeting.');
       }
 
       const context = new AudioContext();
@@ -2147,7 +2158,7 @@ export const App = () => {
       if (pendingDictationInsertionRef.current === recordingId) {
         pendingDictationInsertionRef.current = null;
       }
-      setMessage(
+      showError(
         kind === 'dictation' && error instanceof Error
           ? error.message
           : liveRecordingStartErrorMessage(error, navigator.platform),
@@ -2175,60 +2186,60 @@ export const App = () => {
       if (activeRecording?.kind === 'dictation') {
         void handleStopLiveRecording();
       } else if (activeRecording) {
-        setMessage('Finish the live meeting recording before starting dictation.');
+        showError('Finish the live meeting recording before starting dictation.');
       } else if (canDictate) {
         void handleStartRecording('dictation');
       } else if (running) {
-        setMessage('Wait for the current transcription to finish before starting dictation.');
+        showError('Wait for the current transcription to finish before starting dictation.');
       } else if (appState?.engine.state !== 'ready') {
-        setMessage(
+        showError(
           appState?.engine.message ??
           'The local transcription engine must be ready before starting dictation.',
         );
       } else {
-        setMessage('Sotto is busy. Finish the current action before starting dictation.');
+        showError('Sotto is busy. Finish the current action before starting dictation.');
       }
     });
   }, [activeRecording, appState?.engine.message, appState?.engine.state, canDictate, running]);
 
   const handleOpenRecordingSettings = async () => {
     if (!window.sotto) return;
-    setMessage(null);
+    setNotice(null);
     const result = await window.sotto.openRecordingSettings();
-    if (result.outcome === 'failed') setMessage(result.reason);
+    if (result.outcome === 'failed') showError(result.reason);
   };
 
   const handleRepairRecordingPermissions = async () => {
     if (!window.sotto || isRepairingPermissions) return;
-    setMessage(null);
+    setNotice(null);
     setIsRepairingPermissions(true);
     try {
       const result = await window.sotto.requestRecordingPermissions();
       if (result.outcome === 'failed') {
-        setMessage(result.reason);
+        showError(result.reason);
         setIsRepairingPermissions(false);
       } else if (result.outcome === 'settings-opened') {
-        setMessage('macOS did not show its approval prompt. Your existing entry was left untouched; System Settings is open as a fallback.');
+        showError('macOS did not show its approval prompt. Your existing entry was left untouched; System Settings is open as a fallback.');
         setIsRepairingPermissions(false);
       } else {
-        setMessage('Access was approved. Sotto is reopening…');
+        showInfo('Access was approved. Sotto is reopening…');
       }
     } catch {
-      setMessage('Sotto could not request macOS recording permission.');
+      showError('Sotto could not request macOS recording permission.');
       setIsRepairingPermissions(false);
     }
   };
 
   const handleImport = async () => {
     if (!window.sotto || !canImport) return;
-    setMessage(null);
+    setNotice(null);
     setIsSelecting(true);
 
     try {
       const result = await window.sotto.importMedia(expectedSpeakerCount);
-      if (result.outcome === 'rejected') setMessage(result.reason);
+      if (result.outcome === 'rejected') showError(result.reason);
     } catch {
-      setMessage('Sotto could not open the recording picker. Please try again.');
+      showError('Sotto could not open the recording picker. Please try again.');
     } finally {
       setIsSelecting(false);
     }
@@ -2241,18 +2252,18 @@ export const App = () => {
 
   const handleExport = async (format: TranscriptExportFormat) => {
     if (!window.sotto || !selectedId) return;
-    setMessage(null);
+    setNotice(null);
     try {
       const result = await window.sotto.exportTranscript(selectedId, format);
-      if (result.outcome === 'failed') setMessage(result.reason);
+      if (result.outcome === 'failed') showError(result.reason);
       if (result.outcome === 'not-found') {
-        setMessage('That transcript is no longer available.');
+        showError('That transcript is no longer available.');
       }
       if (result.outcome === 'saved') {
-        setMessage(`${result.fileName} was saved.`);
+        showInfo(`${result.fileName} was saved.`);
       }
     } catch {
-      setMessage(
+      showError(
         `Sotto could not export ${transcriptExportFailureLabel(format)}.`,
       );
     }
@@ -2260,18 +2271,18 @@ export const App = () => {
 
   const handleCopyOutput = async (kind: TranscriptCopyKind) => {
     if (!window.sotto || !selectedId) return;
-    setMessage(null);
+    setNotice(null);
     try {
       const result = await window.sotto.copyTranscriptOutput(selectedId, kind);
       if (result.outcome === 'copied') {
-        setMessage(transcriptCopySuccessMessage(kind));
+        showInfo(transcriptCopySuccessMessage(kind));
       } else if (result.outcome === 'not-found') {
-        setMessage('That transcript is no longer available.');
+        showError('That transcript is no longer available.');
       } else {
-        setMessage(result.reason);
+        showError(result.reason);
       }
     } catch {
-      setMessage('Sotto could not copy that meeting output.');
+      showError('Sotto could not copy that meeting output.');
     }
   };
 
@@ -2430,14 +2441,14 @@ export const App = () => {
       return;
     }
 
-    setMessage(null);
+    setNotice(null);
     try {
       const result = await window.sotto.deleteTranscript(transcriptSummary.id);
       if (result.outcome === 'not-found') {
-        setMessage('That transcript is no longer available.');
+        showError('That transcript is no longer available.');
       }
     } catch {
-      setMessage('Sotto could not delete that transcript.');
+      showError('Sotto could not delete that transcript.');
     }
   };
 
@@ -2456,12 +2467,12 @@ export const App = () => {
     ) {
       return;
     }
-    setMessage(null);
+    setNotice(null);
     const result = await window.sotto.deletePlayback(selectedId);
     if (result.outcome === 'rejected') {
-      setMessage(result.reason);
+      showError(result.reason);
     } else if (result.outcome === 'not-found') {
-      setMessage('That playback audio is no longer available.');
+      showError('That playback audio is no longer available.');
       setTranscript((current) => current
         ? { ...current, playback: { state: 'unavailable', reason: 'missing' } }
         : current);
@@ -2482,19 +2493,19 @@ export const App = () => {
 
   const retryRecording = async (recordingId: string) => {
     if (!window.sotto || recordingActionId) return;
-    setMessage(null);
+    setNotice(null);
     setRecordingActionId(recordingId);
     try {
       const result = await window.sotto.retryRecording(
         recordingId,
         expectedSpeakerCount,
       );
-      if (result.outcome === 'rejected') setMessage(result.reason);
+      if (result.outcome === 'rejected') showError(result.reason);
       if (result.outcome === 'not-found') {
-        setMessage('That saved recording is no longer available.');
+        showError('That saved recording is no longer available.');
       }
     } catch {
-      setMessage('Sotto could not retry transcription for that recording.');
+      showError('Sotto could not retry transcription for that recording.');
     } finally {
       setRecordingActionId(null);
     }
@@ -2502,16 +2513,16 @@ export const App = () => {
 
   const exportRecording = async (recordingId: string) => {
     if (!window.sotto || recordingActionId) return;
-    setMessage(null);
+    setNotice(null);
     setRecordingActionId(recordingId);
     try {
       const result = await window.sotto.exportRecording(recordingId);
-      if (result.outcome === 'failed') setMessage(result.reason);
+      if (result.outcome === 'failed') showError(result.reason);
       if (result.outcome === 'not-found') {
-        setMessage('That saved recording is no longer available.');
+        showError('That saved recording is no longer available.');
       }
     } catch {
-      setMessage('Sotto could not open the recording export dialog.');
+      showError('Sotto could not open the recording export dialog.');
     } finally {
       setRecordingActionId(null);
     }
@@ -2527,13 +2538,13 @@ export const App = () => {
       return;
     }
 
-    setMessage(null);
+    setNotice(null);
     setRecordingActionId(recordingId);
     try {
       const result = await window.sotto.deleteRecording(recordingId);
-      if (result.outcome === 'rejected') setMessage(result.reason);
+      if (result.outcome === 'rejected') showError(result.reason);
       if (result.outcome === 'not-found') {
-        setMessage('That saved recording is no longer available.');
+        showError('That saved recording is no longer available.');
       }
       if (result.outcome === 'deleted') {
         setTranscript((current) =>
@@ -2543,7 +2554,7 @@ export const App = () => {
         );
       }
     } catch {
-      setMessage('Sotto could not delete that saved recording.');
+      showError('Sotto could not delete that saved recording.');
     } finally {
       setRecordingActionId(null);
     }
@@ -2567,9 +2578,9 @@ export const App = () => {
           localAiError={localAiError}
           localAiGenerating={localAiGenerating}
           loading={isLoadingTranscript}
-          message={message}
+          message={notice?.text ?? null}
           onBack={() => {
-            setMessage(null);
+            setNotice(null);
             setSelectedId(null);
           }}
           onDelete={() => void handleDelete()}
@@ -2611,9 +2622,9 @@ export const App = () => {
             </button>
           )}
         </header>
-        {!showNewTranscription && message ? (
+        {!showNewTranscription && notice ? (
           <div className="home-message">
-            <HomeNotice message={message} onDismiss={() => setMessage(null)} />
+            <HomeNotice notice={notice} onDismiss={() => setNotice(null)} />
           </div>
         ) : null}
         {showNewTranscription ? (
@@ -2787,14 +2798,15 @@ export const App = () => {
                   ) : null}
                 </div>
               ) : null}
-              {appState?.recording.storageMessage ? (
+              {visibleStorageMessage ? (
                 <CaptureFailureNotice
-                  message={appState.recording.storageMessage}
+                  message={visibleStorageMessage}
+                  onDismiss={() => setDismissedStorageMessage(visibleStorageMessage)}
                   platform={navigator.platform}
                 />
               ) : null}
-              {message ? (
-                <HomeNotice message={message} onDismiss={() => setMessage(null)} />
+              {notice ? (
+                <HomeNotice notice={notice} onDismiss={() => setNotice(null)} />
               ) : null}
             </div>
           </div>

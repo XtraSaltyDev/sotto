@@ -86,6 +86,29 @@ describe('LocalAiConnectionService', () => {
     });
   });
 
+  it('keeps a saved connection usable when its cached model list is corrupt', async () => {
+    const { filePath, service } = await setup(
+      (async () => modelResponse()) as typeof fetch,
+    );
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, JSON.stringify({
+      schemaVersion: 1,
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      selectedModel: 'gemma3:4b',
+      models: ['not-a-record', { ownedBy: 42 }, { id: 'llama3.2', ownedBy: null }],
+      verifiedAt: '2026-07-29T20:00:00.000Z',
+    }));
+
+    await expect(service.getSummary()).resolves.toMatchObject({
+      configured: true,
+      selectedModel: 'gemma3:4b',
+      availableModels: [
+        { id: 'gemma3:4b', ownedBy: null },
+        { id: 'llama3.2', ownedBy: null },
+      ],
+    });
+  });
+
   it('discovers, selects, and atomically saves an Ollama-compatible model list', async () => {
     const fetcher = vi.fn(async () => modelResponse());
     const { filePath, service } = await setup(fetcher as typeof fetch);
