@@ -289,6 +289,14 @@ export const registerDesktopIpc = ({
   );
 
   ipcMain.handle(
+    IPC_CHANNELS.cancelAppUpdate,
+    (event): void => {
+      trust(event);
+      updateService.cancelDownload();
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.installAppUpdate,
     async (event): Promise<InstallAppUpdateResult> => {
       trust(event);
@@ -934,6 +942,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.generateLocalAiMeetingSummary,
       IPC_CHANNELS.checkForAppUpdate,
       IPC_CHANNELS.downloadAppUpdate,
+      IPC_CHANNELS.cancelAppUpdate,
       IPC_CHANNELS.installAppUpdate,
       IPC_CHANNELS.importMedia,
       IPC_CHANNELS.startLiveRecording,

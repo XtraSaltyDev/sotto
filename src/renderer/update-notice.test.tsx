@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  formatUpdateProgress,
   formatUpdateSize,
   shouldOfferUpdate,
   UpdateNotice,
@@ -40,6 +41,51 @@ describe('UpdateNotice', () => {
     expect(markup).toContain('Update ready to install');
     expect(markup).toContain('Sotto-0.2.0-arm64.dmg');
     expect(markup).toContain('Downloads folder');
+  });
+
+  it('shows download progress and a cancel action', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onCancel={vi.fn()}
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{
+          phase: 'downloading',
+          receivedBytes: 50,
+          totalBytes: 100,
+          version: '0.2.0',
+        }}
+      />,
+    );
+
+    expect(markup).toContain('Downloading Sotto 0.2.0… 50%');
+    expect(markup).toContain('>Cancel<');
+  });
+
+  it('shows archive verification before offering a restart', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{ phase: 'preparing', version: '0.2.0' }}
+      />,
+    );
+
+    expect(markup).toContain('Verifying and preparing Sotto 0.2.0');
+  });
+
+  it('offers a retry after a canceled update', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{ phase: 'cancelled', version: '0.2.0' }}
+      />,
+    );
+
+    expect(markup).toContain('Update canceled');
+    expect(markup).toContain('No changes were made');
+    expect(markup).toContain('>Try again<');
   });
 
   it('offers a retry after a failed download', () => {
@@ -125,5 +171,12 @@ describe('UpdateNotice', () => {
   it('rounds artifact sizes to whole megabytes', () => {
     expect(formatUpdateSize(626321192)).toBe('597 MB');
     expect(formatUpdateSize(1024)).toBe('1 MB');
+  });
+
+  it('formats download progress safely', () => {
+    expect(formatUpdateProgress(0, 100)).toBe('0%');
+    expect(formatUpdateProgress(50, 100)).toBe('50%');
+    expect(formatUpdateProgress(200, 100)).toBe('100%');
+    expect(formatUpdateProgress(0, 0)).toBe('Starting…');
   });
 });

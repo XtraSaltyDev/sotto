@@ -28,8 +28,10 @@ export const IPC_CHANNELS = {
   deletePlayback: 'sotto:playback:delete',
   checkForAppUpdate: 'sotto:updates:check',
   downloadAppUpdate: 'sotto:updates:download',
+  cancelAppUpdate: 'sotto:updates:cancel',
   installAppUpdate: 'sotto:updates:install',
   manualUpdateCheck: 'sotto:updates:manual-check',
+  appUpdateProgress: 'sotto:updates:progress',
   stateChanged: 'sotto:state:changed',
   dictationShortcut: 'sotto:dictation:shortcut',
 } as const;
@@ -416,6 +418,15 @@ export type CheckForAppUpdateResult =
   | { outcome: 'up-to-date'; version: string }
   | { outcome: 'unavailable'; reason: string };
 
+export type AppUpdateProgress =
+  | {
+      phase: 'downloading';
+      version: string;
+      receivedBytes: number;
+      totalBytes: number;
+    }
+  | { phase: 'preparing'; version: string };
+
 export type DownloadAppUpdateResult =
   | {
       outcome: 'downloaded';
@@ -424,6 +435,7 @@ export type DownloadAppUpdateResult =
       version: string;
     }
   | { outcome: 'staged'; version: string }
+  | { outcome: 'cancelled'; version: string }
   | { outcome: 'failed'; reason: string };
 
 export type InstallAppUpdateResult =
@@ -494,9 +506,13 @@ export interface SottoDesktopApi {
   ): Promise<GenerateLocalAiMeetingSummaryResult>;
   checkForAppUpdate(): Promise<CheckForAppUpdateResult>;
   downloadAppUpdate(): Promise<DownloadAppUpdateResult>;
+  cancelAppUpdate(): Promise<void>;
   installAppUpdate(): Promise<InstallAppUpdateResult>;
   onManualUpdateCheck(
     listener: (result: CheckForAppUpdateResult) => void,
+  ): () => void;
+  onAppUpdateProgress(
+    listener: (progress: AppUpdateProgress) => void,
   ): () => void;
   onDictationShortcut(listener: () => void): () => void;
   onAppStateChanged(listener: (state: AppState) => void): () => void;

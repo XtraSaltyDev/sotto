@@ -2,10 +2,17 @@ import { SpinnerIcon } from './icons';
 
 export type AppUpdateNoticeState =
   | { phase: 'available'; version: string; size: number }
-  | { phase: 'downloading'; version: string }
+  | {
+      phase: 'downloading';
+      version: string;
+      receivedBytes: number;
+      totalBytes: number;
+    }
+  | { phase: 'preparing'; version: string }
   | { phase: 'ready'; version: string }
   | { phase: 'restarting'; version: string }
   | { phase: 'downloaded'; fileName: string; version: string }
+  | { phase: 'cancelled'; version: string }
   | { phase: 'failed'; reason: string; version: string }
   | { phase: 'up-to-date'; version: string }
   | { phase: 'check-failed'; reason: string };
@@ -20,14 +27,28 @@ export const shouldOfferUpdate = (
 export const formatUpdateSize = (bytes: number): string =>
   `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`;
 
+export const formatUpdateProgress = (
+  receivedBytes: number,
+  totalBytes: number,
+): string => {
+  if (totalBytes <= 0) return 'Starting…';
+  const percent = Math.min(
+    100,
+    Math.max(0, Math.floor((receivedBytes / totalBytes) * 100)),
+  );
+  return `${percent}%`;
+};
+
 export const UpdateNotice = ({
   onDismiss,
   onDownload,
+  onCancel,
   onInstall,
   state,
 }: {
   onDismiss: () => void;
   onDownload: () => void;
+  onCancel?: () => void;
   onInstall?: () => void;
   state: AppUpdateNoticeState;
 }) => (
@@ -75,9 +96,27 @@ export const UpdateNotice = ({
       </div>
     ) : null}
     {state.phase === 'downloading' ? (
+      <>
+        <div className="update-notice__progress">
+          <SpinnerIcon className="spinner" />
+          <span>
+            Downloading Sotto {state.version}…{' '}
+            {formatUpdateProgress(state.receivedBytes, state.totalBytes)}
+          </span>
+        </div>
+        {onCancel ? (
+          <div className="update-notice__actions">
+            <button className="update-notice__dismiss" onClick={onCancel} type="button">
+              Cancel
+            </button>
+          </div>
+        ) : null}
+      </>
+    ) : null}
+    {state.phase === 'preparing' ? (
       <div className="update-notice__progress">
         <SpinnerIcon className="spinner" />
-        <span>Downloading Sotto {state.version}…</span>
+        <span>Verifying and preparing Sotto {state.version}…</span>
       </div>
     ) : null}
     {state.phase === 'downloaded' ? (
@@ -102,6 +141,22 @@ export const UpdateNotice = ({
         <div className="update-notice__actions">
           <button className="update-notice__download" onClick={onDownload} type="button">
             Retry
+          </button>
+          <button className="update-notice__dismiss" onClick={onDismiss} type="button">
+            Not now
+          </button>
+        </div>
+      </>
+    ) : null}
+    {state.phase === 'cancelled' ? (
+      <>
+        <div>
+          <strong>Update canceled</strong>
+          <p>No changes were made. Sotto {state.version} is still available.</p>
+        </div>
+        <div className="update-notice__actions">
+          <button className="update-notice__download" onClick={onDownload} type="button">
+            Try again
           </button>
           <button className="update-notice__dismiss" onClick={onDismiss} type="button">
             Not now

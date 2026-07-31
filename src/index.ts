@@ -265,6 +265,11 @@ const initialize = async (): Promise<void> => {
     downloadsDirectory: app.getPath('downloads'),
     stagingDirectory: path.join(app.getPath('userData'), 'updates'),
     installedAppPath,
+    onProgress: (progress) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC_CHANNELS.appUpdateProgress, progress);
+      }
+    },
   });
 
   session.defaultSession.protocol.handle('sotto-media', async (request) => {

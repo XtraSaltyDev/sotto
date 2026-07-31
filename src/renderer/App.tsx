@@ -9,6 +9,7 @@ import {
 } from 'react';
 
 import type {
+  AppUpdateProgress,
   AppState,
   ExpectedSpeakerCount,
   LiveRecordingSnapshot,
@@ -1783,6 +1784,7 @@ export const App = () => {
         // Never clobber a download or staged install the user already started.
         if (
           current?.phase === 'downloading' ||
+          current?.phase === 'preparing' ||
           current?.phase === 'ready' ||
           current?.phase === 'restarting'
         ) {
@@ -1803,20 +1805,53 @@ export const App = () => {
     });
   }, []);
 
-  const downloadAppUpdate = async (version: string) => {
-    setAppUpdate({ phase: 'downloading', version });
+  useEffect(() => {
+    if (!window.sotto?.onAppUpdateProgress) return undefined;
+    return window.sotto.onAppUpdateProgress((progress: AppUpdateProgress) => {
+      setAppUpdate((current) => {
+        if (
+          !current ||
+          current.phase === 'check-failed' ||
+          current.version !== progress.version ||
+          (current.phase !== 'available' &&
+            current.phase !== 'downloading' &&
+            current.phase !== 'preparing')
+        ) {
+          return current;
+        }
+        return progress.phase === 'preparing'
+          ? { phase: 'preparing', version: progress.version }
+          : {
+              phase: 'downloading',
+              version: progress.version,
+              receivedBytes: progress.receivedBytes,
+              totalBytes: progress.totalBytes,
+            };
+      });
+    });
+  }, []);
+
+  const downloadAppUpdate = async (version: string, totalBytes = 0) => {
+    setAppUpdate({
+      phase: 'downloading',
+      version,
+      receivedBytes: 0,
+      totalBytes,
+    });
     try {
       const result = await window.sotto.downloadAppUpdate();
       setAppUpdate(
         result.outcome === 'staged'
           ? { phase: 'ready', version: result.version }
-          : result.outcome === 'downloaded'
-            ? {
-                phase: 'downloaded',
-                fileName: result.fileName,
-                version: result.version,
-              }
-            : { phase: 'failed', reason: result.reason, version },
+          : result.outcome === 'cancelled'
+            ? { phase: 'cancelled', version: result.version }
+            : result.outcome === 'downloaded'
+              ? {
+                  phase: 'downloaded',
+                  fileName: result.fileName,
+                  version: result.version,
+                }
+              : { phase: 'failed', reason: result.reason, version },
       );
     } catch {
       setAppUpdate({
@@ -1825,6 +1860,11 @@ export const App = () => {
         version,
       });
     }
+  };
+
+  const cancelAppUpdate = async (version: string) => {
+    await window.sotto.cancelAppUpdate();
+    setAppUpdate({ phase: 'cancelled', version });
   };
 
   const installAppUpdate = async (version: string) => {
@@ -1860,8 +1900,18 @@ export const App = () => {
   const updateNotice = appUpdate ? (
     <UpdateNotice
       onDismiss={dismissAppUpdate}
+      onCancel={() => {
+        if (appUpdate.phase === 'downloading') {
+          void cancelAppUpdate(appUpdate.version);
+        }
+      }}
       onDownload={() => {
-        if (appUpdate.phase === 'available' || appUpdate.phase === 'failed') {
+        if (appUpdate.phase === 'available') {
+          void downloadAppUpdate(appUpdate.version, appUpdate.size);
+        } else if (
+          appUpdate.phase === 'failed' ||
+          appUpdate.phase === 'cancelled'
+        ) {
           void downloadAppUpdate(appUpdate.version);
         }
       }}

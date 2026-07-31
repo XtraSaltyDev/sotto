@@ -11,6 +11,7 @@ import {
   UpdateService,
   updatePlatformKey,
 } from './update-service';
+import type { AppUpdateProgress } from '../../shared/contracts';
 
 const MANIFEST_URL = 'http://10.1.2.3:8090/internal/sotto/latest.json';
 const ORIGIN = 'http://10.1.2.3:8090';
@@ -57,6 +58,10 @@ const serviceWith = (
   fetcher: typeof fetch,
   downloads: string,
   currentVersion = '0.1.9',
+  options: {
+    installedAppPath?: string | null;
+    onProgress?: (progress: AppUpdateProgress) => void;
+  } = {},
 ): UpdateService =>
   new UpdateService({
     manifestUrl: MANIFEST_URL,
@@ -64,8 +69,9 @@ const serviceWith = (
     platformKey: 'darwin-arm64',
     downloadsDirectory: downloads,
     stagingDirectory: path.join(downloads, 'staging'),
-    installedAppPath: null,
+    installedAppPath: options.installedAppPath ?? null,
     fetcher,
+    onProgress: options.onProgress,
   });
 
 describe('compareAppVersions', () => {
@@ -131,6 +137,34 @@ describe('UpdateService', () => {
     });
   });
 
+  it('reports the in-place archive size for a replaceable macOS app', async () => {
+    const installer = Buffer.from('dmg-installer');
+    const archive = Buffer.from('zip-archive');
+    const manifest = manifestFor('0.2.0', installer);
+    manifest.artifacts['darwin-arm64-archive'] = {
+      file: 'Sotto-darwin-arm64.zip',
+      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+      sha256: createHash('sha256').update(archive).digest('hex'),
+      size: archive.byteLength,
+    };
+    const fetcher = vi.fn(async () => Response.json(manifest));
+    const service = serviceWith(
+      fetcher as typeof fetch,
+      await downloadsDirectory(),
+      '0.1.9',
+      { installedAppPath: '/Applications/Sotto.app' },
+    );
+
+    await expect(service.checkForUpdates()).resolves.toEqual({
+      outcome: 'update-available',
+      update: {
+        version: '0.2.0',
+        publishedAt: '2026-07-31T12:00:00.000Z',
+        size: archive.byteLength,
+      },
+    });
+  });
+
   it('treats the current and older versions as up to date', async () => {
     const artifact = Buffer.from('same-build');
     const fetcher = vi.fn(async () =>
@@ -185,6 +219,79 @@ describe('UpdateService', () => {
     await expect(readdir(downloads)).resolves.toEqual(['Sotto-0.2.0-arm64.dmg']);
   });
 
+  it('reports download progress', async () => {
+    const artifact = Buffer.from('progress-artifact');
+    const progress: AppUpdateProgress[] = [];
+    const manifest = manifestFor('0.2.0', artifact);
+    const fetcher = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('latest.json')
+        ? Response.json(manifest)
+        : new Response(artifact),
+    );
+    const service = serviceWith(
+      fetcher as typeof fetch,
+      await downloadsDirectory(),
+      '0.1.9',
+      { onProgress: (event) => progress.push(event) },
+    );
+
+    await expect(service.downloadUpdate()).resolves.toMatchObject({
+      outcome: 'downloaded',
+      version: '0.2.0',
+    });
+    expect(progress[0]).toMatchObject({
+      phase: 'downloading',
+      receivedBytes: 0,
+      totalBytes: artifact.byteLength,
+    });
+    expect(progress.at(-1)).toMatchObject({
+      phase: 'downloading',
+      receivedBytes: artifact.byteLength,
+      totalBytes: artifact.byteLength,
+    });
+  });
+
+  it('cancels an active download without leaving a partial artifact', async () => {
+    const artifact = Buffer.from('cancel-me');
+    const manifest = manifestFor('0.2.0', artifact);
+    const fetcher = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith('latest.json')) {
+          return Response.json(manifest);
+        }
+        if (init?.signal?.aborted) {
+          throw new TypeError('The update download was canceled.');
+        }
+        await new Promise<never>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new TypeError('The update download was canceled.')),
+            { once: true },
+          );
+        });
+      },
+    );
+    const downloads = await downloadsDirectory();
+    const service = serviceWith(
+      fetcher as typeof fetch,
+      downloads,
+      '0.1.9',
+      {
+        onProgress: (event) => {
+          if (event.phase === 'downloading' && event.receivedBytes === 0) {
+            service.cancelDownload();
+          }
+        },
+      },
+    );
+
+    await expect(service.downloadUpdate()).resolves.toEqual({
+      outcome: 'cancelled',
+      version: '0.2.0',
+    });
+    await expect(readdir(downloads)).resolves.toEqual([]);
+  });
+
   it('discards downloads whose checksum does not match the manifest', async () => {
     const artifact = Buffer.from('published-bytes');
     const manifest = manifestFor('0.2.0', artifact);
@@ -226,6 +333,7 @@ describe('UpdateService', () => {
 
   it('stages an in-place update and swaps the installed bundle on install', async () => {
     const archive = Buffer.from('zip-archive-bytes');
+    const progress: AppUpdateProgress[] = [];
     const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
     manifest.artifacts['darwin-arm64-archive'] = {
       file: 'Sotto-darwin-arm64.zip',
@@ -253,6 +361,7 @@ describe('UpdateService', () => {
       stagingDirectory: path.join(root, 'staging'),
       installedAppPath,
       fetcher: fetcher as typeof fetch,
+      onProgress: (event) => progress.push(event),
       extractArchive: async (_archivePath, directory) => {
         const bundle = path.join(directory, 'Sotto.app', 'Contents');
         await mkdir(bundle, { recursive: true });
@@ -262,6 +371,10 @@ describe('UpdateService', () => {
 
     await expect(service.downloadUpdate()).resolves.toEqual({
       outcome: 'staged',
+      version: '0.2.0',
+    });
+    expect(progress.at(-1)).toEqual({
+      phase: 'preparing',
       version: '0.2.0',
     });
     // Nothing lands in the Downloads folder for a staged update.

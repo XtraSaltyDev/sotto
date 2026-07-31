@@ -2,12 +2,16 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 import { mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import type { ClientRequest, IncomingMessage } from 'node:http';
 
 import type {
   AvailableAppUpdate,
+  AppUpdateProgress,
   CheckForAppUpdateResult,
   DownloadAppUpdateResult,
   InstallAppUpdateResult,
@@ -60,6 +64,9 @@ export interface UpdateServiceOptions {
   /** The installed .app bundle to replace, or null when not replaceable. */
   installedAppPath: string | null;
   fetcher?: typeof fetch;
+  /** Test hook; production artifact downloads use native Node HTTP streams. */
+  downloadFetcher?: typeof fetch;
+  onProgress?: (progress: AppUpdateProgress) => void;
   extractArchive?: (archivePath: string, directory: string) => Promise<void>;
 }
 
@@ -72,6 +79,75 @@ const dittoExtract = async (
   // ditto preserves the bundle's extended attributes and symlinks, which
   // unzip implementations frequently mangle for .app bundles.
   await execFileAsync('/usr/bin/ditto', ['-xk', archivePath, directory]);
+};
+
+const requestArtifactStream = (
+  url: string,
+  signal: AbortSignal,
+): Promise<IncomingMessage> => {
+  const parsedUrl = new URL(url);
+  const client =
+    parsedUrl.protocol === 'https:'
+      ? https
+      : parsedUrl.protocol === 'http:'
+        ? http
+        : null;
+  if (!client) {
+    return Promise.reject(
+      new TypeError('The update artifact URL must use HTTP or HTTPS.'),
+    );
+  }
+  if (signal.aborted) {
+    return Promise.reject(new TypeError('The update download was canceled.'));
+  }
+
+  return new Promise<IncomingMessage>((resolve, reject) => {
+    let response: IncomingMessage | null = null;
+    let settled = false;
+
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = (): void => {
+      const error = new TypeError('The update download was canceled.');
+      response?.destroy(error);
+      request.destroy(error);
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(error);
+      }
+    };
+
+    const request: ClientRequest = client.get(
+      parsedUrl,
+      { headers: { Accept: 'application/octet-stream' } },
+      (incoming) => {
+        response = incoming;
+        const status = incoming.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          incoming.resume();
+          settled = true;
+          cleanup();
+          reject(
+            new TypeError(`The update download returned HTTP ${status}.`),
+          );
+          return;
+        }
+        incoming.once('close', cleanup);
+        settled = true;
+        resolve(incoming);
+      },
+    );
+    request.once('error', (error) => {
+      cleanup();
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -179,6 +255,8 @@ const findAppBundle = async (directory: string): Promise<string | null> => {
 export class UpdateService {
   private readonly fetcher: typeof fetch;
 
+  private readonly downloadFetcher: typeof fetch | null;
+
   private readonly extractArchive: (
     archivePath: string,
     directory: string,
@@ -186,10 +264,36 @@ export class UpdateService {
 
   private stagedUpdate: { version: string; appPath: string } | null = null;
 
+  private activeDownloadController: AbortController | null = null;
+
+  private downloadInProgress = false;
+
+  private cancelRequested = false;
+
   constructor(private readonly options: UpdateServiceOptions) {
     new URL(options.manifestUrl);
     this.fetcher = options.fetcher ?? fetch;
+    this.downloadFetcher = options.downloadFetcher ?? options.fetcher ?? null;
     this.extractArchive = options.extractArchive ?? dittoExtract;
+  }
+
+  cancelDownload(): void {
+    this.cancelRequested = true;
+    this.activeDownloadController?.abort();
+  }
+
+  private preferredArtifact(
+    manifest: ParsedUpdateManifest,
+  ): ManifestArtifact | undefined {
+    const platformKey = this.options.platformKey;
+    if (!platformKey) return undefined;
+    if (platformKey === 'darwin-arm64' && this.options.installedAppPath) {
+      return (
+        manifest.artifacts['darwin-arm64-archive'] ??
+        manifest.artifacts[platformKey]
+      );
+    }
+    return manifest.artifacts[platformKey];
   }
 
   async checkForUpdates(): Promise<CheckForAppUpdateResult> {
@@ -200,9 +304,7 @@ export class UpdateService {
       ) {
         return { outcome: 'up-to-date', version: this.options.currentVersion };
       }
-      const artifact = this.options.platformKey
-        ? manifest.artifacts[this.options.platformKey]
-        : undefined;
+      const artifact = this.preferredArtifact(manifest);
       if (!artifact) {
         return { outcome: 'up-to-date', version: this.options.currentVersion };
       }
@@ -224,8 +326,18 @@ export class UpdateService {
   }
 
   async downloadUpdate(): Promise<DownloadAppUpdateResult> {
+    if (this.downloadInProgress) {
+      return {
+        outcome: 'failed',
+        reason: 'An update is already being downloaded.',
+      };
+    }
+    this.downloadInProgress = true;
+    this.cancelRequested = false;
+    let updateVersion: string | null = null;
     try {
       const manifest = await this.fetchManifest();
+      updateVersion = manifest.version;
       if (
         compareAppVersions(manifest.version, this.options.currentVersion) <= 0
       ) {
@@ -260,6 +372,9 @@ export class UpdateService {
         installer,
       );
     } catch (error) {
+      if (this.cancelRequested && updateVersion) {
+        return { outcome: 'cancelled', version: updateVersion };
+      }
       return {
         outcome: 'failed',
         reason:
@@ -267,6 +382,10 @@ export class UpdateService {
             ? error.message
             : 'Sotto could not download the update.',
       };
+    } finally {
+      this.downloadInProgress = false;
+      this.activeDownloadController = null;
+      this.cancelRequested = false;
     }
   }
 
@@ -321,7 +440,8 @@ export class UpdateService {
     await rm(staging, { force: true, recursive: true });
     await mkdir(staging, { recursive: true });
     const archivePath = path.join(staging, `Sotto-${version}.zip`);
-    await this.downloadVerified(artifact, archivePath);
+    await this.downloadVerified(artifact, archivePath, version);
+    this.options.onProgress?.({ phase: 'preparing', version });
     const extractedDirectory = path.join(staging, 'extracted');
     await mkdir(extractedDirectory, { recursive: true });
     await this.extractArchive(archivePath, extractedDirectory);
@@ -346,49 +466,85 @@ export class UpdateService {
     await mkdir(this.options.downloadsDirectory, { recursive: true });
     const fileName = artifactFileName(version, platformKey);
     const filePath = path.join(this.options.downloadsDirectory, fileName);
-    await this.downloadVerified(artifact, filePath);
+    await this.downloadVerified(artifact, filePath, version);
     return { outcome: 'downloaded', fileName, filePath, version };
   }
 
   private async downloadVerified(
     artifact: ManifestArtifact,
     filePath: string,
+    version: string,
   ): Promise<void> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+    this.activeDownloadController = controller;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, DOWNLOAD_TIMEOUT_MS);
     const temporaryPath = `${filePath}.sotto-download`;
-    try {
-      const response = await this.fetcher(artifact.downloadUrl, {
-        redirect: 'error',
-        signal: controller.signal,
+    const stream = createWriteStream(temporaryPath, { flags: 'w' });
+    const hash = createHash('sha256');
+    let received = 0;
+    let lastProgressAt = 0;
+    const reportProgress = (force = false): void => {
+      const now = Date.now();
+      if (!force && now - lastProgressAt < 100) return;
+      lastProgressAt = now;
+      this.options.onProgress?.({
+        phase: 'downloading',
+        version,
+        receivedBytes: received,
+        totalBytes: artifact.size,
       });
-      if (!response.ok || !response.body) {
-        throw new TypeError(
-          `The update download returned HTTP ${response.status}.`,
-        );
+    };
+    const writeChunk = async (chunk: Uint8Array): Promise<void> => {
+      const value = Buffer.from(chunk);
+      received += value.byteLength;
+      if (received > artifact.size) {
+        throw new TypeError('The update download exceeded its published size.');
       }
-
-      const hash = createHash('sha256');
-      let received = 0;
-      const stream = createWriteStream(temporaryPath, { flags: 'w' });
-      const reader = response.body.getReader();
+      hash.update(value);
+      await new Promise<void>((resolveWrite, rejectWrite) => {
+        stream.write(value, (writeError) =>
+          writeError ? rejectWrite(writeError) : resolveWrite(),
+        );
+      });
+      reportProgress();
+    };
+    const waitForStreamClose = async (): Promise<void> => {
+      if (stream.closed) return;
+      await once(stream, 'close').catch(() => undefined);
+    };
+    try {
+      reportProgress(true);
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          received += value.byteLength;
-          if (received > artifact.size) {
+        if (this.downloadFetcher) {
+          const response = await this.downloadFetcher(artifact.downloadUrl, {
+            redirect: 'error',
+            signal: controller.signal,
+          });
+          if (!response.ok || !response.body) {
             throw new TypeError(
-              'The update download exceeded its published size.',
+              `The update download returned HTTP ${response.status}.`,
             );
           }
-          hash.update(value);
-          await new Promise<void>((resolveWrite, rejectWrite) => {
-            stream.write(value, (writeError) =>
-              writeError ? rejectWrite(writeError) : resolveWrite(),
-            );
-          });
+          const reader = response.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            await writeChunk(value);
+          }
+        } else {
+          const response = await requestArtifactStream(
+            artifact.downloadUrl,
+            controller.signal,
+          );
+          for await (const chunk of response) {
+            await writeChunk(chunk);
+          }
         }
+        reportProgress(true);
         await new Promise<void>((resolveEnd, rejectEnd) => {
           stream.end((endError: unknown) =>
             endError ? rejectEnd(endError as Error) : resolveEnd(),
@@ -414,9 +570,19 @@ export class UpdateService {
       await rename(temporaryPath, filePath);
     } catch (error) {
       await unlink(temporaryPath).catch(() => undefined);
+      if (timedOut) {
+        throw new TypeError('The update server did not respond in time.');
+      }
+      if (this.cancelRequested) {
+        throw new TypeError('The update download was canceled.');
+      }
       throw error;
     } finally {
+      await waitForStreamClose();
       clearTimeout(timeout);
+      if (this.activeDownloadController === controller) {
+        this.activeDownloadController = null;
+      }
     }
   }
 
