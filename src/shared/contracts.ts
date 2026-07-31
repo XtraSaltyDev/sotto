@@ -26,6 +26,8 @@ export const IPC_CHANNELS = {
   disconnectLocalAi: 'sotto:local-ai:disconnect',
   generateLocalAiMeetingSummary: 'sotto:local-ai:meeting-summary:generate',
   deletePlayback: 'sotto:playback:delete',
+  checkForAppUpdate: 'sotto:updates:check',
+  downloadAppUpdate: 'sotto:updates:download',
   stateChanged: 'sotto:state:changed',
   dictationShortcut: 'sotto:dictation:shortcut',
 } as const;
@@ -401,6 +403,26 @@ export type UpdateTranscriptSegmentResult =
   | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
+export interface AvailableAppUpdate {
+  version: string;
+  publishedAt: string | null;
+  size: number;
+}
+
+export type CheckForAppUpdateResult =
+  | { outcome: 'update-available'; update: AvailableAppUpdate }
+  | { outcome: 'up-to-date'; version: string }
+  | { outcome: 'unavailable'; reason: string };
+
+export type DownloadAppUpdateResult =
+  | {
+      outcome: 'downloaded';
+      fileName: string;
+      filePath: string;
+      version: string;
+    }
+  | { outcome: 'failed'; reason: string };
+
 export interface SottoDesktopApi {
   getAppState(): Promise<AppState>;
   importMedia(
@@ -463,6 +485,8 @@ export interface SottoDesktopApi {
   generateLocalAiMeetingSummary(
     transcriptId: string,
   ): Promise<GenerateLocalAiMeetingSummaryResult>;
+  checkForAppUpdate(): Promise<CheckForAppUpdateResult>;
+  downloadAppUpdate(): Promise<DownloadAppUpdateResult>;
   onDictationShortcut(listener: () => void): () => void;
   onAppStateChanged(listener: (state: AppState) => void): () => void;
 }

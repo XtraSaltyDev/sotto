@@ -112,6 +112,10 @@ const api: SottoDesktopApi = Object.freeze({
       IPC_CHANNELS.generateLocalAiMeetingSummary,
       transcriptId,
     ),
+  checkForAppUpdate: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.checkForAppUpdate),
+  downloadAppUpdate: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.downloadAppUpdate),
   onDictationShortcut: (listener: () => void) => {
     const wrapped = () => listener();
     ipcRenderer.on(IPC_CHANNELS.dictationShortcut, wrapped);

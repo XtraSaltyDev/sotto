@@ -16,6 +16,7 @@ import {
   isExpectedSpeakerCount,
   type AppendLiveRecordingChunkResult,
   type CancelLiveRecordingResult,
+  type CheckForAppUpdateResult,
   type ConnectLocalAiInput,
   type ConnectLocalAiResult,
   type CopyTranscriptOutputResult,
@@ -23,6 +24,7 @@ import {
   type DeletePlaybackResult,
   type DeleteTranscriptResult,
   type DisconnectLocalAiResult,
+  type DownloadAppUpdateResult,
   type ExportRecordingResult,
   type ExportTranscriptResult,
   type ExpectedSpeakerCount,
@@ -65,6 +67,7 @@ import { copyRecordingForExport } from '../recording/recording-export';
 import { writeTranscriptExport } from '../export/transcript-export';
 import { insertTextAtCursor } from '../dictation/cursor-insertion';
 import type { LocalAiConnectionService } from '../local-ai/local-ai-connection';
+import type { UpdateService } from '../updates/update-service';
 import {
   isTranscriptCopyKind,
   isTranscriptExportFormat,
@@ -75,11 +78,13 @@ import {
 export interface DesktopIpcOptions {
   controller: AppController;
   localAiService: LocalAiConnectionService;
+  updateService: UpdateService;
   getMainWindow: () => BrowserWindow | null;
   openRecordingSettings: () => Promise<void>;
   requestRecordingPermissions: () => Promise<
     'native-requested' | 'settings-opened'
   >;
+  revealDownloadedUpdate: (filePath: string) => void;
 }
 
 const EXPECTED_SPEAKER_COUNT_REASON =
@@ -218,9 +223,11 @@ const asChunk = (value: unknown): Uint8Array | null => {
 export const registerDesktopIpc = ({
   controller,
   localAiService,
+  updateService,
   getMainWindow,
   openRecordingSettings,
   requestRecordingPermissions,
+  revealDownloadedUpdate,
 }: DesktopIpcOptions): (() => void) => {
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
     assertTrustedSender(event, getMainWindow);
@@ -255,6 +262,26 @@ export const registerDesktopIpc = ({
       trust(event);
       await localAiService.disconnect();
       return { outcome: 'disconnected' };
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.checkForAppUpdate,
+    async (event): Promise<CheckForAppUpdateResult> => {
+      trust(event);
+      return updateService.checkForUpdates();
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.downloadAppUpdate,
+    async (event): Promise<DownloadAppUpdateResult> => {
+      trust(event);
+      const result = await updateService.downloadUpdate();
+      if (result.outcome === 'downloaded') {
+        revealDownloadedUpdate(result.filePath);
+      }
+      return result;
     },
   );
 
@@ -890,6 +917,8 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.connectLocalAi,
       IPC_CHANNELS.disconnectLocalAi,
       IPC_CHANNELS.generateLocalAiMeetingSummary,
+      IPC_CHANNELS.checkForAppUpdate,
+      IPC_CHANNELS.downloadAppUpdate,
       IPC_CHANNELS.importMedia,
       IPC_CHANNELS.startLiveRecording,
       IPC_CHANNELS.appendLiveRecordingChunk,

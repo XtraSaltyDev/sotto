@@ -1,0 +1,70 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  formatUpdateSize,
+  shouldOfferUpdate,
+  UpdateNotice,
+} from './UpdateNotice';
+
+describe('UpdateNotice', () => {
+  it('offers a download when a new version is available', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{ phase: 'available', version: '0.2.0', size: 626321192 }}
+      />,
+    );
+
+    expect(markup).toContain('Sotto 0.2.0 is available');
+    expect(markup).toContain('597 MB');
+    expect(markup).toContain('Download');
+    expect(markup).toContain('Not now');
+    expect(markup).toContain('role="status"');
+  });
+
+  it('explains the install step after a completed download', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{
+          phase: 'downloaded',
+          fileName: 'Sotto-0.2.0-arm64.dmg',
+          version: '0.2.0',
+        }}
+      />,
+    );
+
+    expect(markup).toContain('Update ready to install');
+    expect(markup).toContain('Sotto-0.2.0-arm64.dmg');
+    expect(markup).toContain('Downloads folder');
+  });
+
+  it('offers a retry after a failed download', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{ phase: 'failed', reason: 'The update download ended early.', version: '0.2.0' }}
+      />,
+    );
+
+    expect(markup).toContain('Update download failed');
+    expect(markup).toContain('The update download ended early.');
+    expect(markup).toContain('Retry');
+    expect(markup).toContain('update-notice--failed');
+  });
+
+  it('suppresses only the dismissed version', () => {
+    expect(shouldOfferUpdate('0.2.0', '0.2.0')).toBe(false);
+    expect(shouldOfferUpdate('0.2.1', '0.2.0')).toBe(true);
+    expect(shouldOfferUpdate('0.2.0', null)).toBe(true);
+  });
+
+  it('rounds artifact sizes to whole megabytes', () => {
+    expect(formatUpdateSize(626321192)).toBe('597 MB');
+    expect(formatUpdateSize(1024)).toBe('1 MB');
+  });
+});

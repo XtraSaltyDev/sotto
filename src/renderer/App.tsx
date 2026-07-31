@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from 'react';
 
 import type {
@@ -70,6 +71,12 @@ import {
   TrashIcon,
 } from './icons';
 import { LocalAiSettings } from './LocalAiSettings';
+import {
+  DISMISSED_UPDATE_VERSION_KEY,
+  shouldOfferUpdate,
+  UpdateNotice,
+  type AppUpdateNoticeState,
+} from './UpdateNotice';
 import {
   TRANSCRIPT_COPY_OPTIONS,
   TRANSCRIPT_EXPORT_OPTIONS,
@@ -1673,6 +1680,7 @@ export const App = () => {
   const [isNewTranscriptionOpen, setIsNewTranscriptionOpen] = useState(false);
   const [dismissedStorageMessage, setDismissedStorageMessage] =
     useState<string | null>(null);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateNoticeState | null>(null);
   const [libraryViewState, setLibraryViewState] =
     useState<TranscriptLibraryViewState>({
       query: '',
@@ -1731,6 +1739,82 @@ export const App = () => {
       setIsNewTranscriptionOpen(true);
     }
   }, [appState]);
+
+  useEffect(() => {
+    if (!window.sotto?.checkForAppUpdate) return undefined;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const result = await window.sotto.checkForAppUpdate();
+        if (cancelled || result.outcome !== 'update-available') return;
+        const dismissed = window.localStorage.getItem(
+          DISMISSED_UPDATE_VERSION_KEY,
+        );
+        if (!shouldOfferUpdate(result.update.version, dismissed)) return;
+        setAppUpdate((current) =>
+          current && current.phase !== 'available'
+            ? current
+            : {
+                phase: 'available',
+                version: result.update.version,
+                size: result.update.size,
+              },
+        );
+      } catch {
+        // A quiet network is normal away from the Spark host; never nag.
+      }
+    };
+    const initialCheck = window.setTimeout(() => void check(), 3_000);
+    const recurringCheck = window.setInterval(
+      () => void check(),
+      6 * 60 * 60 * 1_000,
+    );
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialCheck);
+      window.clearInterval(recurringCheck);
+    };
+  }, []);
+
+  const downloadAppUpdate = async (version: string) => {
+    setAppUpdate({ phase: 'downloading', version });
+    try {
+      const result = await window.sotto.downloadAppUpdate();
+      setAppUpdate(
+        result.outcome === 'downloaded'
+          ? {
+              phase: 'downloaded',
+              fileName: result.fileName,
+              version: result.version,
+            }
+          : { phase: 'failed', reason: result.reason, version },
+      );
+    } catch {
+      setAppUpdate({
+        phase: 'failed',
+        reason: 'Sotto could not download the update.',
+        version,
+      });
+    }
+  };
+
+  const dismissAppUpdate = () => {
+    if (appUpdate && appUpdate.phase !== 'downloaded') {
+      window.localStorage.setItem(
+        DISMISSED_UPDATE_VERSION_KEY,
+        appUpdate.version,
+      );
+    }
+    setAppUpdate(null);
+  };
+
+  const updateNotice = appUpdate ? (
+    <UpdateNotice
+      onDismiss={dismissAppUpdate}
+      onDownload={() => void downloadAppUpdate(appUpdate.version)}
+      state={appUpdate}
+    />
+  ) : null;
 
   useEffect(() => {
     if (!appState?.recording.active) return undefined;
@@ -2563,7 +2647,7 @@ export const App = () => {
   if (currentPage === 'local-ai') {
     return (
       <div className="app-shell">
-        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} updateNotice={updateNotice} />
         <LocalAiSettings />
       </div>
     );
@@ -2572,7 +2656,7 @@ export const App = () => {
   if (selectedId) {
     return (
       <div className="app-shell">
-        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} updateNotice={updateNotice} />
         <TranscriptView
           localAiConnection={localAiConnection}
           localAiError={localAiError}
@@ -2603,7 +2687,7 @@ export const App = () => {
 
   return (
     <div className="app-shell">
-      <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+      <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} updateNotice={updateNotice} />
       <main className={`workspace${showNewTranscription ? '' : ' workspace--library-home'}`}>
         <header className="topbar">
           <h1>Transcripts</h1>
@@ -2834,9 +2918,11 @@ export const App = () => {
 const Sidebar = ({
   currentPage,
   onNavigate,
+  updateNotice,
 }: {
   currentPage: AppPage;
   onNavigate: (page: AppPage) => void;
+  updateNotice?: ReactNode;
 }) => (
   <aside className="sidebar" aria-label="Sotto navigation">
     <div className="brand"><BrandIcon className="brand__mark" /><span>Sotto</span></div>
@@ -2856,6 +2942,7 @@ const Sidebar = ({
         <ModelIcon /><span>Local AI</span>
       </button>
     </nav>
+    {updateNotice}
     <div className="privacy-note"><LockIcon /><span>Media and transcripts stay on this device.</span></div>
   </aside>
 );

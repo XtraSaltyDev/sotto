@@ -30,6 +30,11 @@ import { resolveEngineRuntime } from './main/runtime/engine-runtime';
 import { TranscriptRepository } from './main/storage/transcript-repository';
 import { createPlaybackResponse } from './main/media/playback-response';
 import { LocalAiConnectionService } from './main/local-ai/local-ai-connection';
+import {
+  DEFAULT_SOTTO_UPDATE_MANIFEST_URL,
+  UpdateService,
+  updatePlatformKey,
+} from './main/updates/update-service';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -239,6 +244,15 @@ const initialize = async (): Promise<void> => {
     },
   });
 
+  const updateService = new UpdateService({
+    manifestUrl:
+      process.env.SOTTO_UPDATE_MANIFEST_URL ??
+      DEFAULT_SOTTO_UPDATE_MANIFEST_URL,
+    currentVersion: app.getVersion(),
+    platformKey: updatePlatformKey(process.platform, process.arch),
+    downloadsDirectory: app.getPath('downloads'),
+  });
+
   session.defaultSession.protocol.handle('sotto-media', async (request) => {
     if (!controller) return new Response(null, { status: 503 });
     return createPlaybackResponse(request, (transcriptId) =>
@@ -264,8 +278,10 @@ const initialize = async (): Promise<void> => {
   removeIpcHandlers = registerDesktopIpc({
     controller,
     localAiService,
+    updateService,
     getMainWindow: () => mainWindow,
     openRecordingSettings,
+    revealDownloadedUpdate: (filePath) => shell.showItemInFolder(filePath),
     requestRecordingPermissions: async () => {
       const granted = await requestMacScreenRecordingAccess({
         appPath: app.getAppPath(),

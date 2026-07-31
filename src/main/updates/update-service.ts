@@ -1,0 +1,314 @@
+import { createHash } from 'node:crypto';
+import { once } from 'node:events';
+import { createWriteStream } from 'node:fs';
+import { mkdir, rename, unlink } from 'node:fs/promises';
+import path from 'node:path';
+
+import type {
+  AvailableAppUpdate,
+  CheckForAppUpdateResult,
+  DownloadAppUpdateResult,
+} from '../../shared/contracts';
+
+export const DEFAULT_SOTTO_UPDATE_MANIFEST_URL =
+  'http://10.1.2.3:8090/internal/sotto/latest.json';
+
+const MANIFEST_TIMEOUT_MS = 8_000;
+const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
+const MAX_MANIFEST_BYTES = 64 * 1024;
+const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
+
+export type UpdatePlatformKey = 'darwin-arm64' | 'win32-x64';
+
+interface ManifestArtifact {
+  downloadUrl: string;
+  sha256: string;
+  size: number;
+}
+
+interface ParsedUpdateManifest {
+  version: string;
+  publishedAt: string | null;
+  artifacts: Partial<Record<UpdatePlatformKey, ManifestArtifact>>;
+}
+
+export interface UpdateServiceOptions {
+  manifestUrl: string;
+  currentVersion: string;
+  platformKey: UpdatePlatformKey | null;
+  downloadsDirectory: string;
+  fetcher?: typeof fetch;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+export const compareAppVersions = (left: string, right: string): number => {
+  if (!VERSION_PATTERN.test(left) || !VERSION_PATTERN.test(right)) {
+    throw new TypeError('App versions must use the numeric x.y.z form.');
+  }
+  const leftParts = left.split('.').map(Number);
+  const rightParts = right.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) {
+      return leftParts[index] < rightParts[index] ? -1 : 1;
+    }
+  }
+  return 0;
+};
+
+export const updatePlatformKey = (
+  platform: string,
+  architecture: string,
+): UpdatePlatformKey | null => {
+  if (platform === 'darwin' && architecture === 'arm64') return 'darwin-arm64';
+  if (platform === 'win32' && architecture === 'x64') return 'win32-x64';
+  return null;
+};
+
+const parseArtifact = (
+  value: unknown,
+  manifestOrigin: string,
+): ManifestArtifact => {
+  if (!isRecord(value)) {
+    throw new TypeError('The update manifest artifact is invalid.');
+  }
+  const { downloadUrl, sha256, size } = value;
+  if (typeof downloadUrl !== 'string') {
+    throw new TypeError('The update manifest download URL is invalid.');
+  }
+  const parsedUrl = new URL(downloadUrl);
+  if (parsedUrl.origin !== manifestOrigin) {
+    throw new TypeError(
+      'The update artifact must come from the manifest origin.',
+    );
+  }
+  if (typeof sha256 !== 'string' || !SHA256_PATTERN.test(sha256)) {
+    throw new TypeError('The update manifest digest is invalid.');
+  }
+  if (
+    typeof size !== 'number' ||
+    !Number.isSafeInteger(size) ||
+    size <= 0 ||
+    size > MAX_ARTIFACT_BYTES
+  ) {
+    throw new TypeError('The update manifest artifact size is invalid.');
+  }
+  return { downloadUrl, sha256, size };
+};
+
+export const parseUpdateManifest = (
+  value: unknown,
+  manifestOrigin: string,
+): ParsedUpdateManifest => {
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== 1 ||
+    value.app !== 'sotto' ||
+    typeof value.version !== 'string' ||
+    !VERSION_PATTERN.test(value.version) ||
+    !isRecord(value.artifacts)
+  ) {
+    throw new TypeError('The update manifest is invalid.');
+  }
+  const artifacts: ParsedUpdateManifest['artifacts'] = {};
+  for (const key of ['darwin-arm64', 'win32-x64'] as const) {
+    if (value.artifacts[key] !== undefined) {
+      artifacts[key] = parseArtifact(value.artifacts[key], manifestOrigin);
+    }
+  }
+  const publishedAt =
+    typeof value.publishedAt === 'string' &&
+    Number.isFinite(new Date(value.publishedAt).getTime())
+      ? new Date(value.publishedAt).toISOString()
+      : null;
+  return { version: value.version, publishedAt, artifacts };
+};
+
+const artifactFileName = (
+  version: string,
+  platformKey: UpdatePlatformKey,
+): string =>
+  platformKey === 'darwin-arm64'
+    ? `Sotto-${version}-arm64.dmg`
+    : `Sotto-win32-x64-${version}.zip`;
+
+export class UpdateService {
+  private readonly fetcher: typeof fetch;
+
+  constructor(private readonly options: UpdateServiceOptions) {
+    new URL(options.manifestUrl);
+    this.fetcher = options.fetcher ?? fetch;
+  }
+
+  async checkForUpdates(): Promise<CheckForAppUpdateResult> {
+    try {
+      const manifest = await this.fetchManifest();
+      if (
+        compareAppVersions(manifest.version, this.options.currentVersion) <= 0
+      ) {
+        return { outcome: 'up-to-date', version: this.options.currentVersion };
+      }
+      const artifact = this.options.platformKey
+        ? manifest.artifacts[this.options.platformKey]
+        : undefined;
+      if (!artifact) {
+        return { outcome: 'up-to-date', version: this.options.currentVersion };
+      }
+      const update: AvailableAppUpdate = {
+        version: manifest.version,
+        publishedAt: manifest.publishedAt,
+        size: artifact.size,
+      };
+      return { outcome: 'update-available', update };
+    } catch (error) {
+      return {
+        outcome: 'unavailable',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Sotto could not check for updates.',
+      };
+    }
+  }
+
+  async downloadUpdate(): Promise<DownloadAppUpdateResult> {
+    let temporaryPath: string | null = null;
+    try {
+      const manifest = await this.fetchManifest();
+      if (
+        compareAppVersions(manifest.version, this.options.currentVersion) <= 0
+      ) {
+        return { outcome: 'failed', reason: 'Sotto is already up to date.' };
+      }
+      const platformKey = this.options.platformKey;
+      const artifact = platformKey ? manifest.artifacts[platformKey] : undefined;
+      if (!platformKey || !artifact) {
+        return {
+          outcome: 'failed',
+          reason: 'No update is published for this platform.',
+        };
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        DOWNLOAD_TIMEOUT_MS,
+      );
+      try {
+        const response = await this.fetcher(artifact.downloadUrl, {
+          redirect: 'error',
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          throw new TypeError(
+            `The update download returned HTTP ${response.status}.`,
+          );
+        }
+
+        await mkdir(this.options.downloadsDirectory, { recursive: true });
+        const fileName = artifactFileName(manifest.version, platformKey);
+        const filePath = path.join(this.options.downloadsDirectory, fileName);
+        temporaryPath = `${filePath}.sotto-download`;
+        const hash = createHash('sha256');
+        let received = 0;
+        const stream = createWriteStream(temporaryPath, { flags: 'w' });
+        const reader = response.body.getReader();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            received += value.byteLength;
+            if (received > artifact.size) {
+              throw new TypeError(
+                'The update download exceeded its published size.',
+              );
+            }
+            hash.update(value);
+            await new Promise<void>((resolveWrite, rejectWrite) => {
+              stream.write(value, (writeError) =>
+                writeError ? rejectWrite(writeError) : resolveWrite(),
+              );
+            });
+          }
+          await new Promise<void>((resolveEnd, rejectEnd) => {
+            stream.end((endError: unknown) =>
+              endError ? rejectEnd(endError as Error) : resolveEnd(),
+            );
+          });
+        } catch (error) {
+          // Wait for the lazily opened file descriptor to close before the
+          // outer cleanup unlinks the partial file, or the unlink can lose
+          // the race against the stream's asynchronous open.
+          stream.destroy();
+          await once(stream, 'close').catch(() => undefined);
+          throw error;
+        }
+
+        if (received !== artifact.size) {
+          throw new TypeError('The update download ended early.');
+        }
+        if (hash.digest('hex') !== artifact.sha256) {
+          throw new TypeError(
+            'The update download did not match its published checksum.',
+          );
+        }
+        await rename(temporaryPath, filePath);
+        temporaryPath = null;
+        return {
+          outcome: 'downloaded',
+          fileName,
+          filePath,
+          version: manifest.version,
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (error) {
+      if (temporaryPath) {
+        await unlink(temporaryPath).catch(() => undefined);
+      }
+      return {
+        outcome: 'failed',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Sotto could not download the update.',
+      };
+    }
+  }
+
+  private async fetchManifest(): Promise<ParsedUpdateManifest> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MANIFEST_TIMEOUT_MS);
+    try {
+      const response = await this.fetcher(this.options.manifestUrl, {
+        headers: { Accept: 'application/json' },
+        redirect: 'error',
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new TypeError(
+          `The update manifest returned HTTP ${response.status}.`,
+        );
+      }
+      const body = await response.text();
+      if (Buffer.byteLength(body, 'utf8') > MAX_MANIFEST_BYTES) {
+        throw new TypeError('The update manifest is too large.');
+      }
+      return parseUpdateManifest(
+        JSON.parse(body) as unknown,
+        new URL(this.options.manifestUrl).origin,
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new TypeError('The update server did not respond in time.');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
