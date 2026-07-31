@@ -57,6 +57,37 @@ describe('UpdateNotice', () => {
     expect(markup).toContain('update-notice--failed');
   });
 
+  it('confirms the current version after a manual check', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{ phase: 'up-to-date', version: '0.1.10' }}
+      />,
+    );
+
+    expect(markup).toContain('Sotto is up to date');
+    expect(markup).toContain('0.1.10');
+    expect(markup).toContain('Done');
+  });
+
+  it('reports an unreachable update server after a manual check', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{
+          phase: 'check-failed',
+          reason: 'The update server did not respond in time.',
+        }}
+      />,
+    );
+
+    expect(markup).toContain('Could not check for updates');
+    expect(markup).toContain('The update server did not respond in time.');
+    expect(markup).toContain('update-notice--failed');
+  });
+
   it('suppresses only the dismissed version', () => {
     expect(shouldOfferUpdate('0.2.0', '0.2.0')).toBe(false);
     expect(shouldOfferUpdate('0.2.1', '0.2.0')).toBe(true);

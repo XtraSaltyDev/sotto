@@ -28,6 +28,7 @@ export const IPC_CHANNELS = {
   deletePlayback: 'sotto:playback:delete',
   checkForAppUpdate: 'sotto:updates:check',
   downloadAppUpdate: 'sotto:updates:download',
+  manualUpdateCheck: 'sotto:updates:manual-check',
   stateChanged: 'sotto:state:changed',
   dictationShortcut: 'sotto:dictation:shortcut',
 } as const;
@@ -487,6 +488,9 @@ export interface SottoDesktopApi {
   ): Promise<GenerateLocalAiMeetingSummaryResult>;
   checkForAppUpdate(): Promise<CheckForAppUpdateResult>;
   downloadAppUpdate(): Promise<DownloadAppUpdateResult>;
+  onManualUpdateCheck(
+    listener: (result: CheckForAppUpdateResult) => void,
+  ): () => void;
   onDictationShortcut(listener: () => void): () => void;
   onAppStateChanged(listener: (state: AppState) => void): () => void;
 }

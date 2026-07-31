@@ -5,6 +5,7 @@ import {
   BrowserWindow,
   desktopCapturer,
   globalShortcut,
+  Menu,
   protocol,
   safeStorage,
   session,
@@ -19,6 +20,7 @@ import {
 } from './shared/contracts';
 
 import { AppController } from './main/app-controller';
+import { buildMacAppMenuTemplate } from './main/app-menu';
 import { registerDesktopIpc } from './main/ipc/register-desktop-ipc';
 import {
   configureMacDesktopAudioFallback,
@@ -300,6 +302,23 @@ const initialize = async (): Promise<void> => {
       return 'native-requested';
     },
   });
+  if (process.platform === 'darwin') {
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate(
+        buildMacAppMenuTemplate(app.name, () => {
+          void updateService.checkForUpdates().then((result) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.show();
+              mainWindow.webContents.send(
+                IPC_CHANNELS.manualUpdateCheck,
+                result,
+              );
+            }
+          });
+        }),
+      ),
+    );
+  }
   createWindow();
   if (!globalShortcut.register(DICTATION_ACCELERATOR, requestDictationToggle)) {
     console.warn(

@@ -4,7 +4,9 @@ export type AppUpdateNoticeState =
   | { phase: 'available'; version: string; size: number }
   | { phase: 'downloading'; version: string }
   | { phase: 'downloaded'; fileName: string; version: string }
-  | { phase: 'failed'; reason: string; version: string };
+  | { phase: 'failed'; reason: string; version: string }
+  | { phase: 'up-to-date'; version: string }
+  | { phase: 'check-failed'; reason: string };
 
 export const DISMISSED_UPDATE_VERSION_KEY = 'sotto:dismissed-update-version';
 
@@ -27,7 +29,7 @@ export const UpdateNotice = ({
 }) => (
   <aside
     aria-label="Sotto update"
-    className={`update-notice${state.phase === 'failed' ? ' update-notice--failed' : ''}`}
+    className={`update-notice${state.phase === 'failed' || state.phase === 'check-failed' ? ' update-notice--failed' : ''}`}
     role="status"
   >
     {state.phase === 'available' ? (
@@ -77,6 +79,32 @@ export const UpdateNotice = ({
           </button>
           <button className="update-notice__dismiss" onClick={onDismiss} type="button">
             Not now
+          </button>
+        </div>
+      </>
+    ) : null}
+    {state.phase === 'up-to-date' ? (
+      <>
+        <div>
+          <strong>Sotto is up to date</strong>
+          <p>You are running the latest version, {state.version}.</p>
+        </div>
+        <div className="update-notice__actions">
+          <button className="update-notice__dismiss" onClick={onDismiss} type="button">
+            Done
+          </button>
+        </div>
+      </>
+    ) : null}
+    {state.phase === 'check-failed' ? (
+      <>
+        <div>
+          <strong>Could not check for updates</strong>
+          <p>{state.reason}</p>
+        </div>
+        <div className="update-notice__actions">
+          <button className="update-notice__dismiss" onClick={onDismiss} type="button">
+            Done
           </button>
         </div>
       </>

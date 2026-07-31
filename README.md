@@ -16,9 +16,11 @@ On macOS 13 or newer and Windows 11 x64 it can also record a live Teams
 meeting's desktop audio and your microphone, then transcribe that capture when
 you stop.
 
-Nothing is uploaded. Sotto has no cloud service, accounts, analytics, updater,
-or cloud capture. Its meeting-summary draft is extracted locally from the saved
-transcript and links every listed point back to its timestamp.
+Nothing is uploaded. Sotto has no cloud service, accounts, analytics, or cloud
+capture. Its meeting-summary draft is extracted locally from the saved
+transcript and links every listed point back to its timestamp. The optional
+update check fetches only a version manifest from a server on your own network
+and never transmits recordings, transcripts, or identifiers.
 
 ## What works now
 
@@ -121,7 +123,7 @@ out/Sotto-darwin-arm64/Sotto.app
 For local DMG validation, use the generated disk image:
 
 ```text
-out/make/Sotto-0.1.9-arm64.dmg
+out/make/Sotto-0.1.10-arm64.dmg
 ```
 
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains

@@ -1776,6 +1776,27 @@ export const App = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (!window.sotto?.onManualUpdateCheck) return undefined;
+    return window.sotto.onManualUpdateCheck((result) => {
+      setAppUpdate((current) => {
+        // Never clobber a download the user already started.
+        if (current?.phase === 'downloading') return current;
+        if (result.outcome === 'update-available') {
+          return {
+            phase: 'available',
+            version: result.update.version,
+            size: result.update.size,
+          };
+        }
+        if (result.outcome === 'up-to-date') {
+          return { phase: 'up-to-date', version: result.version };
+        }
+        return { phase: 'check-failed', reason: result.reason };
+      });
+    });
+  }, []);
+
   const downloadAppUpdate = async (version: string) => {
     setAppUpdate({ phase: 'downloading', version });
     try {
@@ -1799,7 +1820,10 @@ export const App = () => {
   };
 
   const dismissAppUpdate = () => {
-    if (appUpdate && appUpdate.phase !== 'downloaded') {
+    if (
+      appUpdate &&
+      (appUpdate.phase === 'available' || appUpdate.phase === 'failed')
+    ) {
       window.localStorage.setItem(
         DISMISSED_UPDATE_VERSION_KEY,
         appUpdate.version,
@@ -1811,7 +1835,11 @@ export const App = () => {
   const updateNotice = appUpdate ? (
     <UpdateNotice
       onDismiss={dismissAppUpdate}
-      onDownload={() => void downloadAppUpdate(appUpdate.version)}
+      onDownload={() => {
+        if (appUpdate.phase === 'available' || appUpdate.phase === 'failed') {
+          void downloadAppUpdate(appUpdate.version);
+        }
+      }}
       state={appUpdate}
     />
   ) : null;

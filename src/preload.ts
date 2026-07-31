@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   IPC_CHANNELS,
   type AppState,
+  type CheckForAppUpdateResult,
   type ConnectLocalAiInput,
   type ExpectedSpeakerCount,
   type RecordingKind,
@@ -116,6 +117,17 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.checkForAppUpdate),
   downloadAppUpdate: () =>
     ipcRenderer.invoke(IPC_CHANNELS.downloadAppUpdate),
+  onManualUpdateCheck: (
+    listener: (result: CheckForAppUpdateResult) => void,
+  ) => {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      result: CheckForAppUpdateResult,
+    ) => listener(result);
+    ipcRenderer.on(IPC_CHANNELS.manualUpdateCheck, wrapped);
+    return () =>
+      ipcRenderer.removeListener(IPC_CHANNELS.manualUpdateCheck, wrapped);
+  },
   onDictationShortcut: (listener: () => void) => {
     const wrapped = () => listener();
     ipcRenderer.on(IPC_CHANNELS.dictationShortcut, wrapped);
