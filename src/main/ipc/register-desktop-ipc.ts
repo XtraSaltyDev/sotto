@@ -32,6 +32,7 @@ import {
   type GenerateLocalAiMeetingSummaryResult,
   type ImportMediaResult,
   type InsertDictationTextResult,
+  type InstallAppUpdateResult,
   type LocalAiConnectionSummary,
   type OpenRecordingSettingsResult,
   type RecordingKind,
@@ -85,6 +86,7 @@ export interface DesktopIpcOptions {
     'native-requested' | 'settings-opened'
   >;
   revealDownloadedUpdate: (filePath: string) => void;
+  relaunchForUpdate: () => void;
 }
 
 const EXPECTED_SPEAKER_COUNT_REASON =
@@ -228,6 +230,7 @@ export const registerDesktopIpc = ({
   openRecordingSettings,
   requestRecordingPermissions,
   revealDownloadedUpdate,
+  relaunchForUpdate,
 }: DesktopIpcOptions): (() => void) => {
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
     assertTrustedSender(event, getMainWindow);
@@ -280,6 +283,18 @@ export const registerDesktopIpc = ({
       const result = await updateService.downloadUpdate();
       if (result.outcome === 'downloaded') {
         revealDownloadedUpdate(result.filePath);
+      }
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.installAppUpdate,
+    async (event): Promise<InstallAppUpdateResult> => {
+      trust(event);
+      const result = await updateService.installUpdate();
+      if (result.outcome === 'installed') {
+        relaunchForUpdate();
       }
       return result;
     },
@@ -919,6 +934,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.generateLocalAiMeetingSummary,
       IPC_CHANNELS.checkForAppUpdate,
       IPC_CHANNELS.downloadAppUpdate,
+      IPC_CHANNELS.installAppUpdate,
       IPC_CHANNELS.importMedia,
       IPC_CHANNELS.startLiveRecording,
       IPC_CHANNELS.appendLiveRecordingChunk,

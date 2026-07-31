@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -31,6 +31,13 @@ const downloadsDirectory = async (): Promise<string> => {
   return directory;
 };
 
+interface TestArtifact {
+  file: string;
+  downloadUrl: string;
+  sha256: string;
+  size: number;
+}
+
 const manifestFor = (version: string, artifact: Buffer) => ({
   schemaVersion: 1,
   app: 'sotto',
@@ -43,7 +50,7 @@ const manifestFor = (version: string, artifact: Buffer) => ({
       sha256: createHash('sha256').update(artifact).digest('hex'),
       size: artifact.byteLength,
     },
-  },
+  } as Record<string, TestArtifact>,
 });
 
 const serviceWith = (
@@ -56,6 +63,8 @@ const serviceWith = (
     currentVersion,
     platformKey: 'darwin-arm64',
     downloadsDirectory: downloads,
+    stagingDirectory: path.join(downloads, 'staging'),
+    installedAppPath: null,
     fetcher,
   });
 
@@ -213,6 +222,125 @@ describe('UpdateService', () => {
       reason: 'The update download exceeded its published size.',
     });
     await expect(readdir(downloads)).resolves.toEqual([]);
+  });
+
+  it('stages an in-place update and swaps the installed bundle on install', async () => {
+    const archive = Buffer.from('zip-archive-bytes');
+    const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
+    manifest.artifacts['darwin-arm64-archive'] = {
+      file: 'Sotto-darwin-arm64.zip',
+      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+      sha256: createHash('sha256').update(archive).digest('hex'),
+      size: archive.byteLength,
+    };
+    const fetcher = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('latest.json')
+        ? Response.json(manifest)
+        : new Response(archive),
+    );
+    const root = await downloadsDirectory();
+    const installedAppPath = path.join(root, 'Applications', 'Sotto.app');
+    await mkdir(path.join(installedAppPath, 'Contents'), { recursive: true });
+    await writeFile(
+      path.join(installedAppPath, 'Contents', 'marker'),
+      'old-version',
+    );
+    const service = new UpdateService({
+      manifestUrl: MANIFEST_URL,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: path.join(root, 'downloads'),
+      stagingDirectory: path.join(root, 'staging'),
+      installedAppPath,
+      fetcher: fetcher as typeof fetch,
+      extractArchive: async (_archivePath, directory) => {
+        const bundle = path.join(directory, 'Sotto.app', 'Contents');
+        await mkdir(bundle, { recursive: true });
+        await writeFile(path.join(bundle, 'marker'), 'new-version');
+      },
+    });
+
+    await expect(service.downloadUpdate()).resolves.toEqual({
+      outcome: 'staged',
+      version: '0.2.0',
+    });
+    // Nothing lands in the Downloads folder for a staged update.
+    await expect(readdir(path.join(root, 'downloads'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+
+    await expect(service.installUpdate()).resolves.toEqual({
+      outcome: 'installed',
+      version: '0.2.0',
+    });
+    await expect(
+      readFile(path.join(installedAppPath, 'Contents', 'marker'), 'utf8'),
+    ).resolves.toBe('new-version');
+    await expect(
+      readFile(
+        path.join(root, 'staging', 'retired-0.1.9.app', 'Contents', 'marker'),
+        'utf8',
+      ),
+    ).resolves.toBe('old-version');
+    // A second install without a staged update is refused.
+    await expect(service.installUpdate()).resolves.toMatchObject({
+      outcome: 'failed',
+    });
+  });
+
+  it('falls back to the Downloads folder when no bundle can be replaced', async () => {
+    const artifact = Buffer.from('dmg-bytes');
+    const manifest = manifestFor('0.2.0', artifact);
+    manifest.artifacts['darwin-arm64-archive'] = {
+      file: 'Sotto-darwin-arm64.zip',
+      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+      sha256: createHash('sha256').update(Buffer.from('zip')).digest('hex'),
+      size: 3,
+    };
+    const fetcher = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('latest.json')
+        ? Response.json(manifest)
+        : new Response(artifact),
+    );
+    const downloads = await downloadsDirectory();
+    const service = serviceWith(fetcher as typeof fetch, downloads);
+
+    await expect(service.downloadUpdate()).resolves.toMatchObject({
+      outcome: 'downloaded',
+      fileName: 'Sotto-0.2.0-arm64.dmg',
+    });
+  });
+
+  it('fails a staged update whose archive holds no app bundle', async () => {
+    const archive = Buffer.from('zip-archive-bytes');
+    const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
+    manifest.artifacts['darwin-arm64-archive'] = {
+      file: 'Sotto-darwin-arm64.zip',
+      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+      sha256: createHash('sha256').update(archive).digest('hex'),
+      size: archive.byteLength,
+    };
+    const fetcher = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('latest.json')
+        ? Response.json(manifest)
+        : new Response(archive),
+    );
+    const root = await downloadsDirectory();
+    const service = new UpdateService({
+      manifestUrl: MANIFEST_URL,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: path.join(root, 'downloads'),
+      stagingDirectory: path.join(root, 'staging'),
+      installedAppPath: path.join(root, 'Sotto.app'),
+      fetcher: fetcher as typeof fetch,
+      extractArchive: async () => undefined,
+    });
+
+    await expect(service.downloadUpdate()).resolves.toEqual({
+      outcome: 'failed',
+      reason: 'The downloaded update did not contain the Sotto app.',
+    });
   });
 
   it('refuses to download when already up to date', async () => {

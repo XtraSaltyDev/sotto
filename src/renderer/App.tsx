@@ -1780,8 +1780,14 @@ export const App = () => {
     if (!window.sotto?.onManualUpdateCheck) return undefined;
     return window.sotto.onManualUpdateCheck((result) => {
       setAppUpdate((current) => {
-        // Never clobber a download the user already started.
-        if (current?.phase === 'downloading') return current;
+        // Never clobber a download or staged install the user already started.
+        if (
+          current?.phase === 'downloading' ||
+          current?.phase === 'ready' ||
+          current?.phase === 'restarting'
+        ) {
+          return current;
+        }
         if (result.outcome === 'update-available') {
           return {
             phase: 'available',
@@ -1802,18 +1808,37 @@ export const App = () => {
     try {
       const result = await window.sotto.downloadAppUpdate();
       setAppUpdate(
-        result.outcome === 'downloaded'
-          ? {
-              phase: 'downloaded',
-              fileName: result.fileName,
-              version: result.version,
-            }
-          : { phase: 'failed', reason: result.reason, version },
+        result.outcome === 'staged'
+          ? { phase: 'ready', version: result.version }
+          : result.outcome === 'downloaded'
+            ? {
+                phase: 'downloaded',
+                fileName: result.fileName,
+                version: result.version,
+              }
+            : { phase: 'failed', reason: result.reason, version },
       );
     } catch {
       setAppUpdate({
         phase: 'failed',
         reason: 'Sotto could not download the update.',
+        version,
+      });
+    }
+  };
+
+  const installAppUpdate = async (version: string) => {
+    setAppUpdate({ phase: 'restarting', version });
+    try {
+      const result = await window.sotto.installAppUpdate();
+      if (result.outcome === 'failed') {
+        setAppUpdate({ phase: 'failed', reason: result.reason, version });
+      }
+      // On success the app relaunches; there is nothing left to render.
+    } catch {
+      setAppUpdate({
+        phase: 'failed',
+        reason: 'Sotto could not install the update.',
         version,
       });
     }
@@ -1838,6 +1863,11 @@ export const App = () => {
       onDownload={() => {
         if (appUpdate.phase === 'available' || appUpdate.phase === 'failed') {
           void downloadAppUpdate(appUpdate.version);
+        }
+      }}
+      onInstall={() => {
+        if (appUpdate.phase === 'ready') {
+          void installAppUpdate(appUpdate.version);
         }
       }}
       state={appUpdate}

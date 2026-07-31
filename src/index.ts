@@ -246,6 +246,16 @@ const initialize = async (): Promise<void> => {
     },
   });
 
+  // The installed bundle is replaceable only for a packaged macOS build
+  // running from a normal .app location (never from a read-only DMG).
+  const bundlePath = path.resolve(process.execPath, '..', '..', '..');
+  const installedAppPath =
+    app.isPackaged &&
+    process.platform === 'darwin' &&
+    bundlePath.endsWith('.app') &&
+    !bundlePath.startsWith('/Volumes/')
+      ? bundlePath
+      : null;
   const updateService = new UpdateService({
     manifestUrl:
       process.env.SOTTO_UPDATE_MANIFEST_URL ??
@@ -253,6 +263,8 @@ const initialize = async (): Promise<void> => {
     currentVersion: app.getVersion(),
     platformKey: updatePlatformKey(process.platform, process.arch),
     downloadsDirectory: app.getPath('downloads'),
+    stagingDirectory: path.join(app.getPath('userData'), 'updates'),
+    installedAppPath,
   });
 
   session.defaultSession.protocol.handle('sotto-media', async (request) => {
@@ -284,6 +296,14 @@ const initialize = async (): Promise<void> => {
     getMainWindow: () => mainWindow,
     openRecordingSettings,
     revealDownloadedUpdate: (filePath) => shell.showItemInFolder(filePath),
+    relaunchForUpdate: () => {
+      // Give the renderer a beat to receive the install result before the
+      // process exits and the swapped-in version starts.
+      setTimeout(() => {
+        app.relaunch();
+        app.quit();
+      }, 400);
+    },
     requestRecordingPermissions: async () => {
       const granted = await requestMacScreenRecordingAccess({
         appPath: app.getAppPath(),

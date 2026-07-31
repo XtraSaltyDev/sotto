@@ -3,6 +3,8 @@ import { SpinnerIcon } from './icons';
 export type AppUpdateNoticeState =
   | { phase: 'available'; version: string; size: number }
   | { phase: 'downloading'; version: string }
+  | { phase: 'ready'; version: string }
+  | { phase: 'restarting'; version: string }
   | { phase: 'downloaded'; fileName: string; version: string }
   | { phase: 'failed'; reason: string; version: string }
   | { phase: 'up-to-date'; version: string }
@@ -21,10 +23,12 @@ export const formatUpdateSize = (bytes: number): string =>
 export const UpdateNotice = ({
   onDismiss,
   onDownload,
+  onInstall,
   state,
 }: {
   onDismiss: () => void;
   onDownload: () => void;
+  onInstall?: () => void;
   state: AppUpdateNoticeState;
 }) => (
   <aside
@@ -40,13 +44,35 @@ export const UpdateNotice = ({
         </div>
         <div className="update-notice__actions">
           <button className="update-notice__download" onClick={onDownload} type="button">
-            Download
+            Update
           </button>
           <button className="update-notice__dismiss" onClick={onDismiss} type="button">
             Not now
           </button>
         </div>
       </>
+    ) : null}
+    {state.phase === 'ready' ? (
+      <>
+        <div>
+          <strong>Restart to finish updating</strong>
+          <p>Sotto {state.version} is ready. Restart now to switch to it.</p>
+        </div>
+        <div className="update-notice__actions">
+          <button className="update-notice__download" onClick={onInstall} type="button">
+            Restart now
+          </button>
+          <button className="update-notice__dismiss" onClick={onDismiss} type="button">
+            Later
+          </button>
+        </div>
+      </>
+    ) : null}
+    {state.phase === 'restarting' ? (
+      <div className="update-notice__progress">
+        <SpinnerIcon className="spinner" />
+        <span>Installing Sotto {state.version}…</span>
+      </div>
     ) : null}
     {state.phase === 'downloading' ? (
       <div className="update-notice__progress">

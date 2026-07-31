@@ -1,13 +1,16 @@
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
-import { mkdir, rename, unlink } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import type {
   AvailableAppUpdate,
   CheckForAppUpdateResult,
   DownloadAppUpdateResult,
+  InstallAppUpdateResult,
 } from '../../shared/contracts';
 
 export const DEFAULT_SOTTO_UPDATE_MANIFEST_URL =
@@ -22,6 +25,19 @@ const VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
 
 export type UpdatePlatformKey = 'darwin-arm64' | 'win32-x64';
 
+/**
+ * 'darwin-arm64' and 'win32-x64' are user-facing installers saved to the
+ * Downloads folder. 'darwin-arm64-archive' is the ZIP build the in-place
+ * installer stages and swaps; clients that predate it ignore the key.
+ */
+type ManifestArtifactKey = UpdatePlatformKey | 'darwin-arm64-archive';
+
+const MANIFEST_ARTIFACT_KEYS: readonly ManifestArtifactKey[] = [
+  'darwin-arm64',
+  'win32-x64',
+  'darwin-arm64-archive',
+];
+
 interface ManifestArtifact {
   downloadUrl: string;
   sha256: string;
@@ -31,7 +47,7 @@ interface ManifestArtifact {
 interface ParsedUpdateManifest {
   version: string;
   publishedAt: string | null;
-  artifacts: Partial<Record<UpdatePlatformKey, ManifestArtifact>>;
+  artifacts: Partial<Record<ManifestArtifactKey, ManifestArtifact>>;
 }
 
 export interface UpdateServiceOptions {
@@ -39,8 +55,24 @@ export interface UpdateServiceOptions {
   currentVersion: string;
   platformKey: UpdatePlatformKey | null;
   downloadsDirectory: string;
+  /** Private scratch directory for staged in-place updates. */
+  stagingDirectory: string;
+  /** The installed .app bundle to replace, or null when not replaceable. */
+  installedAppPath: string | null;
   fetcher?: typeof fetch;
+  extractArchive?: (archivePath: string, directory: string) => Promise<void>;
 }
+
+const execFileAsync = promisify(execFile);
+
+const dittoExtract = async (
+  archivePath: string,
+  directory: string,
+): Promise<void> => {
+  // ditto preserves the bundle's extended attributes and symlinks, which
+  // unzip implementations frequently mangle for .app bundles.
+  await execFileAsync('/usr/bin/ditto', ['-xk', archivePath, directory]);
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -114,7 +146,7 @@ export const parseUpdateManifest = (
     throw new TypeError('The update manifest is invalid.');
   }
   const artifacts: ParsedUpdateManifest['artifacts'] = {};
-  for (const key of ['darwin-arm64', 'win32-x64'] as const) {
+  for (const key of MANIFEST_ARTIFACT_KEYS) {
     if (value.artifacts[key] !== undefined) {
       artifacts[key] = parseArtifact(value.artifacts[key], manifestOrigin);
     }
@@ -135,12 +167,29 @@ const artifactFileName = (
     ? `Sotto-${version}-arm64.dmg`
     : `Sotto-win32-x64-${version}.zip`;
 
+const findAppBundle = async (directory: string): Promise<string | null> => {
+  const entries = await readdir(directory);
+  const bundleName = entries.find((entry) => entry.endsWith('.app'));
+  if (!bundleName) return null;
+  const bundlePath = path.join(directory, bundleName);
+  const bundleStat = await stat(bundlePath);
+  return bundleStat.isDirectory() ? bundlePath : null;
+};
+
 export class UpdateService {
   private readonly fetcher: typeof fetch;
+
+  private readonly extractArchive: (
+    archivePath: string,
+    directory: string,
+  ) => Promise<void>;
+
+  private stagedUpdate: { version: string; appPath: string } | null = null;
 
   constructor(private readonly options: UpdateServiceOptions) {
     new URL(options.manifestUrl);
     this.fetcher = options.fetcher ?? fetch;
+    this.extractArchive = options.extractArchive ?? dittoExtract;
   }
 
   async checkForUpdates(): Promise<CheckForAppUpdateResult> {
@@ -175,7 +224,6 @@ export class UpdateService {
   }
 
   async downloadUpdate(): Promise<DownloadAppUpdateResult> {
-    let temporaryPath: string | null = null;
     try {
       const manifest = await this.fetchManifest();
       if (
@@ -184,92 +232,34 @@ export class UpdateService {
         return { outcome: 'failed', reason: 'Sotto is already up to date.' };
       }
       const platformKey = this.options.platformKey;
-      const artifact = platformKey ? manifest.artifacts[platformKey] : undefined;
-      if (!platformKey || !artifact) {
+      if (!platformKey) {
         return {
           outcome: 'failed',
           reason: 'No update is published for this platform.',
         };
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(
-        () => controller.abort(),
-        DOWNLOAD_TIMEOUT_MS,
-      );
-      try {
-        const response = await this.fetcher(artifact.downloadUrl, {
-          redirect: 'error',
-          signal: controller.signal,
-        });
-        if (!response.ok || !response.body) {
-          throw new TypeError(
-            `The update download returned HTTP ${response.status}.`,
-          );
-        }
+      const archive =
+        platformKey === 'darwin-arm64' && this.options.installedAppPath
+          ? manifest.artifacts['darwin-arm64-archive']
+          : undefined;
+      if (archive) {
+        return await this.stageInPlaceUpdate(manifest.version, archive);
+      }
 
-        await mkdir(this.options.downloadsDirectory, { recursive: true });
-        const fileName = artifactFileName(manifest.version, platformKey);
-        const filePath = path.join(this.options.downloadsDirectory, fileName);
-        temporaryPath = `${filePath}.sotto-download`;
-        const hash = createHash('sha256');
-        let received = 0;
-        const stream = createWriteStream(temporaryPath, { flags: 'w' });
-        const reader = response.body.getReader();
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            received += value.byteLength;
-            if (received > artifact.size) {
-              throw new TypeError(
-                'The update download exceeded its published size.',
-              );
-            }
-            hash.update(value);
-            await new Promise<void>((resolveWrite, rejectWrite) => {
-              stream.write(value, (writeError) =>
-                writeError ? rejectWrite(writeError) : resolveWrite(),
-              );
-            });
-          }
-          await new Promise<void>((resolveEnd, rejectEnd) => {
-            stream.end((endError: unknown) =>
-              endError ? rejectEnd(endError as Error) : resolveEnd(),
-            );
-          });
-        } catch (error) {
-          // Wait for the lazily opened file descriptor to close before the
-          // outer cleanup unlinks the partial file, or the unlink can lose
-          // the race against the stream's asynchronous open.
-          stream.destroy();
-          await once(stream, 'close').catch(() => undefined);
-          throw error;
-        }
-
-        if (received !== artifact.size) {
-          throw new TypeError('The update download ended early.');
-        }
-        if (hash.digest('hex') !== artifact.sha256) {
-          throw new TypeError(
-            'The update download did not match its published checksum.',
-          );
-        }
-        await rename(temporaryPath, filePath);
-        temporaryPath = null;
+      const installer = manifest.artifacts[platformKey];
+      if (!installer) {
         return {
-          outcome: 'downloaded',
-          fileName,
-          filePath,
-          version: manifest.version,
+          outcome: 'failed',
+          reason: 'No update is published for this platform.',
         };
-      } finally {
-        clearTimeout(timeout);
       }
+      return await this.downloadToDownloadsFolder(
+        manifest.version,
+        platformKey,
+        installer,
+      );
     } catch (error) {
-      if (temporaryPath) {
-        await unlink(temporaryPath).catch(() => undefined);
-      }
       return {
         outcome: 'failed',
         reason:
@@ -277,6 +267,156 @@ export class UpdateService {
             ? error.message
             : 'Sotto could not download the update.',
       };
+    }
+  }
+
+  /**
+   * Swap the staged bundle into the installed location. The caller relaunches
+   * the app afterwards; the swap itself is safe while the app is running
+   * because macOS keeps the old bundle's mapped files alive.
+   */
+  async installUpdate(): Promise<InstallAppUpdateResult> {
+    const staged = this.stagedUpdate;
+    const installedAppPath = this.options.installedAppPath;
+    if (!staged || !installedAppPath) {
+      return {
+        outcome: 'failed',
+        reason: 'No downloaded update is ready to install.',
+      };
+    }
+    const retiredPath = path.join(
+      this.options.stagingDirectory,
+      `retired-${this.options.currentVersion}.app`,
+    );
+    await rm(retiredPath, { force: true, recursive: true });
+    try {
+      await rename(installedAppPath, retiredPath);
+    } catch (error) {
+      return {
+        outcome: 'failed',
+        reason:
+          error instanceof Error && 'code' in error && error.code === 'EPERM'
+            ? 'Sotto does not have permission to replace its installed copy.'
+            : 'Sotto could not move its installed copy aside.',
+      };
+    }
+    try {
+      await rename(staged.appPath, installedAppPath);
+    } catch {
+      await rename(retiredPath, installedAppPath).catch(() => undefined);
+      return {
+        outcome: 'failed',
+        reason: 'Sotto could not move the new version into place.',
+      };
+    }
+    this.stagedUpdate = null;
+    return { outcome: 'installed', version: staged.version };
+  }
+
+  private async stageInPlaceUpdate(
+    version: string,
+    artifact: ManifestArtifact,
+  ): Promise<DownloadAppUpdateResult> {
+    const staging = this.options.stagingDirectory;
+    await rm(staging, { force: true, recursive: true });
+    await mkdir(staging, { recursive: true });
+    const archivePath = path.join(staging, `Sotto-${version}.zip`);
+    await this.downloadVerified(artifact, archivePath);
+    const extractedDirectory = path.join(staging, 'extracted');
+    await mkdir(extractedDirectory, { recursive: true });
+    await this.extractArchive(archivePath, extractedDirectory);
+    await unlink(archivePath).catch(() => undefined);
+    const appPath = await findAppBundle(extractedDirectory);
+    if (!appPath) {
+      await rm(staging, { force: true, recursive: true });
+      return {
+        outcome: 'failed',
+        reason: 'The downloaded update did not contain the Sotto app.',
+      };
+    }
+    this.stagedUpdate = { version, appPath };
+    return { outcome: 'staged', version };
+  }
+
+  private async downloadToDownloadsFolder(
+    version: string,
+    platformKey: UpdatePlatformKey,
+    artifact: ManifestArtifact,
+  ): Promise<DownloadAppUpdateResult> {
+    await mkdir(this.options.downloadsDirectory, { recursive: true });
+    const fileName = artifactFileName(version, platformKey);
+    const filePath = path.join(this.options.downloadsDirectory, fileName);
+    await this.downloadVerified(artifact, filePath);
+    return { outcome: 'downloaded', fileName, filePath, version };
+  }
+
+  private async downloadVerified(
+    artifact: ManifestArtifact,
+    filePath: string,
+  ): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+    const temporaryPath = `${filePath}.sotto-download`;
+    try {
+      const response = await this.fetcher(artifact.downloadUrl, {
+        redirect: 'error',
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        throw new TypeError(
+          `The update download returned HTTP ${response.status}.`,
+        );
+      }
+
+      const hash = createHash('sha256');
+      let received = 0;
+      const stream = createWriteStream(temporaryPath, { flags: 'w' });
+      const reader = response.body.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.byteLength;
+          if (received > artifact.size) {
+            throw new TypeError(
+              'The update download exceeded its published size.',
+            );
+          }
+          hash.update(value);
+          await new Promise<void>((resolveWrite, rejectWrite) => {
+            stream.write(value, (writeError) =>
+              writeError ? rejectWrite(writeError) : resolveWrite(),
+            );
+          });
+        }
+        await new Promise<void>((resolveEnd, rejectEnd) => {
+          stream.end((endError: unknown) =>
+            endError ? rejectEnd(endError as Error) : resolveEnd(),
+          );
+        });
+      } catch (error) {
+        // Wait for the lazily opened file descriptor to close before the
+        // cleanup below unlinks the partial file, or the unlink can lose
+        // the race against the stream's asynchronous open.
+        stream.destroy();
+        await once(stream, 'close').catch(() => undefined);
+        throw error;
+      }
+
+      if (received !== artifact.size) {
+        throw new TypeError('The update download ended early.');
+      }
+      if (hash.digest('hex') !== artifact.sha256) {
+        throw new TypeError(
+          'The update download did not match its published checksum.',
+        );
+      }
+      await rename(temporaryPath, filePath);
+    } catch (error) {
+      await unlink(temporaryPath).catch(() => undefined);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

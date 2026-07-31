@@ -19,7 +19,7 @@ describe('UpdateNotice', () => {
 
     expect(markup).toContain('Sotto 0.2.0 is available');
     expect(markup).toContain('597 MB');
-    expect(markup).toContain('Download');
+    expect(markup).toContain('>Update<');
     expect(markup).toContain('Not now');
     expect(markup).toContain('role="status"');
   });
@@ -55,6 +55,34 @@ describe('UpdateNotice', () => {
     expect(markup).toContain('The update download ended early.');
     expect(markup).toContain('Retry');
     expect(markup).toContain('update-notice--failed');
+  });
+
+  it('asks for a restart once an update is staged', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        onInstall={vi.fn()}
+        state={{ phase: 'ready', version: '0.2.0' }}
+      />,
+    );
+
+    expect(markup).toContain('Restart to finish updating');
+    expect(markup).toContain('Sotto 0.2.0 is ready');
+    expect(markup).toContain('Restart now');
+    expect(markup).toContain('Later');
+  });
+
+  it('shows install progress while restarting', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateNotice
+        onDismiss={vi.fn()}
+        onDownload={vi.fn()}
+        state={{ phase: 'restarting', version: '0.2.0' }}
+      />,
+    );
+
+    expect(markup).toContain('Installing Sotto 0.2.0');
   });
 
   it('confirms the current version after a manual check', () => {
