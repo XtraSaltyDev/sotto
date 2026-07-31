@@ -121,7 +121,7 @@ out/Sotto-darwin-arm64/Sotto.app
 For local DMG validation, use the generated disk image:
 
 ```text
-out/make/Sotto-0.1.8-arm64.dmg
+out/make/Sotto-0.1.9-arm64.dmg
 ```
 
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
@@ -194,7 +194,7 @@ cancelled imports do not retain a playback copy.
 
 Open **Local AI** from the sidebar to connect Ollama or another
 OpenAI-compatible endpoint running on this computer or a private network.
-**Use Ollama default** fills `http://127.0.0.1:11434/v1`. Sotto also accepts
+**Connect Ollama** uses `http://127.0.0.1:11434/v1`. Sotto also accepts
 private IPv4/IPv6 addresses and `.local` hosts, including authenticated LAN
 controllers. Public internet endpoints, credentials embedded in URLs, query
 strings, redirects, and non-HTTP protocols are rejected.
