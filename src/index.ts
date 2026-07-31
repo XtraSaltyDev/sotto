@@ -8,6 +8,7 @@ import {
   Menu,
   protocol,
   safeStorage,
+  screen,
   session,
   shell,
   systemPreferences,
@@ -16,6 +17,8 @@ import started from 'electron-squirrel-startup';
 
 import {
   IPC_CHANNELS,
+  type ActivityMode,
+  type AppState,
   type LiveRecordingCapability,
 } from './shared/contracts';
 
@@ -33,6 +36,9 @@ import { TranscriptRepository } from './main/storage/transcript-repository';
 import { createPlaybackResponse } from './main/media/playback-response';
 import { LocalAiConnectionService } from './main/local-ai/local-ai-connection';
 import {
+  shouldRestoreActivityWindow,
+} from './main/activity-window-state';
+import {
   DEFAULT_SOTTO_UPDATE_MANIFEST_URL,
   UpdateService,
   updatePlatformKey,
@@ -42,10 +48,12 @@ declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 
 let mainWindow: BrowserWindow | null = null;
+let activityWindow: BrowserWindow | null = null;
 let controller: AppController | null = null;
 let removeIpcHandlers: (() => void) | null = null;
 let shutdownStarted = false;
 let readyToQuit = false;
+let activityMode: ActivityMode | null = null;
 const DICTATION_ACCELERATOR = 'CommandOrControl+Shift+D';
 
 if (started) app.quit();
@@ -171,6 +179,12 @@ const createWindow = (showWhenReady = true): BrowserWindow => {
   window.webContents.on('will-navigate', (event, url) => {
     if (!isAllowedNavigation(url)) event.preventDefault();
   });
+  window.on('close', (event) => {
+    if (activityMode !== null && !readyToQuit) {
+      event.preventDefault();
+      window.hide();
+    }
+  });
   if (showWhenReady) {
     window.once('ready-to-show', () => window.show());
   }
@@ -179,6 +193,92 @@ const createWindow = (showWhenReady = true): BrowserWindow => {
   });
   void window.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   return window;
+};
+
+const positionActivityWindow = (window: BrowserWindow): void => {
+  const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const [width, height] = window.getSize();
+  const margin = 20;
+  window.setPosition(
+    Math.max(workArea.x + margin, workArea.x + workArea.width - width - margin),
+    workArea.y + margin,
+  );
+  if (height > workArea.height - margin * 2) {
+    window.setSize(width, Math.max(100, workArea.height - margin * 2));
+  }
+};
+
+const showActivityWindow = (): void => {
+  const window = activityWindow;
+  if (!window || window.isDestroyed() || activityMode === null) return;
+  positionActivityWindow(window);
+  if (!window.webContents.isLoadingMainFrame()) window.showInactive();
+};
+
+const createActivityWindow = (): BrowserWindow => {
+  const window = new BrowserWindow({
+    title: 'Sotto activity',
+    backgroundColor: '#fffefb',
+    frame: false,
+    height: 142,
+    minimizable: false,
+    movable: true,
+    resizable: false,
+    show: false,
+    skipTaskbar: true,
+    width: 420,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      sandbox: true,
+      backgroundThrottling: false,
+      webSecurity: true,
+    },
+  });
+
+  activityWindow = window;
+  window.setAlwaysOnTop(true, 'floating');
+  window.setMenuBarVisibility(false);
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedNavigation(url)) event.preventDefault();
+  });
+  window.on('close', (event) => {
+    if (activityMode !== null && !readyToQuit) event.preventDefault();
+  });
+  window.once('ready-to-show', showActivityWindow);
+  window.once('closed', () => {
+    if (activityWindow === window) activityWindow = null;
+  });
+  void window.loadURL(`${MAIN_WINDOW_WEBPACK_ENTRY}?window=activity`);
+  return window;
+};
+
+const collapseForActivity = (mode: ActivityMode): void => {
+  activityMode = mode;
+
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+  const window = activityWindow ?? createActivityWindow();
+  showActivityWindow();
+  if (window.isMinimized()) window.restore();
+};
+
+const restoreMainWindow = (): void => {
+  activityMode = null;
+  if (activityWindow && !activityWindow.isDestroyed()) activityWindow.hide();
+
+  const window = mainWindow ?? (controller ? createWindow(false) : null);
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+};
+
+const handleControllerStateChanged = (state: AppState): void => {
+  const mode = activityMode;
+  if (!mode || !shouldRestoreActivityWindow(mode, state)) return;
+  restoreMainWindow();
 };
 
 const requestDictationToggle = (): void => {
@@ -299,6 +399,10 @@ const initialize = async (): Promise<void> => {
     localAiService,
     updateService,
     getMainWindow: () => mainWindow,
+    getActivityWindow: () => activityWindow,
+    collapseForActivity,
+    restoreMainWindow,
+    onControllerStateChanged: handleControllerStateChanged,
     openRecordingSettings,
     revealDownloadedUpdate: (filePath) => shell.showItemInFolder(filePath),
     relaunchForUpdate: () => {
@@ -355,6 +459,11 @@ const initialize = async (): Promise<void> => {
 const shutdown = async (): Promise<void> => {
   if (shutdownStarted) return;
   shutdownStarted = true;
+  activityMode = null;
+  if (activityWindow && !activityWindow.isDestroyed()) {
+    activityWindow.destroy();
+  }
+  activityWindow = null;
   removeIpcHandlers?.();
   removeIpcHandlers = null;
   globalShortcut.unregister(DICTATION_ACCELERATOR);
@@ -370,6 +479,10 @@ if (hasInstanceLock && !started) {
 }
 
 app.on('second-instance', () => {
+  if (activityMode !== null) {
+    showActivityWindow();
+    return;
+  }
   if (!mainWindow) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -377,6 +490,10 @@ app.on('second-instance', () => {
 });
 
 app.on('activate', () => {
+  if (activityMode !== null) {
+    showActivityWindow();
+    return;
+  }
   if (BrowserWindow.getAllWindows().length === 0 && controller) createWindow();
 });
 

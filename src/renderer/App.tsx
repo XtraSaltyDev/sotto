@@ -71,6 +71,7 @@ import {
   SpinnerIcon,
   TrashIcon,
 } from './icons';
+import { ActivityOverlay } from './ActivityOverlay';
 import { LocalAiSettings } from './LocalAiSettings';
 import {
   DISMISSED_UPDATE_VERSION_KEY,
@@ -1659,7 +1660,7 @@ const TranscriptView = ({
   );
 };
 
-export const App = () => {
+const MainApp = () => {
   const [currentPage, setCurrentPage] = useState<AppPage>('transcripts');
   const [appState, setAppState] = useState<AppState | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1945,7 +1946,13 @@ export const App = () => {
     }
 
     pendingDictationInsertionRef.current = null;
-    if (job.stage !== 'completed' || !job.transcriptId) return;
+    const restoreActivityWindow = (): void => {
+      void window.sotto?.restoreMainWindow().catch(() => undefined);
+    };
+    if (job.stage !== 'completed' || !job.transcriptId) {
+      restoreActivityWindow();
+      return;
+    }
 
     void window.sotto
       .insertDictationText(job.transcriptId)
@@ -1960,11 +1967,14 @@ export const App = () => {
       })
       .catch(() => {
         showError('Sotto could not insert the dictation. Open Sotto to copy the saved transcript.');
-      });
+      })
+      .finally(restoreActivityWindow);
   }, [
     appState?.activeJob?.recordingId,
     appState?.activeJob?.stage,
     appState?.activeJob?.transcriptId,
+    showError,
+    showInfo,
   ]);
 
   useEffect(() => {
@@ -2119,6 +2129,7 @@ export const App = () => {
       return;
     }
 
+    const isDictation = pendingDictationInsertionRef.current === recordingId;
     stoppingRecordingRef.current = true;
     setIsStoppingRecording(true);
     try {
@@ -2146,12 +2157,25 @@ export const App = () => {
         25_000,
         'Sotto timed out while finalizing the recording. Restart Sotto to check for a recovered saved recording.',
       );
+      if (
+        result.outcome === 'started' &&
+        isDictation &&
+        pendingDictationInsertionRef.current === recordingId
+      ) {
+        // The controller briefly publishes an empty active-job state while it
+        // hands the finished recording to the transcription service. Reassert
+        // the collapsed mode so the target app keeps focus through insertion.
+        await window.sotto.collapseForActivity('dictation').catch(() => undefined);
+      }
       if (result.outcome !== 'started' && pendingDictationInsertionRef.current === recordingId) {
         pendingDictationInsertionRef.current = null;
       }
       if (result.outcome === 'rejected') showError(result.reason);
       if (result.outcome === 'not-found') {
         showError('That live recording was already closed.');
+      }
+      if (result.outcome !== 'started' && isDictation) {
+        await window.sotto.restoreMainWindow().catch(() => undefined);
       }
     } catch (error) {
       if (pendingDictationInsertionRef.current === recordingId) {
@@ -2168,6 +2192,9 @@ export const App = () => {
           ? error.message
           : 'Sotto could not finish the live recording.',
       );
+      if (isDictation) {
+        await window.sotto.restoreMainWindow().catch(() => undefined);
+      }
     } finally {
       recordingIdRef.current = null;
       recordingExpectedSpeakerCountRef.current = null;
@@ -2333,9 +2360,11 @@ export const App = () => {
       });
       mediaRecorderRef.current = recorder;
       recorder.start(1_000);
-      if (kind === 'dictation') {
-        await window.sotto.hideForDictation().catch(() => undefined);
-      }
+      await window.sotto
+        .collapseForActivity(
+          kind === 'dictation' ? 'dictation' : 'meeting-recording',
+        )
+        .catch(() => undefined);
     } catch (error) {
       if (recordingId && window.sotto) {
         await withTimeout(
@@ -2429,6 +2458,9 @@ export const App = () => {
 
     try {
       const result = await window.sotto.importMedia(expectedSpeakerCount);
+      if (result.outcome === 'started') {
+        await window.sotto.collapseForActivity('transcribing').catch(() => undefined);
+      }
       if (result.outcome === 'rejected') showError(result.reason);
     } catch {
       showError('Sotto could not open the recording picker. Please try again.');
@@ -2441,6 +2473,17 @@ export const App = () => {
     const jobId = appState?.activeJob?.id;
     if (window.sotto && jobId) await window.sotto.cancelTranscription(jobId);
   };
+
+  useEffect(() => {
+    if (!window.sotto?.onActivityAction) return undefined;
+    return window.sotto.onActivityAction((action) => {
+      if (action === 'stop-recording') {
+        void handleStopLiveRecording();
+      } else {
+        void handleCancel();
+      }
+    });
+  }, [appState?.activeJob?.id, handleCancel]);
 
   const handleExport = async (format: TranscriptExportFormat) => {
     if (!window.sotto || !selectedId) return;
@@ -2692,6 +2735,9 @@ export const App = () => {
         recordingId,
         expectedSpeakerCount,
       );
+      if (result.outcome === 'started') {
+        await window.sotto.collapseForActivity('transcribing').catch(() => undefined);
+      }
       if (result.outcome === 'rejected') showError(result.reason);
       if (result.outcome === 'not-found') {
         showError('That saved recording is no longer available.');
@@ -2834,7 +2880,9 @@ export const App = () => {
           </div>
 
           <div className="import-panel" aria-live="polite">
-            <div className="import-panel__lead">
+            <div
+              className={`import-panel__lead${appState?.activeJob ? ' import-panel__lead--has-job' : ''}`}
+            >
               <AudioFileIcon className="import-panel__icon" />
             {activeRecording ? (
               <div className="recording-card" aria-live="polite">
@@ -3054,3 +3102,8 @@ const Sidebar = ({
     <div className="privacy-note"><LockIcon /><span>Media and transcripts stay on this device.</span></div>
   </aside>
 );
+
+export const App = () =>
+  new URLSearchParams(window.location.search).get('window') === 'activity'
+    ? <ActivityOverlay />
+    : <MainApp />;

@@ -20,7 +20,9 @@ export const IPC_CHANNELS = {
   exportTranscript: 'sotto:transcript:export',
   copyTranscriptOutput: 'sotto:transcript:copy-output',
   insertDictationText: 'sotto:dictation:insert-text',
-  hideForDictation: 'sotto:dictation:hide-window',
+  collapseForActivity: 'sotto:activity:collapse',
+  restoreMainWindow: 'sotto:activity:restore-main-window',
+  requestActivityAction: 'sotto:activity:request-action',
   getLocalAiConnection: 'sotto:local-ai:get',
   connectLocalAi: 'sotto:local-ai:connect',
   disconnectLocalAi: 'sotto:local-ai:disconnect',
@@ -34,6 +36,7 @@ export const IPC_CHANNELS = {
   appUpdateProgress: 'sotto:updates:progress',
   stateChanged: 'sotto:state:changed',
   dictationShortcut: 'sotto:dictation:shortcut',
+  activityAction: 'sotto:activity:action',
 } as const;
 
 export type EngineState = 'checking' | 'ready' | 'unavailable';
@@ -90,6 +93,13 @@ export interface LiveRecordingSnapshot {
 }
 
 export type RecordingKind = 'meeting' | 'dictation';
+
+export type ActivityMode =
+  | 'meeting-recording'
+  | 'dictation'
+  | 'transcribing';
+
+export type ActivityAction = 'stop-recording' | 'cancel-transcription';
 
 export const MIN_EXPECTED_SPEAKER_COUNT = 1;
 export const MAX_EXPECTED_SPEAKER_COUNT = 12;
@@ -497,7 +507,9 @@ export interface SottoDesktopApi {
   insertDictationText(
     transcriptId: string,
   ): Promise<InsertDictationTextResult>;
-  hideForDictation(): Promise<void>;
+  collapseForActivity(mode: ActivityMode): Promise<void>;
+  restoreMainWindow(): Promise<void>;
+  requestActivityAction(action: ActivityAction): Promise<void>;
   getLocalAiConnection(): Promise<LocalAiConnectionSummary>;
   connectLocalAi(input: ConnectLocalAiInput): Promise<ConnectLocalAiResult>;
   disconnectLocalAi(): Promise<DisconnectLocalAiResult>;
@@ -515,5 +527,6 @@ export interface SottoDesktopApi {
     listener: (progress: AppUpdateProgress) => void,
   ): () => void;
   onDictationShortcut(listener: () => void): () => void;
+  onActivityAction(listener: (action: ActivityAction) => void): () => void;
   onAppStateChanged(listener: (state: AppState) => void): () => void;
 }

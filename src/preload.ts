@@ -4,6 +4,8 @@ import {
   IPC_CHANNELS,
   type AppUpdateProgress,
   type AppState,
+  type ActivityAction,
+  type ActivityMode,
   type CheckForAppUpdateResult,
   type ConnectLocalAiInput,
   type ExpectedSpeakerCount,
@@ -101,8 +103,12 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.copyTranscriptOutput, transcriptId, kind),
   insertDictationText: (transcriptId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.insertDictationText, transcriptId),
-  hideForDictation: () =>
-    ipcRenderer.invoke(IPC_CHANNELS.hideForDictation),
+  collapseForActivity: (mode: ActivityMode) =>
+    ipcRenderer.invoke(IPC_CHANNELS.collapseForActivity, mode),
+  restoreMainWindow: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.restoreMainWindow),
+  requestActivityAction: (action: ActivityAction) =>
+    ipcRenderer.invoke(IPC_CHANNELS.requestActivityAction, action),
   getLocalAiConnection: () =>
     ipcRenderer.invoke(IPC_CHANNELS.getLocalAiConnection),
   connectLocalAi: (input: ConnectLocalAiInput) =>
@@ -145,6 +151,14 @@ const api: SottoDesktopApi = Object.freeze({
     const wrapped = () => listener();
     ipcRenderer.on(IPC_CHANNELS.dictationShortcut, wrapped);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.dictationShortcut, wrapped);
+  },
+  onActivityAction: (listener: (action: ActivityAction) => void) => {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      action: ActivityAction,
+    ) => listener(action);
+    ipcRenderer.on(IPC_CHANNELS.activityAction, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.activityAction, wrapped);
   },
   onAppStateChanged: (listener: (state: AppState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: AppState) => listener(state);

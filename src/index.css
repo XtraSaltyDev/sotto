@@ -61,6 +61,148 @@ textarea:focus-visible {
   color: var(--ink);
 }
 
+.activity-overlay {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 12px;
+  padding: 17px 18px 15px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 14px 38px rgb(35 31 26 / 18%);
+  color: var(--ink);
+  -webkit-app-region: drag;
+}
+
+.activity-overlay__header,
+.activity-overlay__identity,
+.activity-overlay__details,
+.activity-overlay__footer {
+  display: flex;
+  align-items: center;
+}
+
+.activity-overlay__header,
+.activity-overlay__details,
+.activity-overlay__footer {
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.activity-overlay__identity {
+  min-width: 0;
+  gap: 10px;
+}
+
+.activity-overlay__mark {
+  display: grid;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  background: var(--accent);
+  border-radius: 8px;
+  color: white;
+  font-family: var(--serif);
+  font-size: 19px;
+  line-height: 1;
+}
+
+.activity-overlay__identity > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activity-overlay__identity strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.activity-overlay__identity small,
+.activity-overlay__source,
+.activity-overlay__footer p {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.activity-overlay__indicator {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgb(217 82 63 / 13%);
+  animation: recording-pulse 1.35s ease-in-out infinite;
+}
+
+.activity-overlay__details {
+  min-width: 0;
+  padding-left: 38px;
+}
+
+.activity-overlay__source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-overlay__timer,
+.activity-overlay__progress {
+  flex: 0 0 auto;
+  color: var(--accent-dark);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+}
+
+.activity-overlay__footer {
+  align-items: flex-end;
+  padding-left: 38px;
+}
+
+.activity-overlay__footer p {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  line-height: 1.35;
+}
+
+.activity-overlay__action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 29px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  -webkit-app-region: no-drag;
+}
+
+.activity-overlay__action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.activity-overlay__action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.activity-overlay__action svg {
+  width: 13px;
+  height: 13px;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -815,6 +957,17 @@ textarea:focus-visible {
 .import-panel__lead > .speaker-count-control {
   padding-left: 20px;
   border-left: 1px solid var(--border);
+}
+
+/* A job card spans the two content columns. Keep the speaker control out of
+   the 36px icon column when a completed or failed job is still visible. */
+.import-panel__lead--has-job > .speaker-count-control {
+  grid-column: 2 / -1;
+  justify-content: flex-start;
+  gap: 18px;
+  margin-top: 2px;
+  padding-left: 0;
+  border-left: 0;
 }
 
 .workspace--library-home .transcript-library {

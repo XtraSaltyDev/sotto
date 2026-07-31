@@ -1,7 +1,6 @@
 import { lstat } from 'node:fs/promises';
 
 import {
-  app,
   BrowserWindow,
   clipboard,
   dialog,
@@ -14,6 +13,9 @@ import {
 import {
   IPC_CHANNELS,
   isExpectedSpeakerCount,
+  type ActivityAction,
+  type ActivityMode,
+  type AppState,
   type AppendLiveRecordingChunkResult,
   type CancelLiveRecordingResult,
   type CheckForAppUpdateResult,
@@ -81,6 +83,10 @@ export interface DesktopIpcOptions {
   localAiService: LocalAiConnectionService;
   updateService: UpdateService;
   getMainWindow: () => BrowserWindow | null;
+  getActivityWindow: () => BrowserWindow | null;
+  collapseForActivity: (mode: ActivityMode) => void;
+  restoreMainWindow: () => void;
+  onControllerStateChanged?: (state: AppState) => void;
   openRecordingSettings: () => Promise<void>;
   requestRecordingPermissions: () => Promise<
     'native-requested' | 'settings-opened'
@@ -94,6 +100,14 @@ const EXPECTED_SPEAKER_COUNT_REASON =
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isActivityMode = (value: unknown): value is ActivityMode =>
+  value === 'meeting-recording' ||
+  value === 'dictation' ||
+  value === 'transcribing';
+
+const isActivityAction = (value: unknown): value is ActivityAction =>
+  value === 'stop-recording' || value === 'cancel-transcription';
 
 const notifyDictationFallback = (reason: string): void => {
   if (!Notification.isSupported()) return;
@@ -127,6 +141,24 @@ const assertTrustedSender = (
     throw new Error('Blocked an IPC request from an untrusted renderer.');
   }
 
+  return window;
+};
+
+const assertTrustedRenderer = (
+  event: IpcMainInvokeEvent,
+  getMainWindow: () => BrowserWindow | null,
+  getActivityWindow: () => BrowserWindow | null,
+): BrowserWindow => {
+  const window = [getMainWindow(), getActivityWindow()].find(
+    (candidate): candidate is BrowserWindow =>
+      candidate !== null &&
+      !candidate.isDestroyed() &&
+      event.sender === candidate.webContents &&
+      event.senderFrame === candidate.webContents.mainFrame,
+  );
+  if (!window) {
+    throw new Error('Blocked an IPC request from an untrusted renderer.');
+  }
   return window;
 };
 
@@ -227,6 +259,10 @@ export const registerDesktopIpc = ({
   localAiService,
   updateService,
   getMainWindow,
+  getActivityWindow,
+  collapseForActivity,
+  restoreMainWindow,
+  onControllerStateChanged,
   openRecordingSettings,
   requestRecordingPermissions,
   revealDownloadedUpdate,
@@ -234,9 +270,11 @@ export const registerDesktopIpc = ({
 }: DesktopIpcOptions): (() => void) => {
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
     assertTrustedSender(event, getMainWindow);
+  const rendererTrust = (event: IpcMainInvokeEvent): BrowserWindow =>
+    assertTrustedRenderer(event, getMainWindow, getActivityWindow);
 
   ipcMain.handle(IPC_CHANNELS.getAppState, (event) => {
-    trust(event);
+    rendererTrust(event);
     return controller.getState();
   });
 
@@ -916,19 +954,42 @@ export const registerDesktopIpc = ({
     },
   );
 
-  ipcMain.handle(IPC_CHANNELS.hideForDictation, (event): void => {
-    const window = trust(event);
-    if (process.platform === 'darwin') {
-      app.hide();
-    } else {
-      window.hide();
-    }
+  ipcMain.handle(
+    IPC_CHANNELS.collapseForActivity,
+    (event, rawMode: unknown): void => {
+      trust(event);
+      if (!isActivityMode(rawMode)) {
+        throw new Error('That activity mode is not supported.');
+      }
+      collapseForActivity(rawMode);
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.restoreMainWindow, (event): void => {
+    trust(event);
+    restoreMainWindow();
   });
 
+  ipcMain.handle(
+    IPC_CHANNELS.requestActivityAction,
+    (event, rawAction: unknown): void => {
+      rendererTrust(event);
+      if (!isActivityAction(rawAction)) {
+        throw new Error('That activity action is not supported.');
+      }
+      const window = getMainWindow();
+      if (window && !window.isDestroyed()) {
+        window.webContents.send(IPC_CHANNELS.activityAction, rawAction);
+      }
+    },
+  );
+
   const unsubscribe = controller.subscribe((state) => {
-    const window = getMainWindow();
-    if (window && !window.isDestroyed()) {
-      window.webContents.send(IPC_CHANNELS.stateChanged, state);
+    onControllerStateChanged?.(state);
+    for (const window of [getMainWindow(), getActivityWindow()]) {
+      if (window && !window.isDestroyed()) {
+        window.webContents.send(IPC_CHANNELS.stateChanged, state);
+      }
     }
   });
 
@@ -965,7 +1026,9 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.exportTranscript,
       IPC_CHANNELS.copyTranscriptOutput,
       IPC_CHANNELS.insertDictationText,
-      IPC_CHANNELS.hideForDictation,
+      IPC_CHANNELS.collapseForActivity,
+      IPC_CHANNELS.restoreMainWindow,
+      IPC_CHANNELS.requestActivityAction,
     ]) {
       ipcMain.removeHandler(channel);
     }
