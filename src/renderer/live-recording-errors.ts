@@ -1,11 +1,16 @@
 export const MACOS_RECORDING_PERMISSION_GUIDANCE =
-  'Sotto cannot access system audio. In System Settings → Privacy & Security → Screen & System Audio Recording, add Sotto and turn it on, then quit and reopen Sotto.';
+  'Sotto cannot access system audio. In System Settings → Privacy & Security → Screen & System Audio Recording, add Sotto and turn it on, then quit and reopen Sotto. No recording was started.';
 
 export const WINDOWS_RECORDING_CAPTURE_GUIDANCE =
-  'Sotto could not start Windows system-audio capture. Make sure an audio output device is active and allow any Windows capture prompt, then try again.';
+  'Sotto could not start Windows system-audio capture. Make sure an audio output device is active and allow any Windows capture prompt, then try again. No recording was started.';
 
 export const GENERIC_RECORDING_PERMISSION_GUIDANCE =
-  'Sotto could not access system audio. Check this device\'s recording permissions, then try again.';
+  'Sotto could not access system audio. Check this device\'s recording permissions, then try again. No recording was started.';
+
+export interface RecordingFailurePresentation {
+  kind: 'error' | 'recovery';
+  title: string;
+}
 
 const normalizedPlatform = (platform: string): string =>
   platform.trim().toLowerCase();
@@ -38,4 +43,25 @@ export const liveRecordingStartErrorMessage = (
   }
 
   return error.message;
+};
+
+export const recordingFailurePresentation = (
+  message: string,
+  platform: string,
+): RecordingFailurePresentation => {
+  if (/kept for automatic recovery|recovered locally/iu.test(message)) {
+    return { kind: 'recovery', title: 'Your recording was kept' };
+  }
+  if (/storage|disk|free up space|ENOSPC/iu.test(message)) {
+    return { kind: 'error', title: 'Local storage needs attention' };
+  }
+  if (/permission|access|system settings|system-audio capture|capture prompt/iu.test(message)) {
+    if (isMacOSPlatform(platform)) {
+      return { kind: 'error', title: 'Allow recording access on macOS' };
+    }
+    if (isWindowsPlatform(platform)) {
+      return { kind: 'error', title: 'Windows audio capture did not start' };
+    }
+  }
+  return { kind: 'error', title: 'Sotto could not complete that action' };
 };

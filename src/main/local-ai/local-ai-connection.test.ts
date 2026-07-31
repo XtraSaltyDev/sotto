@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -68,6 +68,24 @@ describe('normalizeLocalAiBaseUrl', () => {
 });
 
 describe('LocalAiConnectionService', () => {
+  it('keeps older saved connections valid before their model list is refreshed', async () => {
+    const { filePath, service } = await setup(
+      (async () => modelResponse()) as typeof fetch,
+    );
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, JSON.stringify({
+      schemaVersion: 1,
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      selectedModel: 'gemma3:4b',
+      verifiedAt: '2026-07-29T20:00:00.000Z',
+    }));
+
+    await expect(service.getSummary()).resolves.toMatchObject({
+      selectedModel: 'gemma3:4b',
+      availableModels: [{ id: 'gemma3:4b', ownedBy: null }],
+    });
+  });
+
   it('discovers, selects, and atomically saves an Ollama-compatible model list', async () => {
     const fetcher = vi.fn(async () => modelResponse());
     const { filePath, service } = await setup(fetcher as typeof fetch);
@@ -94,6 +112,7 @@ describe('LocalAiConnectionService', () => {
     await expect(service.getSummary()).resolves.toMatchObject({
       configured: true,
       selectedModel: 'qwen3:8b',
+      availableModels: [{ id: 'llama3.2' }, { id: 'qwen3:8b' }],
     });
     expect(await readFile(filePath, 'utf8')).not.toContain('apiKey');
   });

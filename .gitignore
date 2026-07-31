@@ -95,6 +95,7 @@ out/
 
 # Locally provisioned native runtime and model payloads
 .build/
+.sotto-speaker-eval/
 resources/models/*.bin
 resources/models/*.part
 resources/diarization/*.onnx

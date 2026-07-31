@@ -143,8 +143,8 @@ const createWindow = (showWhenReady = true): BrowserWindow => {
     title: 'Sotto',
     backgroundColor: '#f7f5f1',
     height: 800,
-    minHeight: 680,
-    minWidth: 920,
+    minHeight: 600,
+    minWidth: 720,
     show: false,
     width: 1240,
     webPreferences: {

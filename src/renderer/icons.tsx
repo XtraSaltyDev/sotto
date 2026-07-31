@@ -92,6 +92,15 @@ export const CopyIcon = (props: IconProps) => (
   </svg>
 );
 
+export const ShareIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <circle cx="18" cy="5" r="2.25" />
+    <circle cx="6" cy="12" r="2.25" />
+    <circle cx="18" cy="19" r="2.25" />
+    <path d="m8 11 8-5M8 13l8 5" />
+  </svg>
+);
+
 export const TrashIcon = (props: IconProps) => (
   <svg {...iconDefaults} {...props}>
     <path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" />

@@ -4,6 +4,7 @@ import {
   GENERIC_RECORDING_PERMISSION_GUIDANCE,
   liveRecordingStartErrorMessage,
   MACOS_RECORDING_PERMISSION_GUIDANCE,
+  recordingFailurePresentation,
   WINDOWS_RECORDING_CAPTURE_GUIDANCE,
 } from './live-recording-errors';
 
@@ -46,5 +47,23 @@ describe('live recording error guidance', () => {
     expect(liveRecordingStartErrorMessage('failed', 'MacIntel')).toBe(
       'Sotto could not start live meeting capture.',
     );
+  });
+
+  it('gives macOS and Windows permission failures distinct headings', () => {
+    expect(
+      recordingFailurePresentation(MACOS_RECORDING_PERMISSION_GUIDANCE, 'MacIntel'),
+    ).toEqual({ kind: 'error', title: 'Allow recording access on macOS' });
+    expect(
+      recordingFailurePresentation(WINDOWS_RECORDING_CAPTURE_GUIDANCE, 'Win32'),
+    ).toEqual({ kind: 'error', title: 'Windows audio capture did not start' });
+  });
+
+  it('makes retained audio clear instead of presenting it as a total loss', () => {
+    expect(
+      recordingFailurePresentation(
+        'Sotto could not finish saving the recording, but the closed audio was kept for automatic recovery after restart.',
+        'Win32',
+      ),
+    ).toEqual({ kind: 'recovery', title: 'Your recording was kept' });
   });
 });

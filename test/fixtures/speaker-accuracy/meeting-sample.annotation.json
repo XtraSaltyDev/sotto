@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "durationMs": 11270,
+  "speakers": [
+    "Speaker A"
+  ],
+  "ranges": [
+    {
+      "startMs": 0,
+      "endMs": 11270,
+      "speaker": "Speaker A"
+    }
+  ],
+  "words": []
+}

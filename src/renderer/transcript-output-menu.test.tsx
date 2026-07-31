@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TranscriptOutputMenus } from './App';
 
 describe('TranscriptOutputMenus', () => {
-  it('renders compact native keyboard controls with labeled export and copy actions', () => {
+  it('consolidates copy and downloads into one keyboard-friendly Share menu', () => {
     const markup = renderToStaticMarkup(
       <TranscriptOutputMenus
         hasRecording
@@ -14,10 +14,12 @@ describe('TranscriptOutputMenus', () => {
       />,
     );
 
-    expect(markup.match(/<details/g)).toHaveLength(2);
+    expect(markup.match(/<details/g)).toHaveLength(1);
     expect(markup).toContain('<summary');
-    expect(markup).toContain('Open transcript export options');
-    expect(markup).toContain('Open meeting copy options');
+    expect(markup).toContain('Open sharing options');
+    expect(markup).toContain('<span>Share</span>');
+    expect(markup).toContain('aria-label="Copy summary content"');
+    expect(markup).toContain('aria-label="Download meeting files"');
     expect(markup).toContain('Meeting minutes (DOCX)');
     expect(markup).toContain('Subtitles (SRT)');
     expect(markup).toContain('Subtitles (WebVTT)');

@@ -26,6 +26,7 @@ interface StoredLocalAiConnection {
   schemaVersion: 1;
   baseUrl: string;
   selectedModel: string;
+  models: LocalAiModel[];
   encryptedApiKey?: string;
   verifiedAt: string;
 }
@@ -138,6 +139,38 @@ const parseModelId = (value: unknown, optional = false): string | null => {
   return value;
 };
 
+const parseStoredModels = (
+  value: unknown,
+  selectedModel: string,
+): LocalAiModel[] => {
+  if (value === undefined) {
+    return [{ id: selectedModel, ownedBy: null }];
+  }
+  if (!Array.isArray(value) || value.length > MAX_MODELS) {
+    throw new TypeError('The saved local AI model list is invalid.');
+  }
+  const models = value.map((candidate): LocalAiModel => {
+    if (!isRecord(candidate)) {
+      throw new TypeError('The saved local AI model list is invalid.');
+    }
+    const id = parseModelId(candidate.id) as string;
+    const ownedBy =
+      typeof candidate.ownedBy === 'string' &&
+      candidate.ownedBy.length <= 200 &&
+      ![...candidate.ownedBy].some((character) => character.charCodeAt(0) < 32)
+        ? candidate.ownedBy
+        : null;
+    return { id, ownedBy };
+  });
+  const uniqueModels = Array.from(
+    new Map(models.map((model) => [model.id, model])).values(),
+  );
+  if (!uniqueModels.some((model) => model.id === selectedModel)) {
+    uniqueModels.push({ id: selectedModel, ownedBy: null });
+  }
+  return uniqueModels.sort((left, right) => left.id.localeCompare(right.id));
+};
+
 const parseStoredConnection = (value: unknown): StoredLocalAiConnection => {
   if (
     !isRecord(value) ||
@@ -153,10 +186,12 @@ const parseStoredConnection = (value: unknown): StoredLocalAiConnection => {
   if (!Number.isFinite(verifiedAt.getTime())) {
     throw new TypeError('The saved local AI connection date is invalid.');
   }
+  const selectedModel = parseModelId(value.selectedModel) as string;
   return {
     schemaVersion: 1,
     baseUrl: normalizeLocalAiBaseUrl(value.baseUrl),
-    selectedModel: parseModelId(value.selectedModel) as string,
+    selectedModel,
+    models: parseStoredModels(value.models, selectedModel),
     verifiedAt: verifiedAt.toISOString(),
     ...(value.encryptedApiKey ? { encryptedApiKey: value.encryptedApiKey } : {}),
   };
@@ -224,6 +259,7 @@ const toSummary = (
         configured: true,
         baseUrl: connection.baseUrl,
         selectedModel: connection.selectedModel,
+        availableModels: connection.models,
         hasApiKey: Boolean(connection.encryptedApiKey),
         verifiedAt: connection.verifiedAt,
       }
@@ -231,6 +267,7 @@ const toSummary = (
         configured: false,
         baseUrl: '',
         selectedModel: null,
+        availableModels: [],
         hasApiKey: false,
         verifiedAt: null,
       };
@@ -275,6 +312,7 @@ export class LocalAiConnectionService {
         schemaVersion: 1,
         baseUrl,
         selectedModel,
+        models,
         verifiedAt: this.now().toISOString(),
         ...(apiKey
           ? { encryptedApiKey: this.options.credentialCipher.encrypt(apiKey) }

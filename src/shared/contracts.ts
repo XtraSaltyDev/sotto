@@ -250,6 +250,7 @@ export interface LocalAiConnectionSummary {
   configured: boolean;
   baseUrl: string;
   selectedModel: string | null;
+  availableModels?: LocalAiModel[];
   hasApiKey: boolean;
   verifiedAt: string | null;
 }

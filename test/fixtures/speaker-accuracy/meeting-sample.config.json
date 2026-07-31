@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "meeting-sample-single-speaker",
+  "mediaPath": "../meeting-sample.mp4",
+  "annotationPath": "meeting-sample.annotation.json",
+  "transcriptReferencePath": "meeting-sample.transcript-reference.json"
+}
