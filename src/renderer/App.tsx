@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useLayoutEffect,
   type ReactNode,
 } from 'react';
 
@@ -67,8 +68,10 @@ import {
   LockIcon,
   MicrophoneIcon,
   ModelIcon,
+  MoonIcon,
   ShareIcon,
   SpinnerIcon,
+  SunIcon,
   TrashIcon,
 } from './icons';
 import { ActivityOverlay } from './ActivityOverlay';
@@ -85,6 +88,12 @@ import {
   transcriptCopySuccessMessage,
   transcriptExportFailureLabel,
 } from './transcript-output-actions';
+import {
+  appThemeFromPreference,
+  nextAppTheme,
+  THEME_STORAGE_KEY,
+  type AppTheme,
+} from './theme';
 
 const formatDuration = (durationMs: number): string => {
   const totalSeconds = Math.max(0, Math.round(durationMs / 1_000));
@@ -1660,7 +1669,13 @@ const TranscriptView = ({
   );
 };
 
-const MainApp = () => {
+const MainApp = ({
+  theme,
+  onToggleTheme,
+}: {
+  theme: AppTheme;
+  onToggleTheme: () => void;
+}) => {
   const [currentPage, setCurrentPage] = useState<AppPage>('transcripts');
   const [appState, setAppState] = useState<AppState | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2801,7 +2816,13 @@ const MainApp = () => {
   if (currentPage === 'local-ai') {
     return (
       <div className="app-shell">
-        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} updateNotice={updateNotice} />
+        <Sidebar
+          currentPage={currentPage}
+          onNavigate={setCurrentPage}
+          onToggleTheme={onToggleTheme}
+          theme={theme}
+          updateNotice={updateNotice}
+        />
         <LocalAiSettings />
       </div>
     );
@@ -2810,7 +2831,13 @@ const MainApp = () => {
   if (selectedId) {
     return (
       <div className="app-shell">
-        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} updateNotice={updateNotice} />
+        <Sidebar
+          currentPage={currentPage}
+          onNavigate={setCurrentPage}
+          onToggleTheme={onToggleTheme}
+          theme={theme}
+          updateNotice={updateNotice}
+        />
         <TranscriptView
           localAiConnection={localAiConnection}
           localAiError={localAiError}
@@ -2841,7 +2868,13 @@ const MainApp = () => {
 
   return (
     <div className="app-shell">
-      <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} updateNotice={updateNotice} />
+      <Sidebar
+        currentPage={currentPage}
+        onNavigate={setCurrentPage}
+        onToggleTheme={onToggleTheme}
+        theme={theme}
+        updateNotice={updateNotice}
+      />
       <main className={`workspace${showNewTranscription ? '' : ' workspace--library-home'}`}>
         <header className="topbar">
           <h1>Transcripts</h1>
@@ -3074,10 +3107,14 @@ const MainApp = () => {
 const Sidebar = ({
   currentPage,
   onNavigate,
+  onToggleTheme,
+  theme,
   updateNotice,
 }: {
   currentPage: AppPage;
   onNavigate: (page: AppPage) => void;
+  onToggleTheme: () => void;
+  theme: AppTheme;
   updateNotice?: ReactNode;
 }) => (
   <aside className="sidebar" aria-label="Sotto navigation">
@@ -3099,11 +3136,57 @@ const Sidebar = ({
       </button>
     </nav>
     {updateNotice}
-    <div className="privacy-note"><LockIcon /><span>Media and transcripts stay on this device.</span></div>
+    <div className="sidebar__footer">
+      <button
+        aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        aria-pressed={theme === 'dark'}
+        className="theme-toggle"
+        onClick={onToggleTheme}
+        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        type="button"
+      >
+        {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+        <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+      </button>
+      <div className="privacy-note"><LockIcon /><span>Media and transcripts stay on this device.</span></div>
+    </div>
   </aside>
 );
 
-export const App = () =>
-  new URLSearchParams(window.location.search).get('window') === 'activity'
+const initialAppTheme = (): AppTheme => {
+  let storedTheme: string | null = null;
+  try {
+    storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  } catch {
+    // A restricted storage area should not prevent Sotto from opening.
+  }
+  const prefersDark =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return appThemeFromPreference(storedTheme, prefersDark);
+};
+
+export const App = () => {
+  const [theme, setTheme] = useState<AppTheme>(initialAppTheme);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+  }, [theme]);
+
+  const onToggleTheme = useCallback(() => {
+    setTheme((current) => {
+      const next = nextAppTheme(current);
+      try {
+        window.localStorage.setItem(THEME_STORAGE_KEY, next);
+      } catch {
+        // Keep the in-session toggle working if storage is unavailable.
+      }
+      return next;
+    });
+  }, []);
+
+  return new URLSearchParams(window.location.search).get('window') === 'activity'
     ? <ActivityOverlay />
-    : <MainApp />;
+    : <MainApp onToggleTheme={onToggleTheme} theme={theme} />;
+};

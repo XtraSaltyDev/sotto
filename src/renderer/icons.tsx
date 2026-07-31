@@ -67,6 +67,19 @@ export const LockIcon = (props: IconProps) => (
   </svg>
 );
 
+export const MoonIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z" />
+  </svg>
+);
+
+export const SunIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <circle cx="12" cy="12" r="3.5" />
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" />
+  </svg>
+);
+
 export const SpinnerIcon = (props: IconProps) => (
   <svg {...iconDefaults} {...props}>
     <path d="M20 12a8 8 0 1 1-2.35-5.65" />
