@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { availableParallelism as readAvailableParallelism } from 'node:os';
 import path from 'node:path';
 
@@ -122,21 +122,44 @@ export class LocalTranscriptionService {
     }
   }
 
-  async initialize(): Promise<void> {
+  /**
+   * Removes abandoned job directories and reports the source names of
+   * imported-file jobs that were interrupted mid-run, so a crash never
+   * discards an import invisibly. Interrupted live-recording jobs are
+   * excluded — the recording repository already surfaces those with a
+   * retry path.
+   */
+  async initialize(): Promise<string[]> {
     await mkdir(this.options.jobsRoot, { recursive: true, mode: 0o700 });
     await this.options.repository.cleanupTemporaryFiles();
 
     const entries = await readdir(this.options.jobsRoot, { withFileTypes: true });
+    const interruptedImports: string[] = [];
     await Promise.all(
       entries
         .filter((entry) => entry.isDirectory() && isTranscriptId(entry.name))
-        .map((entry) =>
-          rm(path.join(this.options.jobsRoot, entry.name), {
-            force: true,
-            recursive: true,
-          }),
-        ),
+        .map(async (entry) => {
+          const directory = path.join(this.options.jobsRoot, entry.name);
+          try {
+            const marker = JSON.parse(
+              await readFile(path.join(directory, 'job.json'), 'utf8'),
+            ) as { kind?: unknown; sourceName?: unknown };
+            if (
+              marker.kind === 'import' &&
+              typeof marker.sourceName === 'string' &&
+              marker.sourceName.length > 0 &&
+              marker.sourceName.length <= 300
+            ) {
+              interruptedImports.push(marker.sourceName);
+            }
+          } catch {
+            // A job directory without a readable marker predates markers or
+            // was corrupted; it is still removed below.
+          }
+          await rm(directory, { force: true, recursive: true });
+        }),
     );
+    return interruptedImports.sort();
   }
 
   getActiveJob(): TranscriptionJobSnapshot | null {
@@ -247,6 +270,18 @@ export class LocalTranscriptionService {
 
     try {
       await mkdir(jobDirectory, { recursive: false, mode: 0o700 });
+      // The marker lets the next launch tell the user which import a crash
+      // interrupted; the file name is the only detail recorded. Live
+      // recordings carry their own recovery metadata instead.
+      await writeFile(
+        path.join(jobDirectory, 'job.json'),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          kind: media.recordingId ? 'recording' : 'import',
+          sourceName: media.name,
+        })}\n`,
+        { mode: 0o600 },
+      ).catch(() => undefined);
       const probe = await probeMedia({
         ffmpegPath: this.options.runtime.ffmpegPath,
         inputPath: media.path,

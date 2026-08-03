@@ -117,10 +117,22 @@ export class TranscriptRepository {
     return normalized;
   }
 
+  /**
+   * Count of record files the most recent list() could not read — corrupt,
+   * oversized, or written by a newer schema than this build understands.
+   * Surfaced so hidden transcripts are never silently invisible.
+   */
+  private skippedRecordCount = 0;
+
+  get lastSkippedRecordCount(): number {
+    return this.skippedRecordCount;
+  }
+
   async list(): Promise<TranscriptRecord[]> {
     await this.ensureRoot();
     const entries = await readdir(this.rootPath, { withFileTypes: true });
     const records: TranscriptRecord[] = [];
+    let skipped = 0;
 
     for (const entry of entries) {
       if (!isRecordFile(entry)) {
@@ -130,8 +142,11 @@ export class TranscriptRepository {
       const record = await this.readRecord(path.join(this.rootPath, entry.name));
       if (record !== null) {
         records.push(record);
+      } else {
+        skipped += 1;
       }
     }
+    this.skippedRecordCount = skipped;
 
     return records.sort((left, right) => {
       const byCompletedAt =

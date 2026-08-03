@@ -309,6 +309,23 @@ export class RecordingRepository {
     });
   }
 
+  /**
+   * Preserve an interrupted capture. A non-empty partial file is usually a
+   * decodable audio prefix, so it is promoted to the durable name and
+   * registered as a recovered recording instead of being discarded. An
+   * empty partial has nothing to keep and is removed.
+   */
+  async recoverInterrupted(id: string): Promise<RecordingMetadata | null> {
+    if (!isTranscriptId(id)) return null;
+    const partialSize = await safeRecordingSize(this.partialPath(id));
+    if (partialSize === null || partialSize === 0) {
+      await this.removeUnfinished(id);
+      return null;
+    }
+    await this.promotePartial(id);
+    return this.recoverFinalized(id);
+  }
+
   async recoverFinalized(id: string): Promise<RecordingMetadata | null> {
     if (!isTranscriptId(id)) return null;
     const durablePath = this.durablePath(id);
@@ -397,8 +414,21 @@ export class RecordingRepository {
     }
 
     // A directory with only an ordinary partial file is an interrupted
-    // capture, not finalized user data. Durable and finalizing files are
-    // handled above and are never removed here.
+    // capture. The captured prefix is user audio: promote it to a durable
+    // recovered recording rather than discarding it. Only a directory with
+    // no usable audio at all is removed; a failed promotion leaves
+    // everything in place for the next launch to retry.
+    const partialSize = await safeRecordingSize(this.partialPath(id));
+    if (partialSize !== null && partialSize > 0) {
+      try {
+        await this.enforcePrivateFile(this.partialPath(id));
+        await this.promotePartial(id);
+        await this.recoverFinalized(id);
+      } catch {
+        // Deliberately best-effort: never delete interrupted audio.
+      }
+      return;
+    }
     await rm(this.directoryPath(id), { force: true, recursive: true });
   }
 

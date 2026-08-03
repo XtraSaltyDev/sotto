@@ -1699,6 +1699,9 @@ const MainApp = ({
   const [isNewTranscriptionOpen, setIsNewTranscriptionOpen] = useState(false);
   const [dismissedStorageMessage, setDismissedStorageMessage] =
     useState<string | null>(null);
+  const [dismissedStartupNotices, setDismissedStartupNotices] = useState<
+    ReadonlySet<string>
+  >(new Set());
   const [appUpdate, setAppUpdate] = useState<AppUpdateNoticeState | null>(null);
   const [isUpdatePopupOpen, setIsUpdatePopupOpen] = useState(false);
   const [libraryViewState, setLibraryViewState] =
@@ -2600,11 +2603,21 @@ const MainApp = ({
     }
   };
 
+  // Segment and speaker edits change the transcript fingerprint, which
+  // discards any generated Local AI summary. Never let minutes of local
+  // model work vanish from a one-word correction without asking.
+  const confirmLocalAiSummaryDiscard = (): boolean =>
+    !transcript?.localAiMeetingSummary ||
+    window.confirm(
+      'Saving this edit will discard the Local AI summary for this meeting. You can generate it again afterwards. Continue?',
+    );
+
   const handleRenameSpeaker = async (
     speakerId: string,
     label: string,
   ): Promise<string | null> => {
     if (!window.sotto || !selectedId) return 'Sotto could not rename that speaker.';
+    if (!confirmLocalAiSummaryDiscard()) return null;
     const result = await window.sotto.renameTranscriptSpeaker(
       selectedId,
       speakerId,
@@ -2664,6 +2677,7 @@ const MainApp = ({
     if (!window.sotto || !selectedId) {
       return 'Sotto could not save that transcript correction.';
     }
+    if (!confirmLocalAiSummaryDiscard()) return null;
     const result = await window.sotto.updateTranscriptSegment(
       selectedId,
       segmentIndex,
@@ -2938,6 +2952,21 @@ const MainApp = ({
             </button>
           )}
         </header>
+        {(appState?.startupNotices ?? [])
+          .filter((startupNotice) => !dismissedStartupNotices.has(startupNotice))
+          .map((startupNotice) => (
+            <div className="home-message" key={startupNotice}>
+              <CaptureFailureNotice
+                message={startupNotice}
+                onDismiss={() =>
+                  setDismissedStartupNotices(
+                    (current) => new Set(current).add(startupNotice),
+                  )
+                }
+                platform={navigator.platform}
+              />
+            </div>
+          ))}
         {!showNewTranscription && notice ? (
           <div className="home-message">
             <HomeNotice notice={notice} onDismiss={() => setNotice(null)} />

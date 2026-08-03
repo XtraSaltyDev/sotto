@@ -291,12 +291,32 @@ export class AppController {
 
   private readonly engineStatus: RendererEngineStatus;
 
+  private readonly startupNotices: string[] = [];
+
   async initialize(): Promise<void> {
     await this.repository.cleanupTemporaryFiles();
     await this.playbackRepository.initialize();
-    await this.service?.initialize();
+    const interruptedImports = (await this.service?.initialize()) ?? [];
+    for (const sourceName of interruptedImports.slice(0, 3)) {
+      this.startupNotices.push(
+        `The import of “${sourceName}” was interrupted when Sotto closed. Import the file again to transcribe it.`,
+      );
+    }
+    if (interruptedImports.length > 3) {
+      this.startupNotices.push(
+        `${interruptedImports.length - 3} more imports were interrupted when Sotto closed.`,
+      );
+    }
     await this.recordingService.initialize();
     await this.reloadTranscripts();
+    if (this.repository.lastSkippedRecordCount > 0) {
+      const count = this.repository.lastSkippedRecordCount;
+      this.startupNotices.push(
+        count === 1
+          ? 'One saved transcript could not be read and is hidden. It may have been created by a newer version of Sotto.'
+          : `${count} saved transcripts could not be read and are hidden. They may have been created by a newer version of Sotto.`,
+      );
+    }
     await this.playbackRepository.cleanupOrphans(
       new Set(this.transcriptSummaries.map((transcript) => transcript.id)),
     );
@@ -333,6 +353,9 @@ export class AppController {
         ...transcript,
         tags: [...transcript.tags],
       })),
+      ...(this.startupNotices.length
+        ? { startupNotices: [...this.startupNotices] }
+        : {}),
     };
   }
 

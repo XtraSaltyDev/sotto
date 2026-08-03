@@ -237,9 +237,16 @@ describe('LiveRecordingService', () => {
     ).toMatchObject({
       transcriptionState: 'ready',
     });
-    await expect(stat(abandonedDirectory)).rejects.toMatchObject({
-      code: 'ENOENT',
+    // The abandoned partial is recovered as a durable recording rather
+    // than removed; the audio prefix is user data.
+    expect(
+      summaries.find((recording) => recording.id === ABANDONED_ID),
+    ).toMatchObject({
+      transcriptionState: 'ready',
     });
+    await expect(
+      readFile(path.join(abandonedDirectory, 'recording.webm'), 'utf8'),
+    ).resolves.toBe('unfinished');
     await expect(readFile(recoveredPath, 'utf8')).resolves.toBe('durable orphan');
   });
 

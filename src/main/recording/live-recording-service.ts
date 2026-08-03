@@ -425,13 +425,13 @@ export class LiveRecordingService {
       };
     } catch (error) {
       if (!encoderClosed) {
-        await this.repository.removeUnfinished(recording.id).catch(() => undefined);
+        await this.repository.recoverInterrupted(recording.id).catch(() => undefined);
       }
       throw asLiveRecordingError(
         error,
         encoderClosed
           ? 'Sotto could not finish saving the recording, but the closed audio was kept for automatic recovery after restart.'
-          : 'Sotto could not finish saving the live recording.',
+          : 'Sotto could not finish saving the live recording. The audio captured so far was kept for automatic recovery.',
       );
     } finally {
       if (this.activeRecording?.id === recording.id) {
@@ -614,7 +614,7 @@ export class LiveRecordingService {
       const timer = setTimeout(() => {
         const timeout = new LiveRecordingError(
           'recording-failed',
-          'Sotto could not keep up with local storage while recording. The capture was stopped.',
+          'Sotto could not keep up with local storage while recording. The capture was stopped and the audio recorded so far was kept for automatic recovery.',
         );
         recording.streamError = timeout;
         recording.stream.destroy(timeout);
@@ -686,7 +686,10 @@ export class LiveRecordingService {
       this.options.onRecordingChanged(null);
     }
     recording.stream.destroy();
-    await this.repository.removeUnfinished(recording.id).catch(() => undefined);
+    // A mid-capture failure must keep the audio recorded so far; only an
+    // empty capture is cleaned up. If preservation itself fails, the boot
+    // sweep retries from the untouched partial file.
+    await this.repository.recoverInterrupted(recording.id).catch(() => undefined);
   }
 
   private async safeDurableStat(filePath: string): Promise<{ size: number } | null> {

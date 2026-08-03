@@ -52,6 +52,12 @@ export const recordingFailurePresentation = (
   if (/kept for automatic recovery|recovered locally/iu.test(message)) {
     return { kind: 'recovery', title: 'Your recording was kept' };
   }
+  if (/imports? (?:of .*)?w(?:as|ere) interrupted/iu.test(message)) {
+    return { kind: 'error', title: 'An import did not finish' };
+  }
+  if (/could not be read and (?:is|are) hidden/iu.test(message)) {
+    return { kind: 'error', title: 'Some transcripts are hidden' };
+  }
   if (/storage|disk|free up space|ENOSPC/iu.test(message)) {
     return { kind: 'error', title: 'Local storage needs attention' };
   }

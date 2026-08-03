@@ -107,12 +107,34 @@ describe('RecordingRepository', () => {
     ]);
   });
 
-  it('still removes a capture that was interrupted before its encoder closed', async () => {
+  it('preserves a capture that was interrupted before its encoder closed', async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'sotto-recording-repository-'));
     const repository = new RecordingRepository(root);
     await repository.initialize();
     await repository.createPartial(partialMetadata());
     await writeFile(repository.partialPath(RECORDING_ID), 'interrupted');
+
+    const restarted = new RecordingRepository(root);
+    await restarted.initialize();
+
+    await expect(
+      readFile(restarted.durablePath(RECORDING_ID), 'utf8'),
+    ).resolves.toBe('interrupted');
+    await expect(restarted.list()).resolves.toEqual([
+      expect.objectContaining({
+        id: RECORDING_ID,
+        storageState: 'complete',
+        transcription: expect.objectContaining({ state: 'ready' }),
+      }),
+    ]);
+  });
+
+  it('removes an interrupted capture that recorded no audio at all', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'sotto-recording-repository-'));
+    const repository = new RecordingRepository(root);
+    await repository.initialize();
+    await repository.createPartial(partialMetadata());
+    await writeFile(repository.partialPath(RECORDING_ID), '');
 
     const restarted = new RecordingRepository(root);
     await restarted.initialize();

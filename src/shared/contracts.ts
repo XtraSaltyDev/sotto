@@ -253,6 +253,8 @@ export interface AppState {
   activeJob: TranscriptionJobSnapshot | null;
   recordings: SavedRecordingSummary[];
   transcripts: TranscriptSummary[];
+  /** One-time launch reports: interrupted imports, unreadable records. */
+  startupNotices?: string[];
 }
 
 export const OLLAMA_OPENAI_BASE_URL = 'http://127.0.0.1:11434/v1';
