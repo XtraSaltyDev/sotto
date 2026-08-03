@@ -21,6 +21,13 @@ export const DEFAULT_SOTTO_UPDATE_MANIFEST_URL =
   'http://10.1.2.3:8090/internal/sotto/latest.json';
 
 const MANIFEST_TIMEOUT_MS = 8_000;
+// Transient ENOTEMPTY/EBUSY during large recursive deletes retry briefly.
+const RM_RETRY_OPTIONS = {
+  force: true,
+  recursive: true,
+  maxRetries: 3,
+  retryDelay: 150,
+} as const;
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024;
@@ -403,11 +410,20 @@ export class UpdateService {
         reason: 'No downloaded update is ready to install.',
       };
     }
-    const retiredPath = path.join(
+    let retiredPath = path.join(
       this.options.stagingDirectory,
       `retired-${this.options.currentVersion}.app`,
     );
-    await rm(retiredPath, { force: true, recursive: true });
+    try {
+      await rm(retiredPath, RM_RETRY_OPTIONS);
+    } catch {
+      // A stubborn previous rollback bundle must not block this install;
+      // retire the current copy under a unique name instead.
+      retiredPath = path.join(
+        this.options.stagingDirectory,
+        `retired-${this.options.currentVersion}-${Date.now()}.app`,
+      );
+    }
     try {
       await rename(installedAppPath, retiredPath);
     } catch (error) {
@@ -437,18 +453,28 @@ export class UpdateService {
     artifact: ManifestArtifact,
   ): Promise<DownloadAppUpdateResult> {
     const staging = this.options.stagingDirectory;
-    await rm(staging, { force: true, recursive: true });
     await mkdir(staging, { recursive: true });
-    const archivePath = path.join(staging, `Sotto-${version}.zip`);
+    // Stage into a per-version directory so a new update never depends on
+    // deleting earlier leftovers. A retired rollback bundle that resists
+    // deletion (ENOTEMPTY under load has been observed on APFS) must not
+    // block updating; stale artifacts are swept separately, best effort.
+    let stageDirectory = path.join(staging, `stage-${version}`);
+    try {
+      await rm(stageDirectory, RM_RETRY_OPTIONS);
+    } catch {
+      stageDirectory = path.join(staging, `stage-${version}-${Date.now()}`);
+    }
+    await mkdir(stageDirectory, { recursive: true });
+    const archivePath = path.join(stageDirectory, `Sotto-${version}.zip`);
     await this.downloadVerified(artifact, archivePath, version);
     this.options.onProgress?.({ phase: 'preparing', version });
-    const extractedDirectory = path.join(staging, 'extracted');
+    const extractedDirectory = path.join(stageDirectory, 'extracted');
     await mkdir(extractedDirectory, { recursive: true });
     await this.extractArchive(archivePath, extractedDirectory);
     await unlink(archivePath).catch(() => undefined);
     const appPath = await findAppBundle(extractedDirectory);
     if (!appPath) {
-      await rm(staging, { force: true, recursive: true });
+      await rm(stageDirectory, RM_RETRY_OPTIONS).catch(() => undefined);
       return {
         outcome: 'failed',
         reason: 'The downloaded update did not contain the Sotto app.',
@@ -456,6 +482,48 @@ export class UpdateService {
     }
     this.stagedUpdate = { version, appPath };
     return { outcome: 'staged', version };
+  }
+
+  /**
+   * Best-effort removal of artifacts from finished updates: retired
+   * rollback bundles, staged directories, and legacy layout leftovers.
+   * Failures are logged and never surfaced — the next update does not
+   * depend on this sweep succeeding.
+   */
+  async cleanupStaleUpdateArtifacts(): Promise<void> {
+    let entries: string[];
+    try {
+      entries = await readdir(this.options.stagingDirectory);
+    } catch {
+      return;
+    }
+    const activeStageDirectory = this.stagedUpdate
+      ? path.relative(
+          this.options.stagingDirectory,
+          this.stagedUpdate.appPath,
+        ).split(path.sep)[0]
+      : null;
+    for (const entry of entries) {
+      if (entry === activeStageDirectory) continue;
+      if (
+        !entry.startsWith('retired-') &&
+        !entry.startsWith('stage-') &&
+        entry !== 'extracted' &&
+        !entry.endsWith('.zip') &&
+        !entry.endsWith('.sotto-download')
+      ) {
+        continue;
+      }
+      await rm(
+        path.join(this.options.stagingDirectory, entry),
+        RM_RETRY_OPTIONS,
+      ).catch((error: unknown) => {
+        console.warn(
+          `[sotto] Could not remove stale update artifact ${entry}.`,
+          error,
+        );
+      });
+    }
   }
 
   private async downloadToDownloadsFolder(

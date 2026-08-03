@@ -401,6 +401,58 @@ describe('UpdateService', () => {
     });
   });
 
+  it('stages a new update even when old rollback bundles remain', async () => {
+    const archive = Buffer.from('zip-archive-bytes');
+    const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
+    manifest.artifacts['darwin-arm64-archive'] = {
+      file: 'Sotto-darwin-arm64.zip',
+      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+      sha256: createHash('sha256').update(archive).digest('hex'),
+      size: archive.byteLength,
+    };
+    const fetcher = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('latest.json')
+        ? Response.json(manifest)
+        : new Response(archive),
+    );
+    const root = await downloadsDirectory();
+    const staging = path.join(root, 'staging');
+    const leftover = path.join(staging, 'retired-0.1.8.app', 'Contents');
+    await mkdir(leftover, { recursive: true });
+    await writeFile(path.join(leftover, 'marker'), 'old-rollback');
+    const installedAppPath = path.join(root, 'Sotto.app');
+    await mkdir(installedAppPath, { recursive: true });
+    const service = new UpdateService({
+      manifestUrl: MANIFEST_URL,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: path.join(root, 'downloads'),
+      stagingDirectory: staging,
+      installedAppPath,
+      fetcher: fetcher as typeof fetch,
+      extractArchive: async (_archivePath, directory) => {
+        await mkdir(path.join(directory, 'Sotto.app'), { recursive: true });
+      },
+    });
+
+    await expect(service.downloadUpdate()).resolves.toEqual({
+      outcome: 'staged',
+      version: '0.2.0',
+    });
+    // The old rollback bundle was not required to disappear first.
+    await expect(
+      readFile(path.join(leftover, 'marker'), 'utf8'),
+    ).resolves.toBe('old-rollback');
+
+    await service.cleanupStaleUpdateArtifacts();
+    await expect(readFile(path.join(leftover, 'marker'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    // The sweep removes finished-update leftovers but must never touch the
+    // actively staged pending update.
+    await expect(readdir(staging)).resolves.toEqual(['stage-0.2.0']);
+  });
+
   it('falls back to the Downloads folder when no bundle can be replaced', async () => {
     const artifact = Buffer.from('dmg-bytes');
     const manifest = manifestFor('0.2.0', artifact);

@@ -466,6 +466,12 @@ const initialize = async (): Promise<void> => {
       ),
     );
   }
+  // Sweep rollback bundles and staging leftovers from completed updates
+  // after launch settles; a failed sweep never affects the next update.
+  setTimeout(() => {
+    void updateService.cleanupStaleUpdateArtifacts();
+  }, 20_000);
+
   createWindow();
   if (!globalShortcut.register(DICTATION_ACCELERATOR, requestDictationToggle)) {
     console.warn(
