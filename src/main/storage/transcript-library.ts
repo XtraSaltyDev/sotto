@@ -50,10 +50,17 @@ const searchableMeetingSummaryText = (record: TranscriptRecord): string[] => {
   ];
 };
 
-const matchesText = (record: TranscriptRecord, query: string): boolean => {
-  const terms = normalizeSearchValue(query).split(' ').filter(Boolean);
-  if (terms.length === 0) return true;
+/**
+ * The normalized haystack (which includes a derived meeting summary) is
+ * expensive to build, so it is cached per record object. Records are
+ * replaced immutably on every mutation, which makes object identity a
+ * correct cache key, and the WeakMap lets dropped records be collected.
+ */
+const haystackByRecord = new WeakMap<TranscriptRecord, string>();
 
+const searchHaystack = (record: TranscriptRecord): string => {
+  const cached = haystackByRecord.get(record);
+  if (cached !== undefined) return cached;
   const haystack = normalizeSearchValue(
     [
       record.title,
@@ -64,6 +71,14 @@ const matchesText = (record: TranscriptRecord, query: string): boolean => {
       ...searchableMeetingSummaryText(record),
     ].join('\n'),
   );
+  haystackByRecord.set(record, haystack);
+  return haystack;
+};
+
+const matchesText = (record: TranscriptRecord, query: string): boolean => {
+  const terms = normalizeSearchValue(query).split(' ').filter(Boolean);
+  if (terms.length === 0) return true;
+  const haystack = searchHaystack(record);
   return terms.every((term) => haystack.includes(term));
 };
 

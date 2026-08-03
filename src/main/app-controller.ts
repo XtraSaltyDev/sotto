@@ -646,7 +646,7 @@ export class AppController {
             'The transcript changed while Local AI was working. Generate the summary again.',
         };
       }
-      await this.reloadTranscripts();
+      await this.refreshTranscript(id);
       this.emit();
       const localAiMeetingSummary: LocalAiMeetingSummary = {
         summary: {
@@ -687,7 +687,7 @@ export class AppController {
         label,
       );
       if (result.outcome === 'not-found') return result;
-      await this.reloadTranscripts();
+      await this.refreshTranscript(transcriptId);
       this.emit();
       return { outcome: 'renamed', speaker: { ...result.speaker } };
     } catch (error) {
@@ -711,7 +711,7 @@ export class AppController {
         metadata,
       );
       if (result.outcome === 'not-found') return result;
-      await this.reloadTranscripts();
+      await this.refreshTranscript(transcriptId);
       this.emit();
       return {
         outcome: 'updated',
@@ -741,7 +741,7 @@ export class AppController {
         text,
       );
       if (result.outcome === 'not-found') return result;
-      await this.reloadTranscripts();
+      await this.refreshTranscript(transcriptId);
       this.emit();
       return {
         outcome: 'updated',
@@ -787,7 +787,7 @@ export class AppController {
           this.emit();
         });
       }
-      await this.reloadTranscripts();
+      await this.refreshTranscript(id);
       this.emit();
     }
     return deleted;
@@ -877,19 +877,46 @@ export class AppController {
 
   private reloadTranscripts(): Promise<void> {
     const reload = this.transcriptReloadChain.then(async () => {
-      const records = await this.repository.list();
-      const transcriptSummaries = records.map(toTranscriptSummary);
-      const recordingTranscriptIds = new Set(
-        records
-          .filter((record) => record.source.type === 'recording')
-          .map((record) => record.recordingId ?? record.id),
-      );
-      this.transcriptSummaries = transcriptSummaries;
-      this.transcriptLibraryRecords = records;
-      this.recordingTranscriptIds = recordingTranscriptIds;
+      this.adoptTranscriptRecords(await this.repository.list());
     });
     this.transcriptReloadChain = reload.catch(() => undefined);
     return reload;
+  }
+
+  /**
+   * Refreshes one record after a single-record mutation instead of
+   * re-reading and re-parsing the entire library from disk. Unchanged
+   * records keep their object identity, which also preserves their cached
+   * search haystacks.
+   */
+  private refreshTranscript(id: string): Promise<void> {
+    const reload = this.transcriptReloadChain.then(async () => {
+      const record = await this.repository.get(id);
+      const records = this.transcriptLibraryRecords.filter(
+        (entry) => entry.id !== id,
+      );
+      if (record) records.push(record);
+      records.sort((left, right) => {
+        const byCompletedAt =
+          Date.parse(right.completedAt) - Date.parse(left.completedAt);
+        return byCompletedAt === 0
+          ? right.id.localeCompare(left.id)
+          : byCompletedAt;
+      });
+      this.adoptTranscriptRecords(records);
+    });
+    this.transcriptReloadChain = reload.catch(() => undefined);
+    return reload;
+  }
+
+  private adoptTranscriptRecords(records: TranscriptRecord[]): void {
+    this.transcriptSummaries = records.map(toTranscriptSummary);
+    this.transcriptLibraryRecords = records;
+    this.recordingTranscriptIds = new Set(
+      records
+        .filter((record) => record.source.type === 'recording')
+        .map((record) => record.recordingId ?? record.id),
+    );
   }
 
   private async reloadRecordings(): Promise<void> {

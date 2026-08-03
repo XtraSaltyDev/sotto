@@ -566,8 +566,14 @@ describe('transcript presentation', () => {
     );
     await controller.initialize();
 
-    const originalList = repository.list.bind(repository);
-    let listCalls = 0;
+    // Single-record mutations refresh through repository.get. Gate the
+    // first get after the rename mutation lands — that is the rename's
+    // refresh read — to model a slow reload without blocking the
+    // repository's own mutation chain.
+    const originalGet = repository.get.bind(repository);
+    const originalRename = repository.renameSpeakerLabel.bind(repository);
+    let renameMutationDone = false;
+    let refreshGateUsed = false;
     let releaseFirstReload: () => void = () => undefined;
     const firstReloadReleased = new Promise<void>((resolve) => {
       releaseFirstReload = resolve;
@@ -576,15 +582,22 @@ describe('transcript presentation', () => {
     const firstReloadStarted = new Promise<void>((resolve) => {
       firstReloadCaptured = resolve;
     });
-    vi.spyOn(repository, 'list').mockImplementation(async () => {
-      listCalls += 1;
-      if (listCalls === 1) {
-        const captured = await originalList();
+    vi.spyOn(repository, 'renameSpeakerLabel').mockImplementation(
+      async (...args: Parameters<typeof originalRename>) => {
+        const result = await originalRename(...args);
+        renameMutationDone = true;
+        return result;
+      },
+    );
+    vi.spyOn(repository, 'get').mockImplementation(async (id) => {
+      if (renameMutationDone && !refreshGateUsed) {
+        refreshGateUsed = true;
+        const captured = await originalGet(id);
         firstReloadCaptured();
         await firstReloadReleased;
         return captured;
       }
-      return originalList();
+      return originalGet(id);
     });
 
     const rename = controller.renameTranscriptSpeaker(
