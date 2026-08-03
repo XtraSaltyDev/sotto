@@ -10,6 +10,8 @@ import {
   parseDiarizationChildJson,
   runSpeakerDiarization,
   SpeakerDiarizationError,
+  DEFAULT_SPEAKER_DIARIZATION_TIMEOUT_MS,
+  speakerDiarizationTimeoutMs,
 } from './speaker-diarization';
 
 const temporaryRoots: string[] = [];
@@ -223,5 +225,25 @@ describe('speaker diarization child process', () => {
     `);
 
     await expect(runSpeakerDiarization(options)).rejects.toThrow('size limit');
+  });
+});
+
+describe('speakerDiarizationTimeoutMs', () => {
+  it('grows with audio duration and stays bounded', () => {
+    expect(speakerDiarizationTimeoutMs(null)).toBe(
+      DEFAULT_SPEAKER_DIARIZATION_TIMEOUT_MS,
+    );
+    expect(speakerDiarizationTimeoutMs(60)).toBe(
+      DEFAULT_SPEAKER_DIARIZATION_TIMEOUT_MS + 30_000,
+    );
+    // Two hours of audio gets a full hour beyond the floor.
+    expect(speakerDiarizationTimeoutMs(7_200)).toBe(
+      DEFAULT_SPEAKER_DIARIZATION_TIMEOUT_MS + 3_600_000,
+    );
+    // The cap holds for absurd inputs.
+    expect(speakerDiarizationTimeoutMs(1e9)).toBe(2 * 60 * 60 * 1_000);
+    expect(speakerDiarizationTimeoutMs(-5)).toBe(
+      DEFAULT_SPEAKER_DIARIZATION_TIMEOUT_MS,
+    );
   });
 });

@@ -38,6 +38,7 @@ import { createWhisperProgressParser } from './whisper-progress';
 import { alignTranscriptSpeakers } from './speaker-alignment';
 import {
   runSpeakerDiarization,
+  speakerDiarizationTimeoutMs,
   type RunSpeakerDiarizationOptions,
   type SpeakerDiarizationSegment,
 } from './speaker-diarization';
@@ -329,6 +330,9 @@ export class LocalTranscriptionService {
             embeddingModelPath: speakerRuntime.embeddingModelPath,
             modulePath: speakerRuntime.modulePath,
             expectedSpeakerCount,
+            timeoutMs: speakerDiarizationTimeoutMs(
+              normalizedDurationSeconds ?? null,
+            ),
             signal,
           });
         } catch (error) {

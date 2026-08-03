@@ -19,6 +19,30 @@ export const SPEAKER_DIARIZATION_ENGINE = {
 
 export const MAX_SPEAKER_DIARIZATION_JSON_BYTES = 16 * 1_024 * 1_024;
 export const DEFAULT_SPEAKER_DIARIZATION_TIMEOUT_MS = 15 * 60 * 1_000;
+const MAX_SPEAKER_DIARIZATION_TIMEOUT_MS = 2 * 60 * 60 * 1_000;
+
+/**
+ * Diarization wall-clock scales with audio length (roughly 0.1x real time
+ * on Apple Silicon), so a fixed cap starves long meetings: two hours of
+ * audio runs 11-13 minutes against the old 15-minute limit. Allow half of
+ * real time plus the fixed floor, bounded to two hours.
+ */
+export const speakerDiarizationTimeoutMs = (
+  audioDurationSeconds: number | null,
+): number => {
+  if (
+    audioDurationSeconds === null ||
+    !Number.isFinite(audioDurationSeconds) ||
+    audioDurationSeconds <= 0
+  ) {
+    return DEFAULT_SPEAKER_DIARIZATION_TIMEOUT_MS;
+  }
+  return Math.min(
+    MAX_SPEAKER_DIARIZATION_TIMEOUT_MS,
+    DEFAULT_SPEAKER_DIARIZATION_TIMEOUT_MS +
+      Math.round(audioDurationSeconds * 500),
+  );
+};
 const MAX_SPEAKER_DIAGNOSTIC_BYTES = 64 * 1_024;
 const MAX_SPEAKER_FAILURE_MESSAGE_BYTES = 4 * 1_024;
 const DIARIZATION_PROTOCOL_VERSION = 1;
