@@ -19,8 +19,9 @@ you stop.
 Nothing is uploaded. Sotto has no cloud service, accounts, analytics, or cloud
 capture. Its meeting-summary draft is extracted locally from the saved
 transcript and links every listed point back to its timestamp. The optional
-update check fetches only a version manifest from a server on your own network
-and never transmits recordings, transcripts, or identifiers.
+update check fetches only a signed release manifest from the configured HTTPS
+server and never transmits recordings, transcripts, or identifiers. Builds
+without embedded secure update configuration keep the feature disabled.
 
 ## What works now
 
@@ -128,6 +129,11 @@ out/make/Sotto-0.1.16-arm64.dmg
 
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
 available as an alternate artifact and for static-file update workflows.
+
+Internal update-enabled packages follow the signed-manifest and key-rotation
+procedure in [docs/internal-distribution.md](docs/internal-distribution.md).
+That procedure supports company-controlled ad-hoc distribution; it is not a
+claim of Apple notarization or public-release readiness.
 
 Local packages use an ad-hoc signature without Hardened Runtime. That is
 intentional: on macOS 26, a hardened process cannot load Electron components

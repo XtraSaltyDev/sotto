@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,14 +7,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   compareAppVersions,
-  parseUpdateManifest,
   UpdateService,
   updatePlatformKey,
 } from './update-service';
 import type { AppUpdateProgress } from '../../shared/contracts';
+import { signReleaseManifest } from './release-manifest.cjs';
 
 const MANIFEST_URL = 'http://10.1.2.3:8090/internal/sotto/latest.json';
 const ORIGIN = 'http://10.1.2.3:8090';
+const SECURE_MANIFEST_URL =
+  'https://updates.example.test/internal/sotto/latest.json';
+const SECURE_ORIGIN = 'https://updates.example.test';
+const testSigningKeys = generateKeyPairSync('ed25519');
+const testTrustedKeys = {
+  'test-2026': testSigningKeys.publicKey
+    .export({ type: 'spki', format: 'pem' })
+    .toString(),
+};
 
 const temporaryDirectories: string[] = [];
 
@@ -33,6 +42,7 @@ const downloadsDirectory = async (): Promise<string> => {
 };
 
 interface TestArtifact {
+  target: string;
   file: string;
   downloadUrl: string;
   sha256: string;
@@ -40,12 +50,18 @@ interface TestArtifact {
 }
 
 const manifestFor = (version: string, artifact: Buffer) => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   app: 'sotto',
+  channel: 'internal',
+  releaseKind: 'internal-ad-hoc',
   version,
-  publishedAt: '2026-07-31T12:00:00Z',
+  bundleId: 'com.sotto.desktop',
+  commit: '0123456789abcdef0123456789abcdef01234567',
+  buildNumber: 42,
+  publishedAt: '2026-07-31T12:00:00.000Z',
   artifacts: {
     'darwin-arm64': {
+      target: 'darwin-arm64',
       file: 'Sotto-arm64.dmg',
       downloadUrl: `${ORIGIN}/internal/sotto/Sotto-arm64.dmg`,
       sha256: createHash('sha256').update(artifact).digest('hex'),
@@ -53,6 +69,9 @@ const manifestFor = (version: string, artifact: Buffer) => ({
     },
   } as Record<string, TestArtifact>,
 });
+
+const signedManifest = (manifest: ReturnType<typeof manifestFor>) =>
+  signReleaseManifest(manifest, 'test-2026', testSigningKeys.privateKey);
 
 const serviceWith = (
   fetcher: typeof fetch,
@@ -65,12 +84,14 @@ const serviceWith = (
 ): UpdateService =>
   new UpdateService({
     manifestUrl: MANIFEST_URL,
+    trustedManifestKeys: testTrustedKeys,
     currentVersion,
     platformKey: 'darwin-arm64',
     downloadsDirectory: downloads,
     stagingDirectory: path.join(downloads, 'staging'),
     installedAppPath: options.installedAppPath ?? null,
     fetcher,
+    allowInsecureUpdateUrlsForTests: true,
     onProgress: options.onProgress,
   });
 
@@ -93,34 +114,169 @@ describe('updatePlatformKey', () => {
   });
 });
 
-describe('parseUpdateManifest', () => {
-  it('rejects artifacts served from a different origin', () => {
-    const manifest = manifestFor('0.2.0', Buffer.from('bytes'));
-    manifest.artifacts['darwin-arm64'].downloadUrl =
-      'http://attacker.example/Sotto-arm64.dmg';
-    expect(() => parseUpdateManifest(manifest, ORIGIN)).toThrow(
-      'The update artifact must come from the manifest origin.',
-    );
-  });
-
-  it('rejects manifests for other apps or schemas', () => {
-    expect(() =>
-      parseUpdateManifest({ schemaVersion: 2, app: 'sotto' }, ORIGIN),
-    ).toThrow('The update manifest is invalid.');
-    expect(() =>
-      parseUpdateManifest(
-        { ...manifestFor('0.2.0', Buffer.from('x')), app: 'other' },
-        ORIGIN,
-      ),
-    ).toThrow('The update manifest is invalid.');
-  });
-});
-
 describe('UpdateService', () => {
+  it('accepts an authenticated release manifest before offering an update', async () => {
+    const artifact = Buffer.from('authenticated-build');
+    const signed = signReleaseManifest(
+      {
+        schemaVersion: 2,
+        app: 'sotto',
+        channel: 'internal',
+        releaseKind: 'internal-ad-hoc',
+        version: '0.2.0',
+        bundleId: 'com.sotto.desktop',
+        commit: '0123456789abcdef0123456789abcdef01234567',
+        buildNumber: 42,
+        publishedAt: '2026-08-03T12:00:00.000Z',
+        artifacts: {
+          'darwin-arm64': {
+            target: 'darwin-arm64',
+            file: 'Sotto-arm64.dmg',
+            downloadUrl: `${SECURE_ORIGIN}/internal/sotto/Sotto-arm64.dmg`,
+            sha256: createHash('sha256').update(artifact).digest('hex'),
+            size: artifact.byteLength,
+          },
+        },
+      },
+      'test-2026',
+      testSigningKeys.privateKey,
+    );
+    const fetcher = vi.fn(async () => Response.json(signed));
+    const downloads = await downloadsDirectory();
+    const service = new UpdateService({
+      manifestUrl: SECURE_MANIFEST_URL,
+      trustedManifestKeys: testTrustedKeys,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: downloads,
+      stagingDirectory: path.join(downloads, 'staging'),
+      installedAppPath: null,
+      fetcher: fetcher as typeof fetch,
+    });
+
+    await expect(service.checkForUpdates()).resolves.toMatchObject({
+      outcome: 'update-available',
+      update: { version: '0.2.0' },
+    });
+  });
+
+  it('does not fetch an artifact when authenticated metadata was tampered', async () => {
+    const artifact = Buffer.from('authenticated-build');
+    const signed = signReleaseManifest(
+      {
+        schemaVersion: 2,
+        app: 'sotto',
+        channel: 'internal',
+        releaseKind: 'internal-ad-hoc',
+        version: '0.2.0',
+        bundleId: 'com.sotto.desktop',
+        commit: '0123456789abcdef0123456789abcdef01234567',
+        buildNumber: 42,
+        publishedAt: '2026-08-03T12:00:00.000Z',
+        artifacts: {
+          'darwin-arm64': {
+            target: 'darwin-arm64',
+            file: 'Sotto-arm64.dmg',
+            downloadUrl: `${SECURE_ORIGIN}/internal/sotto/Sotto-arm64.dmg`,
+            sha256: createHash('sha256').update(artifact).digest('hex'),
+            size: artifact.byteLength,
+          },
+        },
+      },
+      'test-2026',
+      testSigningKeys.privateKey,
+    );
+    signed.version = '0.2.1';
+    const fetcher = vi.fn(async () => Response.json(signed));
+    const downloads = await downloadsDirectory();
+    const service = new UpdateService({
+      manifestUrl: SECURE_MANIFEST_URL,
+      trustedManifestKeys: testTrustedKeys,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: downloads,
+      stagingDirectory: path.join(downloads, 'staging'),
+      installedAppPath: null,
+      fetcher: fetcher as typeof fetch,
+    });
+
+    await expect(service.downloadUpdate()).resolves.toEqual({
+      outcome: 'failed',
+      reason: 'The update manifest signature is invalid.',
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+    await expect(readdir(downloads)).resolves.toEqual([]);
+  });
+
+  it('reports absent secure update configuration without making a request', async () => {
+    const fetcher = vi.fn(async () => Response.json({}));
+    const downloads = await downloadsDirectory();
+    const service = new UpdateService({
+      manifestUrl: null,
+      trustedManifestKeys: {},
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: downloads,
+      stagingDirectory: path.join(downloads, 'staging'),
+      installedAppPath: null,
+      fetcher: fetcher as typeof fetch,
+    });
+
+    await expect(service.checkForUpdates()).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'Secure updates are not configured for this Sotto build.',
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('rejects an insecure manifest URL before making a request', async () => {
+    const fetcher = vi.fn(async () => Response.json({}));
+    const downloads = await downloadsDirectory();
+    const service = new UpdateService({
+      manifestUrl: MANIFEST_URL,
+      trustedManifestKeys: testTrustedKeys,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: downloads,
+      stagingDirectory: path.join(downloads, 'staging'),
+      installedAppPath: null,
+      fetcher: fetcher as typeof fetch,
+    });
+
+    await expect(service.checkForUpdates()).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'The update manifest URL must use HTTPS.',
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('rejects a credential-bearing manifest URL before making a request', async () => {
+    const fetcher = vi.fn(async () => Response.json({}));
+    const downloads = await downloadsDirectory();
+    const service = new UpdateService({
+      manifestUrl:
+        'https://release:secret@updates.example.test/internal/sotto/latest.json',
+      trustedManifestKeys: testTrustedKeys,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: downloads,
+      stagingDirectory: path.join(downloads, 'staging'),
+      installedAppPath: null,
+      fetcher: fetcher as typeof fetch,
+    });
+
+    await expect(service.checkForUpdates()).resolves.toEqual({
+      outcome: 'unavailable',
+      reason:
+        'The update manifest URL must not contain credentials, a query, or a fragment.',
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it('reports a newer published version as an available update', async () => {
     const artifact = Buffer.from('new-sotto-build');
     const fetcher = vi.fn(async () =>
-      Response.json(manifestFor('0.2.0', artifact)),
+      Response.json(signedManifest(manifestFor('0.2.0', artifact))),
     );
     const service = serviceWith(
       fetcher as typeof fetch,
@@ -142,12 +298,13 @@ describe('UpdateService', () => {
     const archive = Buffer.from('zip-archive');
     const manifest = manifestFor('0.2.0', installer);
     manifest.artifacts['darwin-arm64-archive'] = {
+      target: 'darwin-arm64-archive',
       file: 'Sotto-darwin-arm64.zip',
       downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
       sha256: createHash('sha256').update(archive).digest('hex'),
       size: archive.byteLength,
     };
-    const fetcher = vi.fn(async () => Response.json(manifest));
+    const fetcher = vi.fn(async () => Response.json(signedManifest(manifest)));
     const service = serviceWith(
       fetcher as typeof fetch,
       await downloadsDirectory(),
@@ -168,7 +325,7 @@ describe('UpdateService', () => {
   it('treats the current and older versions as up to date', async () => {
     const artifact = Buffer.from('same-build');
     const fetcher = vi.fn(async () =>
-      Response.json(manifestFor('0.1.9', artifact)),
+      Response.json(signedManifest(manifestFor('0.1.9', artifact))),
     );
     const service = serviceWith(
       fetcher as typeof fetch,
@@ -200,7 +357,7 @@ describe('UpdateService', () => {
     const manifest = manifestFor('0.2.0', artifact);
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
-        ? Response.json(manifest)
+        ? Response.json(signedManifest(manifest))
         : new Response(artifact),
     );
     const downloads = await downloadsDirectory();
@@ -225,7 +382,7 @@ describe('UpdateService', () => {
     const manifest = manifestFor('0.2.0', artifact);
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
-        ? Response.json(manifest)
+        ? Response.json(signedManifest(manifest))
         : new Response(artifact),
     );
     const service = serviceWith(
@@ -257,7 +414,7 @@ describe('UpdateService', () => {
     const fetcher = vi.fn(
       async (input: string | URL | Request, init?: RequestInit) => {
         if (String(input).endsWith('latest.json')) {
-          return Response.json(manifest);
+          return Response.json(signedManifest(manifest));
         }
         if (init?.signal?.aborted) {
           throw new TypeError('The update download was canceled.');
@@ -299,7 +456,7 @@ describe('UpdateService', () => {
     manifest.artifacts['darwin-arm64'].size = tampered.byteLength;
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
-        ? Response.json(manifest)
+        ? Response.json(signedManifest(manifest))
         : new Response(tampered),
     );
     const downloads = await downloadsDirectory();
@@ -318,7 +475,7 @@ describe('UpdateService', () => {
     const oversized = Buffer.from('a-much-longer-body-than-published');
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
-        ? Response.json(manifest)
+        ? Response.json(signedManifest(manifest))
         : new Response(oversized),
     );
     const downloads = await downloadsDirectory();
@@ -336,6 +493,7 @@ describe('UpdateService', () => {
     const progress: AppUpdateProgress[] = [];
     const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
     manifest.artifacts['darwin-arm64-archive'] = {
+      target: 'darwin-arm64-archive',
       file: 'Sotto-darwin-arm64.zip',
       downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
       sha256: createHash('sha256').update(archive).digest('hex'),
@@ -343,7 +501,7 @@ describe('UpdateService', () => {
     };
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
-        ? Response.json(manifest)
+        ? Response.json(signedManifest(manifest))
         : new Response(archive),
     );
     const root = await downloadsDirectory();
@@ -355,18 +513,24 @@ describe('UpdateService', () => {
     );
     const service = new UpdateService({
       manifestUrl: MANIFEST_URL,
+      trustedManifestKeys: testTrustedKeys,
       currentVersion: '0.1.9',
       platformKey: 'darwin-arm64',
       downloadsDirectory: path.join(root, 'downloads'),
       stagingDirectory: path.join(root, 'staging'),
       installedAppPath,
       fetcher: fetcher as typeof fetch,
+      allowInsecureUpdateUrlsForTests: true,
       onProgress: (event) => progress.push(event),
       extractArchive: async (_archivePath, directory) => {
         const bundle = path.join(directory, 'Sotto.app', 'Contents');
         await mkdir(bundle, { recursive: true });
         await writeFile(path.join(bundle, 'marker'), 'new-version');
       },
+      readMacAppBundleMetadata: async () => ({
+        bundleId: 'com.sotto.desktop',
+        version: '0.2.0',
+      }),
     });
 
     await expect(service.downloadUpdate()).resolves.toEqual({
@@ -401,10 +565,11 @@ describe('UpdateService', () => {
     });
   });
 
-  it('stages a new update even when old rollback bundles remain', async () => {
+  it('revalidates staged bundle metadata immediately before replacement', async () => {
     const archive = Buffer.from('zip-archive-bytes');
     const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
     manifest.artifacts['darwin-arm64-archive'] = {
+      target: 'darwin-arm64-archive',
       file: 'Sotto-darwin-arm64.zip',
       downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
       sha256: createHash('sha256').update(archive).digest('hex'),
@@ -412,7 +577,61 @@ describe('UpdateService', () => {
     };
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
-        ? Response.json(manifest)
+        ? Response.json(signedManifest(manifest))
+        : new Response(archive),
+    );
+    const root = await downloadsDirectory();
+    const installedAppPath = path.join(root, 'Applications', 'Sotto.app');
+    await mkdir(path.join(installedAppPath, 'Contents'), { recursive: true });
+    await writeFile(
+      path.join(installedAppPath, 'Contents', 'marker'),
+      'old-version',
+    );
+    let metadata = { bundleId: 'com.sotto.desktop', version: '0.2.0' };
+    const service = new UpdateService({
+      manifestUrl: MANIFEST_URL,
+      trustedManifestKeys: testTrustedKeys,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: path.join(root, 'downloads'),
+      stagingDirectory: path.join(root, 'staging'),
+      installedAppPath,
+      fetcher: fetcher as typeof fetch,
+      allowInsecureUpdateUrlsForTests: true,
+      extractArchive: async (_archivePath, directory) => {
+        await mkdir(path.join(directory, 'Sotto.app'), { recursive: true });
+      },
+      readMacAppBundleMetadata: async () => metadata,
+    });
+
+    await expect(service.downloadUpdate()).resolves.toEqual({
+      outcome: 'staged',
+      version: '0.2.0',
+    });
+    metadata = { bundleId: 'com.sotto.desktop', version: '9.9.9' };
+
+    await expect(service.installUpdate()).resolves.toEqual({
+      outcome: 'failed',
+      reason: 'The downloaded app version does not match the offered version.',
+    });
+    await expect(
+      readFile(path.join(installedAppPath, 'Contents', 'marker'), 'utf8'),
+    ).resolves.toBe('old-version');
+  });
+
+  it('stages a new update even when old rollback bundles remain', async () => {
+    const archive = Buffer.from('zip-archive-bytes');
+    const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
+    manifest.artifacts['darwin-arm64-archive'] = {
+      target: 'darwin-arm64-archive',
+      file: 'Sotto-darwin-arm64.zip',
+      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+      sha256: createHash('sha256').update(archive).digest('hex'),
+      size: archive.byteLength,
+    };
+    const fetcher = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('latest.json')
+        ? Response.json(signedManifest(manifest))
         : new Response(archive),
     );
     const root = await downloadsDirectory();
@@ -424,15 +643,21 @@ describe('UpdateService', () => {
     await mkdir(installedAppPath, { recursive: true });
     const service = new UpdateService({
       manifestUrl: MANIFEST_URL,
+      trustedManifestKeys: testTrustedKeys,
       currentVersion: '0.1.9',
       platformKey: 'darwin-arm64',
       downloadsDirectory: path.join(root, 'downloads'),
       stagingDirectory: staging,
       installedAppPath,
       fetcher: fetcher as typeof fetch,
+      allowInsecureUpdateUrlsForTests: true,
       extractArchive: async (_archivePath, directory) => {
         await mkdir(path.join(directory, 'Sotto.app'), { recursive: true });
       },
+      readMacAppBundleMetadata: async () => ({
+        bundleId: 'com.sotto.desktop',
+        version: '0.2.0',
+      }),
     });
 
     await expect(service.downloadUpdate()).resolves.toEqual({
@@ -457,6 +682,7 @@ describe('UpdateService', () => {
     const artifact = Buffer.from('dmg-bytes');
     const manifest = manifestFor('0.2.0', artifact);
     manifest.artifacts['darwin-arm64-archive'] = {
+      target: 'darwin-arm64-archive',
       file: 'Sotto-darwin-arm64.zip',
       downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
       sha256: createHash('sha256').update(Buffer.from('zip')).digest('hex'),
@@ -464,7 +690,7 @@ describe('UpdateService', () => {
     };
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
-        ? Response.json(manifest)
+        ? Response.json(signedManifest(manifest))
         : new Response(artifact),
     );
     const downloads = await downloadsDirectory();
@@ -480,6 +706,7 @@ describe('UpdateService', () => {
     const archive = Buffer.from('zip-archive-bytes');
     const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
     manifest.artifacts['darwin-arm64-archive'] = {
+      target: 'darwin-arm64-archive',
       file: 'Sotto-darwin-arm64.zip',
       downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
       sha256: createHash('sha256').update(archive).digest('hex'),
@@ -487,31 +714,84 @@ describe('UpdateService', () => {
     };
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
-        ? Response.json(manifest)
+        ? Response.json(signedManifest(manifest))
         : new Response(archive),
     );
     const root = await downloadsDirectory();
     const service = new UpdateService({
       manifestUrl: MANIFEST_URL,
+      trustedManifestKeys: testTrustedKeys,
       currentVersion: '0.1.9',
       platformKey: 'darwin-arm64',
       downloadsDirectory: path.join(root, 'downloads'),
       stagingDirectory: path.join(root, 'staging'),
       installedAppPath: path.join(root, 'Sotto.app'),
       fetcher: fetcher as typeof fetch,
+      allowInsecureUpdateUrlsForTests: true,
       extractArchive: async () => undefined,
     });
 
     await expect(service.downloadUpdate()).resolves.toEqual({
       outcome: 'failed',
-      reason: 'The downloaded update did not contain the Sotto app.',
+      reason: 'The downloaded update must contain exactly Sotto.app.',
+    });
+  });
+
+  it.each([
+    [
+      { bundleId: 'com.attacker.fake', version: '0.2.0' },
+      'The downloaded update has an unexpected bundle identifier.',
+    ],
+    [
+      { bundleId: 'com.sotto.desktop', version: '9.9.9' },
+      'The downloaded app version does not match the offered version.',
+    ],
+  ])('rejects mismatched bundle metadata before staging', async (metadata, reason) => {
+    const archive = Buffer.from('zip-archive-bytes');
+    const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
+    manifest.artifacts['darwin-arm64-archive'] = {
+      target: 'darwin-arm64-archive',
+      file: 'Sotto-darwin-arm64.zip',
+      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+      sha256: createHash('sha256').update(archive).digest('hex'),
+      size: archive.byteLength,
+    };
+    const fetcher = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('latest.json')
+        ? Response.json(signedManifest(manifest))
+        : new Response(archive),
+    );
+    const root = await downloadsDirectory();
+    const service = new UpdateService({
+      manifestUrl: MANIFEST_URL,
+      trustedManifestKeys: testTrustedKeys,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: path.join(root, 'downloads'),
+      stagingDirectory: path.join(root, 'staging'),
+      installedAppPath: path.join(root, 'Sotto.app'),
+      fetcher: fetcher as typeof fetch,
+      allowInsecureUpdateUrlsForTests: true,
+      extractArchive: async (_archivePath, directory) => {
+        await mkdir(path.join(directory, 'Sotto.app'), { recursive: true });
+      },
+      readMacAppBundleMetadata: async () => metadata,
+    });
+
+    await expect(service.downloadUpdate()).resolves.toEqual({
+      outcome: 'failed',
+      reason,
+    });
+    await expect(service.installUpdate()).resolves.toEqual({
+      outcome: 'failed',
+      reason: 'No downloaded update is ready to install.',
     });
   });
 
   it('refuses to download when already up to date', async () => {
     const artifact = Buffer.from('current');
     const fetcher = vi.fn(async () =>
-      Response.json(manifestFor('0.1.9', artifact)),
+      Response.json(signedManifest(manifestFor('0.1.9', artifact))),
     );
     const service = serviceWith(
       fetcher as typeof fetch,

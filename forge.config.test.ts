@@ -1,4 +1,13 @@
-import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -12,12 +21,92 @@ import {
   createFlipElectronFusesAfterCopyHook,
   createMacNotarizeOptions,
   createMacSignOptions,
+  createPackageBuildReceipt,
+  createWritePackageBuildReceiptHook,
   createWindowsSquirrelOptions,
   pruneUnusedNativeResources,
   resolveElectronExecutablePath,
   resolvePackagedResourcesPath,
+  resolveUpdateConfigExtraResources,
   unusedNativeResourcePaths,
 } from './forge.config';
+
+describe('secure update package configuration', () => {
+  it('keeps ordinary local packages usable without update configuration', () => {
+    expect(resolveUpdateConfigExtraResources(undefined, '/checkout/sotto')).toEqual([]);
+  });
+
+  it('includes only an external, predictably named real file', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-config-'));
+    const projectRoot = path.join(root, 'checkout');
+    const externalRoot = path.join(root, 'external');
+    const internalFile = path.join(projectRoot, 'sotto-update-config.json');
+    const externalFile = path.join(externalRoot, 'sotto-update-config.json');
+    const externalSymlink = path.join(
+      externalRoot,
+      'linked',
+      'sotto-update-config.json',
+    );
+
+    try {
+      await mkdir(path.dirname(externalSymlink), { recursive: true });
+      await mkdir(projectRoot, { recursive: true });
+      await writeFile(internalFile, '{}');
+      await writeFile(externalFile, '{}');
+      await symlink(internalFile, externalSymlink);
+
+      expect(
+        resolveUpdateConfigExtraResources(externalFile, projectRoot),
+      ).toEqual([await realpath(externalFile)]);
+      expect(() =>
+        resolveUpdateConfigExtraResources(internalFile, projectRoot),
+      ).toThrow(/outside the repository/u);
+      expect(() =>
+        resolveUpdateConfigExtraResources(externalSymlink, projectRoot),
+      ).toThrow(/outside the repository/u);
+      expect(() =>
+        resolveUpdateConfigExtraResources(
+          path.join(externalRoot, 'keys.json'),
+          projectRoot,
+        ),
+      ).toThrow(/sotto-update-config\.json/u);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe('package build receipt', () => {
+  it('writes authenticated source identity into the packaged resources', async () => {
+    const buildPath = await mkdtemp(path.join(os.tmpdir(), 'sotto-receipt-'));
+    const resourcesPath = resolvePackagedResourcesPath(
+      buildPath,
+      'darwin',
+      'arm64',
+    );
+    await mkdir(resourcesPath, { recursive: true });
+    const receipt = createPackageBuildReceipt(
+      '0.2.0',
+      '0123456789abcdef0123456789abcdef01234567',
+    );
+    const hook = createWritePackageBuildReceiptHook(receipt);
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        hook(buildPath, '43.2.0', 'darwin', 'arm64', (error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+
+      await expect(
+        readFile(path.join(resourcesPath, 'sotto-build.json'), 'utf8'),
+      ).resolves.toBe(`${JSON.stringify(receipt, null, 2)}\n`);
+    } finally {
+      await rm(buildPath, { force: true, recursive: true });
+    }
+  });
+});
 
 describe('macOS package signing', () => {
   it('keeps ad-hoc local packages launchable without library validation', () => {

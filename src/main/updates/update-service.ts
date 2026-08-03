@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import { mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { ClientRequest, IncomingMessage } from 'node:http';
@@ -16,9 +16,21 @@ import type {
   DownloadAppUpdateResult,
   InstallAppUpdateResult,
 } from '../../shared/contracts';
+import {
+  verifyReleaseManifest,
+} from './release-manifest.cjs';
+import {
+  readMacAppBundleMetadata,
+  validateExtractedMacApp,
+} from './mac-app-bundle';
+import type { ReadMacAppBundleMetadata } from './mac-app-bundle';
+import type {
+  ParsedReleaseManifest,
+  ReleaseManifestArtifact,
+  TrustedReleaseKeys,
+} from './release-manifest.cjs';
 
-export const DEFAULT_SOTTO_UPDATE_MANIFEST_URL =
-  'http://10.1.2.3:8090/internal/sotto/latest.json';
+export const DEFAULT_SOTTO_UPDATE_MANIFEST_URL = null;
 
 const MANIFEST_TIMEOUT_MS = 8_000;
 // Transient ENOTEMPTY/EBUSY during large recursive deletes retry briefly.
@@ -30,8 +42,6 @@ const RM_RETRY_OPTIONS = {
 } as const;
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const MAX_MANIFEST_BYTES = 64 * 1024;
-const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024;
-const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
 
 export type UpdatePlatformKey = 'darwin-arm64' | 'win32-x64';
@@ -41,28 +51,9 @@ export type UpdatePlatformKey = 'darwin-arm64' | 'win32-x64';
  * Downloads folder. 'darwin-arm64-archive' is the ZIP build the in-place
  * installer stages and swaps; clients that predate it ignore the key.
  */
-type ManifestArtifactKey = UpdatePlatformKey | 'darwin-arm64-archive';
-
-const MANIFEST_ARTIFACT_KEYS: readonly ManifestArtifactKey[] = [
-  'darwin-arm64',
-  'win32-x64',
-  'darwin-arm64-archive',
-];
-
-interface ManifestArtifact {
-  downloadUrl: string;
-  sha256: string;
-  size: number;
-}
-
-interface ParsedUpdateManifest {
-  version: string;
-  publishedAt: string | null;
-  artifacts: Partial<Record<ManifestArtifactKey, ManifestArtifact>>;
-}
-
 export interface UpdateServiceOptions {
-  manifestUrl: string;
+  manifestUrl: string | null;
+  trustedManifestKeys: TrustedReleaseKeys;
   currentVersion: string;
   platformKey: UpdatePlatformKey | null;
   downloadsDirectory: string;
@@ -75,6 +66,9 @@ export interface UpdateServiceOptions {
   downloadFetcher?: typeof fetch;
   onProgress?: (progress: AppUpdateProgress) => void;
   extractArchive?: (archivePath: string, directory: string) => Promise<void>;
+  readMacAppBundleMetadata?: ReadMacAppBundleMetadata;
+  /** Explicit test-fixture escape hatch; production never enables HTTP. */
+  allowInsecureUpdateUrlsForTests?: boolean;
 }
 
 const execFileAsync = promisify(execFile);
@@ -157,9 +151,6 @@ const requestArtifactStream = (
   });
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 export const compareAppVersions = (left: string, right: string): number => {
   if (!VERSION_PATTERN.test(left) || !VERSION_PATTERN.test(right)) {
     throw new TypeError('App versions must use the numeric x.y.z form.');
@@ -183,65 +174,6 @@ export const updatePlatformKey = (
   return null;
 };
 
-const parseArtifact = (
-  value: unknown,
-  manifestOrigin: string,
-): ManifestArtifact => {
-  if (!isRecord(value)) {
-    throw new TypeError('The update manifest artifact is invalid.');
-  }
-  const { downloadUrl, sha256, size } = value;
-  if (typeof downloadUrl !== 'string') {
-    throw new TypeError('The update manifest download URL is invalid.');
-  }
-  const parsedUrl = new URL(downloadUrl);
-  if (parsedUrl.origin !== manifestOrigin) {
-    throw new TypeError(
-      'The update artifact must come from the manifest origin.',
-    );
-  }
-  if (typeof sha256 !== 'string' || !SHA256_PATTERN.test(sha256)) {
-    throw new TypeError('The update manifest digest is invalid.');
-  }
-  if (
-    typeof size !== 'number' ||
-    !Number.isSafeInteger(size) ||
-    size <= 0 ||
-    size > MAX_ARTIFACT_BYTES
-  ) {
-    throw new TypeError('The update manifest artifact size is invalid.');
-  }
-  return { downloadUrl, sha256, size };
-};
-
-export const parseUpdateManifest = (
-  value: unknown,
-  manifestOrigin: string,
-): ParsedUpdateManifest => {
-  if (
-    !isRecord(value) ||
-    value.schemaVersion !== 1 ||
-    value.app !== 'sotto' ||
-    typeof value.version !== 'string' ||
-    !VERSION_PATTERN.test(value.version) ||
-    !isRecord(value.artifacts)
-  ) {
-    throw new TypeError('The update manifest is invalid.');
-  }
-  const artifacts: ParsedUpdateManifest['artifacts'] = {};
-  for (const key of MANIFEST_ARTIFACT_KEYS) {
-    if (value.artifacts[key] !== undefined) {
-      artifacts[key] = parseArtifact(value.artifacts[key], manifestOrigin);
-    }
-  }
-  const publishedAt =
-    typeof value.publishedAt === 'string' &&
-    Number.isFinite(new Date(value.publishedAt).getTime())
-      ? new Date(value.publishedAt).toISOString()
-      : null;
-  return { version: value.version, publishedAt, artifacts };
-};
-
 const artifactFileName = (
   version: string,
   platformKey: UpdatePlatformKey,
@@ -249,15 +181,6 @@ const artifactFileName = (
   platformKey === 'darwin-arm64'
     ? `Sotto-${version}-arm64.dmg`
     : `Sotto-win32-x64-${version}.zip`;
-
-const findAppBundle = async (directory: string): Promise<string | null> => {
-  const entries = await readdir(directory);
-  const bundleName = entries.find((entry) => entry.endsWith('.app'));
-  if (!bundleName) return null;
-  const bundlePath = path.join(directory, bundleName);
-  const bundleStat = await stat(bundlePath);
-  return bundleStat.isDirectory() ? bundlePath : null;
-};
 
 export class UpdateService {
   private readonly fetcher: typeof fetch;
@@ -269,7 +192,13 @@ export class UpdateService {
     directory: string,
   ) => Promise<void>;
 
-  private stagedUpdate: { version: string; appPath: string } | null = null;
+  private readonly readMacAppBundleMetadata: ReadMacAppBundleMetadata;
+
+  private stagedUpdate: {
+    version: string;
+    bundleId: string;
+    appPath: string;
+  } | null = null;
 
   private activeDownloadController: AbortController | null = null;
 
@@ -278,10 +207,11 @@ export class UpdateService {
   private cancelRequested = false;
 
   constructor(private readonly options: UpdateServiceOptions) {
-    new URL(options.manifestUrl);
     this.fetcher = options.fetcher ?? fetch;
     this.downloadFetcher = options.downloadFetcher ?? options.fetcher ?? null;
     this.extractArchive = options.extractArchive ?? dittoExtract;
+    this.readMacAppBundleMetadata =
+      options.readMacAppBundleMetadata ?? readMacAppBundleMetadata;
   }
 
   cancelDownload(): void {
@@ -290,8 +220,8 @@ export class UpdateService {
   }
 
   private preferredArtifact(
-    manifest: ParsedUpdateManifest,
-  ): ManifestArtifact | undefined {
+    manifest: ParsedReleaseManifest,
+  ): ReleaseManifestArtifact | undefined {
     const platformKey = this.options.platformKey;
     if (!platformKey) return undefined;
     if (platformKey === 'darwin-arm64' && this.options.installedAppPath) {
@@ -363,7 +293,11 @@ export class UpdateService {
           ? manifest.artifacts['darwin-arm64-archive']
           : undefined;
       if (archive) {
-        return await this.stageInPlaceUpdate(manifest.version, archive);
+        return await this.stageInPlaceUpdate(
+          manifest.version,
+          manifest.bundleId,
+          archive,
+        );
       }
 
       const installer = manifest.artifacts[platformKey];
@@ -410,6 +344,22 @@ export class UpdateService {
         reason: 'No downloaded update is ready to install.',
       };
     }
+    try {
+      await validateExtractedMacApp(
+        path.dirname(staged.appPath),
+        staged.bundleId,
+        staged.version,
+        this.readMacAppBundleMetadata,
+      );
+    } catch (error) {
+      return {
+        outcome: 'failed',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Sotto could not validate the downloaded app.',
+      };
+    }
     let retiredPath = path.join(
       this.options.stagingDirectory,
       `retired-${this.options.currentVersion}.app`,
@@ -450,7 +400,8 @@ export class UpdateService {
 
   private async stageInPlaceUpdate(
     version: string,
-    artifact: ManifestArtifact,
+    bundleId: string,
+    artifact: ReleaseManifestArtifact,
   ): Promise<DownloadAppUpdateResult> {
     const staging = this.options.stagingDirectory;
     await mkdir(staging, { recursive: true });
@@ -470,17 +421,21 @@ export class UpdateService {
     this.options.onProgress?.({ phase: 'preparing', version });
     const extractedDirectory = path.join(stageDirectory, 'extracted');
     await mkdir(extractedDirectory, { recursive: true });
-    await this.extractArchive(archivePath, extractedDirectory);
-    await unlink(archivePath).catch(() => undefined);
-    const appPath = await findAppBundle(extractedDirectory);
-    if (!appPath) {
+    let appPath: string;
+    try {
+      await this.extractArchive(archivePath, extractedDirectory);
+      await unlink(archivePath).catch(() => undefined);
+      appPath = await validateExtractedMacApp(
+        extractedDirectory,
+        bundleId,
+        version,
+        this.readMacAppBundleMetadata,
+      );
+    } catch (error) {
       await rm(stageDirectory, RM_RETRY_OPTIONS).catch(() => undefined);
-      return {
-        outcome: 'failed',
-        reason: 'The downloaded update did not contain the Sotto app.',
-      };
+      throw error;
     }
-    this.stagedUpdate = { version, appPath };
+    this.stagedUpdate = { version, bundleId, appPath };
     return { outcome: 'staged', version };
   }
 
@@ -529,7 +484,7 @@ export class UpdateService {
   private async downloadToDownloadsFolder(
     version: string,
     platformKey: UpdatePlatformKey,
-    artifact: ManifestArtifact,
+    artifact: ReleaseManifestArtifact,
   ): Promise<DownloadAppUpdateResult> {
     await mkdir(this.options.downloadsDirectory, { recursive: true });
     const fileName = artifactFileName(version, platformKey);
@@ -539,7 +494,7 @@ export class UpdateService {
   }
 
   private async downloadVerified(
-    artifact: ManifestArtifact,
+    artifact: ReleaseManifestArtifact,
     filePath: string,
     version: string,
   ): Promise<void> {
@@ -654,11 +609,45 @@ export class UpdateService {
     }
   }
 
-  private async fetchManifest(): Promise<ParsedUpdateManifest> {
+  private async fetchManifest(): Promise<ParsedReleaseManifest> {
+    const manifestUrl = this.options.manifestUrl;
+    if (
+      manifestUrl === null ||
+      Object.keys(this.options.trustedManifestKeys).length === 0
+    ) {
+      throw new TypeError(
+        'Secure updates are not configured for this Sotto build.',
+      );
+    }
+    let parsedManifestUrl: URL;
+    try {
+      parsedManifestUrl = new URL(manifestUrl);
+    } catch {
+      throw new TypeError('The update manifest URL is invalid.');
+    }
+    if (
+      parsedManifestUrl.protocol !== 'https:' &&
+      !(
+        this.options.allowInsecureUpdateUrlsForTests === true &&
+        parsedManifestUrl.protocol === 'http:'
+      )
+    ) {
+      throw new TypeError('The update manifest URL must use HTTPS.');
+    }
+    if (
+      parsedManifestUrl.username ||
+      parsedManifestUrl.password ||
+      parsedManifestUrl.search ||
+      parsedManifestUrl.hash
+    ) {
+      throw new TypeError(
+        'The update manifest URL must not contain credentials, a query, or a fragment.',
+      );
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), MANIFEST_TIMEOUT_MS);
     try {
-      const response = await this.fetcher(this.options.manifestUrl, {
+      const response = await this.fetcher(manifestUrl, {
         headers: { Accept: 'application/json' },
         redirect: 'error',
         signal: controller.signal,
@@ -672,9 +661,14 @@ export class UpdateService {
       if (Buffer.byteLength(body, 'utf8') > MAX_MANIFEST_BYTES) {
         throw new TypeError('The update manifest is too large.');
       }
-      return parseUpdateManifest(
+      return verifyReleaseManifest(
         JSON.parse(body) as unknown,
-        new URL(this.options.manifestUrl).origin,
+        this.options.trustedManifestKeys,
+        manifestUrl,
+        {
+          allowInsecureHttpForTests:
+            this.options.allowInsecureUpdateUrlsForTests === true,
+        },
       );
     } catch (error) {
       if (controller.signal.aborted) {

@@ -1,4 +1,6 @@
-import { rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ForgeConfig } from '@electron-forge/shared-types';
@@ -40,6 +42,93 @@ export const createWindowsSquirrelOptions = () => ({
   name: 'sotto',
   setupIcon: './resources/Sotto.ico',
 });
+
+export const resolveUpdateConfigExtraResources = (
+  configuredFile?: string,
+  projectRoot = process.cwd(),
+): string[] => {
+  const suppliedPath = configuredFile?.trim();
+  if (!suppliedPath) return [];
+  if (!path.isAbsolute(suppliedPath)) {
+    throw new Error('SOTTO_UPDATE_CONFIG_FILE must be an absolute path.');
+  }
+  const suppliedFile = path.resolve(suppliedPath);
+  if (path.basename(suppliedFile) !== 'sotto-update-config.json') {
+    throw new Error(
+      'SOTTO_UPDATE_CONFIG_FILE must be named sotto-update-config.json.',
+    );
+  }
+  if (!statSync(suppliedFile).isFile()) {
+    throw new Error('SOTTO_UPDATE_CONFIG_FILE must name a regular file.');
+  }
+  const resolvedFile = realpathSync(suppliedFile);
+  const resolvedRoot = realpathSync(projectRoot);
+  const relative = path.relative(resolvedRoot, resolvedFile);
+  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    throw new Error('SOTTO_UPDATE_CONFIG_FILE must stay outside the repository.');
+  }
+  return [resolvedFile];
+};
+
+export type PackageBuildReceipt = Readonly<{
+  schemaVersion: 1;
+  app: 'sotto';
+  bundleId: typeof SOTTO_APP_BUNDLE_ID;
+  version: string;
+  commit: string;
+}>;
+
+export const createPackageBuildReceipt = (
+  version: string,
+  commit: string,
+): PackageBuildReceipt => {
+  if (!/^\d+\.\d+\.\d+$/u.test(version)) {
+    throw new Error('The package build receipt version is invalid.');
+  }
+  if (!/^[0-9a-f]{40}$/u.test(commit)) {
+    throw new Error('The package build receipt commit is invalid.');
+  }
+
+  return {
+    schemaVersion: 1,
+    app: 'sotto',
+    bundleId: SOTTO_APP_BUNDLE_ID,
+    version,
+    commit,
+  };
+};
+
+export const createWritePackageBuildReceiptHook = (
+  receipt: PackageBuildReceipt,
+) =>
+  (
+    buildPath: string,
+    _electronVersion: string,
+    platform: string,
+    arch: string,
+    callback: (error?: Error | null) => void,
+  ): void => {
+    void Promise.resolve()
+      .then(() =>
+        writeFile(
+          path.join(
+            resolvePackagedResourcesPath(buildPath, platform, arch),
+            'sotto-build.json',
+          ),
+          `${JSON.stringify(receipt, null, 2)}\n`,
+          { mode: 0o644 },
+        ),
+      )
+      .then(
+        () => callback(),
+        (error: unknown) =>
+          callback(
+            error instanceof Error
+              ? error
+              : new Error('Could not write the package build receipt.'),
+          ),
+      );
+  };
 
 export const assertSupportedPackageTarget = (
   platform: string,
@@ -262,6 +351,21 @@ export const assertMacReleaseConfiguration = ({
 const macSigningIdentity = process.env.SOTTO_MAC_SIGNING_IDENTITY;
 const macNotaryKeychainProfile =
   process.env.SOTTO_MAC_NOTARY_KEYCHAIN_PROFILE;
+const updateConfigExtraResources = resolveUpdateConfigExtraResources(
+  process.env.SOTTO_UPDATE_CONFIG_FILE,
+);
+const sourcePackage = JSON.parse(
+  readFileSync(path.join(__dirname, 'package.json'), 'utf8'),
+) as { version: string };
+const packageBuildReceipt = createPackageBuildReceipt(
+  sourcePackage.version,
+  execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: __dirname,
+    encoding: 'utf8',
+  }).trim(),
+);
+const writePackageBuildReceipt =
+  createWritePackageBuildReceiptHook(packageBuildReceipt);
 
 assertMacReleaseConfiguration({
   releaseRequested: process.env.SOTTO_MAC_RELEASE === '1',
@@ -297,11 +401,15 @@ const config: ForgeConfig = {
       './resources/sidecars',
       './resources/speaker-runtime',
       './scripts/speaker-diarization-child.cjs',
+      ...updateConfigExtraResources,
     ],
     // Flip the copied Electron binary before ASAR finalization and before the
     // platform packager signs or notarizes the completed application.
     afterCopy: [flipElectronFusesAfterCopy],
-    afterCopyExtraResources: [pruneUnusedNativeResources],
+    afterCopyExtraResources: [
+      pruneUnusedNativeResources,
+      writePackageBuildReceipt,
+    ],
   },
   rebuildConfig: {},
   makers: [

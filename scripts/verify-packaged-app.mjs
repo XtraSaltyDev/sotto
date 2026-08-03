@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { extractFile } from '@electron/asar';
+
+import updateConfig from '../src/main/updates/update-config.cjs';
+import packageBuildReceipt from './package-build-receipt.cjs';
+
+const { parseUpdateConfiguration } = updateConfig;
+const { validatePackageBuildReceipt } = packageBuildReceipt;
 
 const [target, suppliedAppPath] = process.argv.slice(2);
 const targets = {
@@ -58,6 +65,8 @@ const manifestPath = path.join(
   configuration.manifestDirectory,
   'runtime-manifest.json',
 );
+const updateConfigPath = path.join(resourcesPath, 'sotto-update-config.json');
+const buildReceiptPath = path.join(resourcesPath, 'sotto-build.json');
 
 const requirePath = async (relativePath) => {
   await access(path.join(resourcesPath, relativePath));
@@ -87,6 +96,7 @@ const verifyHash = async (filePath, expectedHash) => {
 
 const commonRequiredPaths = [
   'app.asar',
+  'sotto-build.json',
   'diarization/3dspeaker-eres2net-base.onnx',
   'diarization/pyannote-segmentation-3.0.onnx',
   'models/ggml-small.en.bin',
@@ -172,18 +182,62 @@ await Promise.all([
 const sourcePackage = JSON.parse(
   await readFile(path.resolve('package.json'), 'utf8'),
 );
+const expectedCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+  encoding: 'utf8',
+}).trim();
+const buildReceipt = validatePackageBuildReceipt(
+  JSON.parse(await readFile(buildReceiptPath, 'utf8')),
+  { version: sourcePackage.version, commit: expectedCommit },
+);
+let secureUpdateConfiguration = 'not embedded';
+try {
+  const configuration = parseUpdateConfiguration(
+    JSON.parse(await readFile(updateConfigPath, 'utf8')),
+  );
+  secureUpdateConfiguration = `embedded for ${new URL(configuration.manifestUrl).origin}`;
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+  if (process.env.SOTTO_REQUIRE_SECURE_UPDATE_CONFIG === '1') {
+    throw new Error(
+      `Secure update configuration is required but missing from ${updateConfigPath}.`,
+    );
+  }
+}
 const packagedPackage = JSON.parse(
   extractFile(path.join(resourcesPath, 'app.asar'), 'package.json'),
 );
 if (
   packagedPackage.name !== sourcePackage.name ||
-  packagedPackage.version !== sourcePackage.version
+  packagedPackage.version !== sourcePackage.version ||
+  packagedPackage.version !== buildReceipt.version
 ) {
   throw new Error(
     `Packaged metadata ${packagedPackage.name}@${packagedPackage.version} does not match ${sourcePackage.name}@${sourcePackage.version}.`,
   );
 }
 
+if (target === 'darwin-arm64') {
+  const infoPlist = path.join(appPath, 'Contents', 'Info.plist');
+  const bundleId = execFileSync(
+    '/usr/bin/plutil',
+    ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', infoPlist],
+    { encoding: 'utf8' },
+  ).trim();
+  const bundleVersion = execFileSync(
+    '/usr/bin/plutil',
+    ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', infoPlist],
+    { encoding: 'utf8' },
+  ).trim();
+  if (
+    bundleId !== buildReceipt.bundleId ||
+    bundleVersion !== buildReceipt.version
+  ) {
+    throw new Error(
+      'The packaged macOS bundle identity does not match the build receipt.',
+    );
+  }
+}
+
 console.log(
-  `Verified ${target} package resources, immutable runtime hashes, licenses, and ${packagedPackage.name}@${packagedPackage.version}.`,
+  `Verified ${target} package resources, immutable runtime hashes, licenses, ${packagedPackage.name}@${packagedPackage.version} from ${buildReceipt.commit.slice(0, 12)}, and secure update configuration: ${secureUpdateConfiguration}.`,
 );

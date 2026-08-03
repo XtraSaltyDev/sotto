@@ -44,6 +44,7 @@ import {
   UpdateService,
   updatePlatformKey,
 } from './main/updates/update-service';
+import { loadUpdateConfiguration } from './main/updates/update-config.cjs';
 import {
   consumePendingPermissionRepair,
   markPendingPermissionRepair,
@@ -391,10 +392,23 @@ const initialize = async (): Promise<void> => {
     !bundlePath.startsWith('/Volumes/')
       ? bundlePath
       : null;
+  const updateConfigurationPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'sotto-update-config.json')
+    : process.env.SOTTO_UPDATE_CONFIG_FILE ?? null;
+  const updateConfiguration = await loadUpdateConfiguration(
+    updateConfigurationPath,
+  ).catch((error: unknown) => {
+    console.warn(
+      '[sotto] Secure updates are disabled because the embedded update configuration is invalid.',
+      error,
+    );
+    return null;
+  });
   const updateService = new UpdateService({
     manifestUrl:
-      process.env.SOTTO_UPDATE_MANIFEST_URL ??
-      DEFAULT_SOTTO_UPDATE_MANIFEST_URL,
+      updateConfiguration?.manifestUrl ?? DEFAULT_SOTTO_UPDATE_MANIFEST_URL,
+    trustedManifestKeys:
+      updateConfiguration?.trustedManifestKeys ?? {},
     currentVersion: app.getVersion(),
     platformKey: updatePlatformKey(process.platform, process.arch),
     downloadsDirectory: app.getPath('downloads'),
