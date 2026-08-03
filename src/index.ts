@@ -1,3 +1,4 @@
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -47,6 +48,11 @@ import {
   consumePendingPermissionRepair,
   markPendingPermissionRepair,
 } from './main/updates/post-update-permissions';
+import {
+  AppSettingsStore,
+  listTranscriptionModels,
+  resolveTranscriptionOptions,
+} from './main/settings/app-settings';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -325,11 +331,36 @@ const initialize = async (): Promise<void> => {
   const repository = new TranscriptRepository(
     path.join(app.getPath('userData'), 'transcripts'),
   );
+  const settingsStore = new AppSettingsStore(
+    path.join(app.getPath('userData'), 'settings.json'),
+  );
+  await settingsStore.load();
+  const userModelsDirectory = path.join(app.getPath('userData'), 'models');
+  await mkdir(userModelsDirectory, { recursive: true }).catch(() => undefined);
+  const bundledModelsDirectory = runtimeStatus.ready
+    ? path.dirname(runtimeStatus.runtime.modelPath)
+    : path.join(process.resourcesPath, 'models');
+  const resolveTranscription = async () => {
+    const models = await listTranscriptionModels(
+      bundledModelsDirectory,
+      userModelsDirectory,
+    );
+    const resolved = resolveTranscriptionOptions(
+      settingsStore.get(),
+      models,
+      runtimeStatus.ready
+        ? runtimeStatus.runtime.modelPath
+        : path.join(bundledModelsDirectory, 'ggml-small.en.bin'),
+    );
+    return { modelPath: resolved.modelPath, language: resolved.language };
+  };
+
   controller = new AppController(
     repository,
     runtimeStatus,
     path.join(app.getPath('userData'), 'jobs'),
     liveRecordingCapability,
+    resolveTranscription,
   );
   await controller.initialize();
   const localAiService = new LocalAiConnectionService({
@@ -448,6 +479,54 @@ const initialize = async (): Promise<void> => {
       }, 400);
     },
     requestRecordingPermissions: repairRecordingPermissions,
+    appSettings: {
+      get: async () => {
+        const models = await listTranscriptionModels(
+          bundledModelsDirectory,
+          userModelsDirectory,
+        );
+        const settings = settingsStore.get();
+        const resolved = await resolveTranscription();
+        const resolvedModel = models.find(
+          (model) => model.path === resolved.modelPath,
+        );
+        return {
+          transcriptionModelId: resolvedModel?.id ?? 'small.en',
+          transcriptionLanguage: settings.transcriptionLanguage,
+          availableModels: models.map((model) => ({
+            id: model.id,
+            multilingual: model.multilingual,
+            sizeBytes: model.sizeBytes,
+            source: model.source,
+          })),
+          userModelsDirectory,
+          dictationShortcut:
+            process.platform === 'darwin' ? '⌘⇧D' : 'Ctrl+Shift+D',
+        };
+      },
+      update: async (input) => {
+        if (input.transcriptionModelId !== undefined) {
+          const models = await listTranscriptionModels(
+            bundledModelsDirectory,
+            userModelsDirectory,
+          );
+          if (!models.some((model) => model.id === input.transcriptionModelId)) {
+            return {
+              outcome: 'rejected' as const,
+              reason: 'Choose a model that is available on this computer.',
+            };
+          }
+        }
+        await settingsStore.update(input);
+        return { outcome: 'updated' as const };
+      },
+      revealTranscripts: async () => {
+        await shell.openPath(path.join(app.getPath('userData'), 'transcripts'));
+      },
+      revealModels: async () => {
+        await shell.openPath(userModelsDirectory);
+      },
+    },
   });
   if (process.platform === 'darwin') {
     Menu.setApplicationMenu(

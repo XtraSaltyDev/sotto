@@ -14,6 +14,7 @@ import {
   type TranscriptCopyKind,
   type TranscriptExportFormat,
   type TranscriptLibraryQuery,
+  type UpdateAppSettingsInput,
 } from './shared/contracts';
 
 const api: SottoDesktopApi = Object.freeze({
@@ -109,6 +110,13 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.restoreMainWindow),
   requestActivityAction: (action: ActivityAction) =>
     ipcRenderer.invoke(IPC_CHANNELS.requestActivityAction, action),
+  getAppSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getAppSettings),
+  updateAppSettings: (input: UpdateAppSettingsInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateAppSettings, input),
+  revealTranscriptsFolder: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.revealTranscriptsFolder),
+  revealModelsFolder: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.revealModelsFolder),
   getLocalAiConnection: () =>
     ipcRenderer.invoke(IPC_CHANNELS.getLocalAiConnection),
   connectLocalAi: (input: ConnectLocalAiInput) =>

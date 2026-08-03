@@ -262,6 +262,9 @@ export class AppController {
     jobsRoot: string,
     recordingCapability: LiveRecordingCapabilitySource =
       DEFAULT_RECORDING_CAPABILITY,
+    transcriptionOptions?: () =>
+      | Promise<{ modelPath: string; language: string }>
+      | { modelPath: string; language: string },
   ) {
     this.engineStatus = toRendererEngineStatus(runtimeStatus);
     if (typeof recordingCapability === 'function') {
@@ -285,6 +288,7 @@ export class AppController {
           repository,
           playbackRepository: this.playbackRepository,
           onJobChanged: (job) => this.handleJobChanged(job),
+          ...(transcriptionOptions ? { transcriptionOptions } : {}),
         })
       : null;
   }

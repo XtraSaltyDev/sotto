@@ -114,6 +114,13 @@ export const ShareIcon = (props: IconProps) => (
   </svg>
 );
 
+export const GearIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <circle cx="12" cy="12" r="3.25" />
+    <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" />
+  </svg>
+);
+
 export const TrashIcon = (props: IconProps) => (
   <svg {...iconDefaults} {...props}>
     <path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" />

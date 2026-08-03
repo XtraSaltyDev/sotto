@@ -66,6 +66,7 @@ import {
   FolderIcon,
   InboxIcon,
   LockIcon,
+  GearIcon,
   MicrophoneIcon,
   ModelIcon,
   MoonIcon,
@@ -76,6 +77,7 @@ import {
 } from './icons';
 import { ActivityOverlay } from './ActivityOverlay';
 import { LocalAiSettings } from './LocalAiSettings';
+import { SettingsPage } from './SettingsPage';
 import {
   DISMISSED_UPDATE_VERSION_KEY,
   shouldOfferUpdate,
@@ -242,7 +244,7 @@ interface TranscriptLibraryViewState {
   tag: string;
 }
 
-type AppPage = 'transcripts' | 'local-ai';
+type AppPage = 'transcripts' | 'local-ai' | 'settings';
 export type MeetingDetailMode = 'summary' | 'transcript';
 
 export const meetingDetailModeForKey = (
@@ -2894,6 +2896,23 @@ const MainApp = ({
     );
   }
 
+  if (currentPage === 'settings') {
+    return (
+      <div className="app-shell">
+        <Sidebar
+          currentPage={currentPage}
+          onNavigate={setCurrentPage}
+          onToggleTheme={onToggleTheme}
+          theme={theme}
+          updateBadge={updateBadge}
+          updateNotice={updateNotice}
+        />
+        {updatePopup}
+        <SettingsPage />
+      </div>
+    );
+  }
+
   if (selectedId) {
     return (
       <div className="app-shell">
@@ -3229,6 +3248,13 @@ const Sidebar = ({
         type="button"
       >
         <ModelIcon /><span>Local AI</span>
+      </button>
+      <button
+        className={`navigation__item${currentPage === 'settings' ? ' navigation__item--active' : ''}`}
+        onClick={() => onNavigate('settings')}
+        type="button"
+      >
+        <GearIcon /><span>Settings</span>
       </button>
     </nav>
     {updateNotice}

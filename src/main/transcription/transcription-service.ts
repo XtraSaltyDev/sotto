@@ -91,6 +91,14 @@ export interface LocalTranscriptionServiceOptions {
   platform?: NodeJS.Platform;
   availableParallelism?: number;
   playbackRepository?: PlaybackRepository;
+  /**
+   * Resolves the model and language for each new job, so settings changes
+   * apply without restarting. Falls back to the bundled runtime model and
+   * English when absent.
+   */
+  transcriptionOptions?: () =>
+    | Promise<{ modelPath: string; language: string }>
+    | { modelPath: string; language: string };
 }
 
 const snapshot = (job: TranscriptionJobSnapshot): TranscriptionJobSnapshot => ({
@@ -449,6 +457,10 @@ export class LocalTranscriptionService {
     signal: AbortSignal,
   ): Promise<void> {
     const platform = this.options.platform ?? process.platform;
+    const transcription = (await this.options.transcriptionOptions?.()) ?? {
+      modelPath: this.options.runtime.modelPath,
+      language: 'en',
+    };
     const threadArgs =
       platform === 'win32'
         ? [
@@ -463,11 +475,11 @@ export class LocalTranscriptionService {
     const baseArgs = [
       ...threadArgs,
       '--model',
-      this.options.runtime.modelPath,
+      transcription.modelPath,
       '--file',
       normalizedPath,
       '--language',
-      'en',
+      transcription.language,
       '--output-json-full',
       '--output-file',
       outputPrefix,

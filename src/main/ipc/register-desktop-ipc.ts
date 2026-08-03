@@ -16,6 +16,8 @@ import {
   type ActivityAction,
   type ActivityMode,
   type AppState,
+  SUPPORTED_TRANSCRIPTION_LANGUAGES,
+  type AppSettingsSummary,
   type AppendLiveRecordingChunkResult,
   type CancelLiveRecordingResult,
   type CheckForAppUpdateResult,
@@ -44,6 +46,8 @@ import {
   type StartLiveRecordingResult,
   type TranscriptLibraryResult,
   type TranscriptExportFormat,
+  type UpdateAppSettingsInput,
+  type UpdateAppSettingsResult,
   type UpdateTranscriptMetadataResult,
   type UpdateTranscriptSegmentResult,
 } from '../../shared/contracts';
@@ -94,6 +98,14 @@ export interface DesktopIpcOptions {
   >;
   revealDownloadedUpdate: (filePath: string) => void;
   relaunchForUpdate: () => void;
+  appSettings: {
+    get: () => Promise<AppSettingsSummary>;
+    update: (
+      input: UpdateAppSettingsInput,
+    ) => Promise<{ outcome: 'updated' } | { outcome: 'rejected'; reason: string }>;
+    revealTranscripts: () => Promise<void>;
+    revealModels: () => Promise<void>;
+  };
 }
 
 const EXPECTED_SPEAKER_COUNT_REASON =
@@ -268,6 +280,7 @@ export const registerDesktopIpc = ({
   requestRecordingPermissions,
   revealDownloadedUpdate,
   relaunchForUpdate,
+  appSettings,
 }: DesktopIpcOptions): (() => void) => {
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
     assertTrustedSender(event, getMainWindow);
@@ -277,6 +290,58 @@ export const registerDesktopIpc = ({
   ipcMain.handle(IPC_CHANNELS.getAppState, (event) => {
     rendererTrust(event);
     return controller.getState();
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.getAppSettings,
+    async (event): Promise<AppSettingsSummary> => {
+      trust(event);
+      return appSettings.get();
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.updateAppSettings,
+    async (event, input: unknown): Promise<UpdateAppSettingsResult> => {
+      trust(event);
+      if (!isRecord(input)) {
+        return { outcome: 'rejected', reason: 'Enter valid settings.' };
+      }
+      const changes: UpdateAppSettingsInput = {};
+      if (input.transcriptionModelId !== undefined) {
+        if (
+          typeof input.transcriptionModelId !== 'string' ||
+          !/^[a-z0-9][a-z0-9.-]{0,60}$/u.test(input.transcriptionModelId)
+        ) {
+          return { outcome: 'rejected', reason: 'Choose a valid model.' };
+        }
+        changes.transcriptionModelId = input.transcriptionModelId;
+      }
+      if (input.transcriptionLanguage !== undefined) {
+        if (
+          typeof input.transcriptionLanguage !== 'string' ||
+          !SUPPORTED_TRANSCRIPTION_LANGUAGES.some(
+            (language) => language.id === input.transcriptionLanguage,
+          )
+        ) {
+          return { outcome: 'rejected', reason: 'Choose a supported language.' };
+        }
+        changes.transcriptionLanguage = input.transcriptionLanguage;
+      }
+      const result = await appSettings.update(changes);
+      if (result.outcome === 'rejected') return result;
+      return { outcome: 'updated', settings: await appSettings.get() };
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.revealTranscriptsFolder, async (event) => {
+    trust(event);
+    await appSettings.revealTranscripts();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.revealModelsFolder, async (event) => {
+    trust(event);
+    await appSettings.revealModels();
   });
 
   ipcMain.handle(
@@ -1005,6 +1070,10 @@ export const registerDesktopIpc = ({
     unsubscribe();
     for (const channel of [
       IPC_CHANNELS.getAppState,
+      IPC_CHANNELS.getAppSettings,
+      IPC_CHANNELS.updateAppSettings,
+      IPC_CHANNELS.revealTranscriptsFolder,
+      IPC_CHANNELS.revealModelsFolder,
       IPC_CHANNELS.getLocalAiConnection,
       IPC_CHANNELS.connectLocalAi,
       IPC_CHANNELS.disconnectLocalAi,

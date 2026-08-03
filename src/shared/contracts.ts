@@ -23,6 +23,10 @@ export const IPC_CHANNELS = {
   collapseForActivity: 'sotto:activity:collapse',
   restoreMainWindow: 'sotto:activity:restore-main-window',
   requestActivityAction: 'sotto:activity:request-action',
+  getAppSettings: 'sotto:settings:get',
+  updateAppSettings: 'sotto:settings:update',
+  revealTranscriptsFolder: 'sotto:settings:reveal-transcripts',
+  revealModelsFolder: 'sotto:settings:reveal-models',
   getLocalAiConnection: 'sotto:local-ai:get',
   connectLocalAi: 'sotto:local-ai:connect',
   disconnectLocalAi: 'sotto:local-ai:disconnect',
@@ -258,6 +262,54 @@ export interface AppState {
   /** Source names of imports waiting behind the active transcription. */
   pendingImports?: string[];
 }
+
+export const SUPPORTED_TRANSCRIPTION_LANGUAGES: ReadonlyArray<{
+  id: string;
+  label: string;
+}> = [
+  { id: 'auto', label: 'Auto-detect' },
+  { id: 'en', label: 'English' },
+  { id: 'es', label: 'Spanish' },
+  { id: 'fr', label: 'French' },
+  { id: 'de', label: 'German' },
+  { id: 'it', label: 'Italian' },
+  { id: 'pt', label: 'Portuguese' },
+  { id: 'nl', label: 'Dutch' },
+  { id: 'sv', label: 'Swedish' },
+  { id: 'pl', label: 'Polish' },
+  { id: 'uk', label: 'Ukrainian' },
+  { id: 'ru', label: 'Russian' },
+  { id: 'tr', label: 'Turkish' },
+  { id: 'ar', label: 'Arabic' },
+  { id: 'hi', label: 'Hindi' },
+  { id: 'zh', label: 'Chinese' },
+  { id: 'ja', label: 'Japanese' },
+  { id: 'ko', label: 'Korean' },
+];
+
+export interface TranscriptionModelSummary {
+  id: string;
+  multilingual: boolean;
+  sizeBytes: number;
+  source: 'bundled' | 'user';
+}
+
+export interface AppSettingsSummary {
+  transcriptionModelId: string;
+  transcriptionLanguage: string;
+  availableModels: TranscriptionModelSummary[];
+  userModelsDirectory: string;
+  dictationShortcut: string;
+}
+
+export interface UpdateAppSettingsInput {
+  transcriptionModelId?: string;
+  transcriptionLanguage?: string;
+}
+
+export type UpdateAppSettingsResult =
+  | { outcome: 'updated'; settings: AppSettingsSummary }
+  | { outcome: 'rejected'; reason: string };
 
 export const OLLAMA_OPENAI_BASE_URL = 'http://127.0.0.1:11434/v1';
 
@@ -515,6 +567,12 @@ export interface SottoDesktopApi {
   collapseForActivity(mode: ActivityMode): Promise<void>;
   restoreMainWindow(): Promise<void>;
   requestActivityAction(action: ActivityAction): Promise<void>;
+  getAppSettings(): Promise<AppSettingsSummary>;
+  updateAppSettings(
+    input: UpdateAppSettingsInput,
+  ): Promise<UpdateAppSettingsResult>;
+  revealTranscriptsFolder(): Promise<void>;
+  revealModelsFolder(): Promise<void>;
   getLocalAiConnection(): Promise<LocalAiConnectionSummary>;
   connectLocalAi(input: ConnectLocalAiInput): Promise<ConnectLocalAiResult>;
   disconnectLocalAi(): Promise<DisconnectLocalAiResult>;
