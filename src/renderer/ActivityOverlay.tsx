@@ -7,23 +7,7 @@ import type {
   TranscriptionJobSnapshot,
 } from '../shared/contracts';
 import { CancelIcon, MicrophoneIcon, SpinnerIcon } from './icons';
-
-const RUNNING_STAGES = new Set([
-  'preparing',
-  'normalizing',
-  'transcribing',
-  'saving',
-]);
-
-const isRunningJob = (job: TranscriptionJobSnapshot | null): boolean =>
-  job !== null && RUNNING_STAGES.has(job.stage);
-
-const formatDuration = (durationMs: number): string => {
-  const totalSeconds = Math.max(0, Math.round(durationMs / 1_000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-};
+import { formatDuration, isRunningJob } from './app-format';
 
 const recordingTitle = (recording: LiveRecordingSnapshot): string =>
   recording.kind === 'dictation' ? 'Dictating' : 'Recording meeting';

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-import { TranscriptOutputMenus } from './App';
+import { TranscriptOutputMenus } from './TranscriptView';
 
 describe('TranscriptOutputMenus', () => {
   it('consolidates copy and downloads into one keyboard-friendly Share menu', () => {

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CaptureFailureNotice, HomeNotice } from './App';
+import { CaptureFailureNotice, HomeNotice } from './notices';
 
 describe('capture failure notice', () => {
   it('announces a failed Windows capture and offers dismissal', () => {

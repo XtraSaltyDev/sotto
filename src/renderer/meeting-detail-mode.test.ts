@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { meetingDetailModeForKey } from './App';
+import { meetingDetailModeForKey } from './app-format';
 
 describe('meeting detail tab keyboard navigation', () => {
   it('moves between Summary and Transcript with arrow keys', () => {
