@@ -293,6 +293,11 @@ export class AppController {
 
   private readonly startupNotices: string[] = [];
 
+  private readonly pendingImportQueue: Array<{
+    media: SelectedMedia;
+    expectedSpeakerCount: ExpectedSpeakerCount;
+  }> = [];
+
   async initialize(): Promise<void> {
     await this.repository.cleanupTemporaryFiles();
     await this.playbackRepository.initialize();
@@ -355,6 +360,13 @@ export class AppController {
       })),
       ...(this.startupNotices.length
         ? { startupNotices: [...this.startupNotices] }
+        : {}),
+      ...(this.pendingImportQueue.length
+        ? {
+            pendingImports: this.pendingImportQueue.map(
+              (entry) => entry.media.name,
+            ),
+          }
         : {}),
     };
   }
@@ -867,6 +879,56 @@ export class AppController {
         .then(() => this.emit())
         .catch(() => undefined);
     }
+
+    if (['completed', 'failed', 'cancelled'].includes(job.stage)) {
+      this.drainImportQueue();
+    }
+  }
+
+  /**
+   * Imports beyond the single active job wait here and start one after
+   * another as jobs finish. The queue is in-memory only; a crash reports
+   * the active job through its marker, and queued files simply need
+   * re-importing.
+   */
+  async enqueueImports(
+    mediaList: SelectedMedia[],
+    expectedSpeakerCount: ExpectedSpeakerCount,
+  ): Promise<{ job: TranscriptionJobSnapshot | null; queuedCount: number }> {
+    if (mediaList.length === 0) {
+      throw new TypeError('At least one recording is required.');
+    }
+    const running =
+      this.activeJob && isRunningTranscriptionStage(this.activeJob.stage);
+    const [first, ...rest] = mediaList;
+    let job: TranscriptionJobSnapshot | null = null;
+    let queued = rest;
+    if (running) {
+      queued = mediaList;
+    } else {
+      job = await this.startTranscription(first, expectedSpeakerCount);
+    }
+    for (const media of queued) {
+      this.pendingImportQueue.push({ media, expectedSpeakerCount });
+    }
+    if (queued.length > 0) this.emit();
+    return { job, queuedCount: queued.length };
+  }
+
+  private drainImportQueue(): void {
+    const next = this.pendingImportQueue.shift();
+    if (!next) return;
+    void this.startTranscription(next.media, next.expectedSpeakerCount)
+      .then(() => this.emit())
+      .catch((error: unknown) => {
+        console.warn(
+          `[sotto] A queued import could not start: ${next.media.name}.`,
+          error,
+        );
+        // Keep the queue moving; the skipped file can be imported again.
+        this.emit();
+        this.drainImportQueue();
+      });
   }
 
   private handleRecordingChanged(recording: LiveRecordingSnapshot | null): void {

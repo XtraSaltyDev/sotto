@@ -255,6 +255,8 @@ export interface AppState {
   transcripts: TranscriptSummary[];
   /** One-time launch reports: interrupted imports, unreadable records. */
   startupNotices?: string[];
+  /** Source names of imports waiting behind the active transcription. */
+  pendingImports?: string[];
 }
 
 export const OLLAMA_OPENAI_BASE_URL = 'http://127.0.0.1:11434/v1';
@@ -300,7 +302,8 @@ export type GenerateLocalAiMeetingSummaryResult =
 export type ImportMediaResult =
   | { outcome: 'cancelled' }
   | { outcome: 'rejected'; reason: string; code: TranscriptionErrorCode }
-  | { outcome: 'started'; job: TranscriptionJobSnapshot };
+  | { outcome: 'started'; job: TranscriptionJobSnapshot; queuedCount?: number }
+  | { outcome: 'queued'; queuedCount: number };
 
 export type StartLiveRecordingResult =
   | { outcome: 'started'; recording: LiveRecordingSnapshot }

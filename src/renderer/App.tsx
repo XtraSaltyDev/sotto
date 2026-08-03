@@ -2133,9 +2133,10 @@ const MainApp = ({
   const recordingElapsed = activeRecording
     ? Math.max(0, recordingTick - new Date(activeRecording.startedAt).getTime())
     : 0;
+  // Importing stays available while a transcription runs: extra files
+  // join the sequential import queue.
   const canImport =
     appState?.engine.state === 'ready' &&
-    !running &&
     !activeRecording &&
     !isStartingRecording &&
     !isStoppingRecording &&
@@ -2516,7 +2517,17 @@ const MainApp = ({
     try {
       const result = await window.sotto.importMedia(expectedSpeakerCount);
       if (result.outcome === 'started') {
+        if (result.queuedCount) {
+          showInfo(
+            `Transcription started. ${result.queuedCount} more recording${result.queuedCount === 1 ? '' : 's'} will follow automatically.`,
+          );
+        }
         await window.sotto.collapseForActivity('transcribing').catch(() => undefined);
+      }
+      if (result.outcome === 'queued') {
+        showInfo(
+          `${result.queuedCount} recording${result.queuedCount === 1 ? '' : 's'} added to the transcription queue.`,
+        );
       }
       if (result.outcome === 'rejected') showError(result.reason);
     } catch {
@@ -3084,7 +3095,7 @@ const MainApp = ({
             <div className="capture-actions">
             <button className="button button--primary" disabled={!canImport} onClick={() => void handleImport()} type="button">
               {isSelecting ? <SpinnerIcon className="spinner" /> : <FolderIcon />}
-              <span>{isSelecting ? 'Opening…' : running ? 'Transcription in progress' : 'Import Recording'}</span>
+              <span>{isSelecting ? 'Opening…' : running ? 'Add to Queue' : 'Import Recordings'}</span>
             </button>
             <button
               className={`button button--record${activeRecording?.kind === 'meeting' ? ' button--recording' : ''}`}
@@ -3109,6 +3120,11 @@ const MainApp = ({
             </div>
 
             <div className="import-status-stack">
+              {(appState?.pendingImports?.length ?? 0) > 0 ? (
+                <p className="import-message import-message--notice">
+                  Waiting to transcribe: {appState?.pendingImports?.join(', ')}
+                </p>
+              ) : null}
               {appState?.engine.state !== 'ready' ? (
                 <p className="import-message import-message--error" role="alert">
                   {appState?.engine.message ?? 'Checking the local transcription engine…'}

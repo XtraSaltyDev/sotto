@@ -52,6 +52,7 @@ import {
   SUPPORTED_AUDIO_EXTENSIONS,
   SUPPORTED_VIDEO_EXTENSIONS,
   validateSelectedMedia,
+  type SelectedMedia,
 } from '../media/media-import';
 import { TranscriptionStartError } from '../transcription/transcription-service';
 import {
@@ -429,40 +430,47 @@ export const registerDesktopIpc = ({
             ).map((extension) => extension.slice(1)),
           },
         ],
-        message: 'Choose a local meeting, audio recording, or video to transcribe.',
-        properties: ['openFile'],
-        title: 'Import a Recording into Sotto',
+        message: 'Choose local meetings, audio recordings, or videos to transcribe.',
+        properties: ['openFile', 'multiSelections'],
+        title: 'Import Recordings into Sotto',
       });
 
-      if (selection.canceled || selection.filePaths.length !== 1) {
+      if (selection.canceled || selection.filePaths.length === 0) {
         return { outcome: 'cancelled' };
       }
 
       try {
-        const filePath = selection.filePaths[0];
-        const fileStats = await lstat(filePath);
-        if (!fileStats.isFile()) {
+        const media: SelectedMedia[] = [];
+        let firstRejection: string | null = null;
+        for (const filePath of selection.filePaths.slice(0, 50)) {
+          const fileStats = await lstat(filePath);
+          if (!fileStats.isFile()) {
+            firstRejection ??= 'Choose regular audio or video files.';
+            continue;
+          }
+          const validation = validateSelectedMedia(filePath, fileStats.size);
+          if (!validation.ok) {
+            firstRejection ??= validation.reason;
+            continue;
+          }
+          media.push(validation.media);
+        }
+        if (media.length === 0) {
           return {
             outcome: 'rejected',
-            reason: 'Choose a regular audio or video file.',
+            reason: firstRejection ?? 'Choose regular audio or video files.',
             code: 'invalid-media',
           };
         }
 
-        const validation = validateSelectedMedia(filePath, fileStats.size);
-        if (!validation.ok) {
-          return {
-            outcome: 'rejected',
-            reason: validation.reason,
-            code: 'invalid-media',
-          };
-        }
-
-        const job = await controller.startTranscription(
-          validation.media,
+        const { job, queuedCount } = await controller.enqueueImports(
+          media,
           expectedSpeakerCount.value,
         );
-        return { outcome: 'started', job };
+        if (!job) return { outcome: 'queued', queuedCount };
+        return queuedCount > 0
+          ? { outcome: 'started', job, queuedCount }
+          : { outcome: 'started', job };
       } catch (error) {
         if (error instanceof TranscriptionStartError) {
           return { outcome: 'rejected', reason: error.message, code: error.code };
