@@ -43,32 +43,54 @@ export const createWindowsSquirrelOptions = () => ({
   setupIcon: './resources/Sotto.ico',
 });
 
-export const resolveUpdateConfigExtraResources = (
-  configuredFile?: string,
-  projectRoot = process.cwd(),
+const resolveExternalUpdateResource = (
+  configuredFile: string | undefined,
+  environmentName: string,
+  expectedName: string,
+  projectRoot: string,
 ): string[] => {
   const suppliedPath = configuredFile?.trim();
   if (!suppliedPath) return [];
   if (!path.isAbsolute(suppliedPath)) {
-    throw new Error('SOTTO_UPDATE_CONFIG_FILE must be an absolute path.');
+    throw new Error(`${environmentName} must be an absolute path.`);
   }
   const suppliedFile = path.resolve(suppliedPath);
-  if (path.basename(suppliedFile) !== 'sotto-update-config.json') {
-    throw new Error(
-      'SOTTO_UPDATE_CONFIG_FILE must be named sotto-update-config.json.',
-    );
+  if (path.basename(suppliedFile) !== expectedName) {
+    throw new Error(`${environmentName} must be named ${expectedName}.`);
   }
   if (!statSync(suppliedFile).isFile()) {
-    throw new Error('SOTTO_UPDATE_CONFIG_FILE must name a regular file.');
+    throw new Error(`${environmentName} must name a regular file.`);
   }
   const resolvedFile = realpathSync(suppliedFile);
   const resolvedRoot = realpathSync(projectRoot);
   const relative = path.relative(resolvedRoot, resolvedFile);
   if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
-    throw new Error('SOTTO_UPDATE_CONFIG_FILE must stay outside the repository.');
+    throw new Error(`${environmentName} must stay outside the repository.`);
   }
   return [resolvedFile];
 };
+
+export const resolveUpdateConfigExtraResources = (
+  configuredFile?: string,
+  projectRoot = process.cwd(),
+): string[] =>
+  resolveExternalUpdateResource(
+    configuredFile,
+    'SOTTO_UPDATE_CONFIG_FILE',
+    'sotto-update-config.json',
+    projectRoot,
+  );
+
+export const resolveUpdateCaExtraResources = (
+  configuredFile?: string,
+  projectRoot = process.cwd(),
+): string[] =>
+  resolveExternalUpdateResource(
+    configuredFile,
+    'SOTTO_UPDATE_CA_FILE',
+    'ca.crt',
+    projectRoot,
+  );
 
 export type PackageBuildReceipt = Readonly<{
   schemaVersion: 1;
@@ -354,6 +376,9 @@ const macNotaryKeychainProfile =
 const updateConfigExtraResources = resolveUpdateConfigExtraResources(
   process.env.SOTTO_UPDATE_CONFIG_FILE,
 );
+const updateCaExtraResources = resolveUpdateCaExtraResources(
+  process.env.SOTTO_UPDATE_CA_FILE,
+);
 const sourcePackage = JSON.parse(
   readFileSync(path.join(__dirname, 'package.json'), 'utf8'),
 ) as { version: string };
@@ -402,6 +427,7 @@ const config: ForgeConfig = {
       './resources/speaker-runtime',
       './scripts/speaker-diarization-child.cjs',
       ...updateConfigExtraResources,
+      ...updateCaExtraResources,
     ],
     // Flip the copied Electron binary before ASAR finalization and before the
     // platform packager signs or notarizes the completed application.

@@ -1,4 +1,7 @@
+import { execFileSync } from 'node:child_process';
 import { createHash, generateKeyPairSync } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer as createHttpsServer } from 'node:https';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +15,7 @@ import {
 } from './update-service';
 import type { AppUpdateProgress } from '../../shared/contracts';
 import { signReleaseManifest } from './release-manifest.cjs';
+import { createTrustedUpdateFetcher } from './update-tls';
 
 const MANIFEST_URL = 'http://10.1.2.3:8090/internal/sotto/latest.json';
 const ORIGIN = 'http://10.1.2.3:8090';
@@ -115,6 +119,96 @@ describe('updatePlatformKey', () => {
 });
 
 describe('UpdateService', () => {
+  it('uses an embedded private CA for the manifest and native artifact stream', async () => {
+    const directory = await downloadsDirectory();
+    const certificate = path.join(directory, 'test-ca.crt');
+    const privateKey = path.join(directory, 'test-ca.key');
+    const opensslConfig = path.join(directory, 'openssl.cnf');
+    await writeFile(
+      opensslConfig,
+      `[req]
+distinguished_name=subject
+x509_extensions=extensions
+prompt=no
+[subject]
+CN=127.0.0.1
+[extensions]
+subjectAltName=IP:127.0.0.1
+`,
+    );
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', privateKey, '-out', certificate, '-days', '1',
+      '-config', opensslConfig,
+    ], { stdio: 'ignore' });
+    const ca = await readFile(certificate);
+    const artifact = Buffer.from('private-ca-update');
+    const published: { manifest?: Record<string, unknown> } = {};
+    const server = createHttpsServer(
+      { cert: ca, key: await readFile(privateKey) },
+      (request, response) => {
+        if (request.url?.endsWith('/latest.json')) {
+          response.setHeader('Content-Type', 'application/json');
+          response.end(JSON.stringify(published.manifest));
+          return;
+        }
+        response.end(artifact);
+      },
+    );
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No TLS port');
+    const origin = `https://127.0.0.1:${address.port}`;
+    published.manifest = signReleaseManifest(
+      {
+        schemaVersion: 2,
+        app: 'sotto',
+        channel: 'internal',
+        releaseKind: 'internal-ad-hoc',
+        version: '0.2.0',
+        bundleId: 'com.sotto.desktop',
+        commit: '0123456789abcdef0123456789abcdef01234567',
+        buildNumber: 42,
+        publishedAt: '2026-08-03T12:00:00.000Z',
+        artifacts: {
+          'darwin-arm64': {
+            target: 'darwin-arm64',
+            file: 'Sotto-arm64.dmg',
+            downloadUrl: `${origin}/internal/sotto/Sotto-arm64.dmg`,
+            sha256: createHash('sha256').update(artifact).digest('hex'),
+            size: artifact.byteLength,
+          },
+        },
+      },
+      'test-2026',
+      testSigningKeys.privateKey,
+    );
+    const service = new UpdateService({
+      manifestUrl: `${origin}/internal/sotto/latest.json`,
+      trustedManifestKeys: testTrustedKeys,
+      tlsCa: ca,
+      currentVersion: '0.1.9',
+      platformKey: 'darwin-arm64',
+      downloadsDirectory: directory,
+      stagingDirectory: path.join(directory, 'staging'),
+      installedAppPath: null,
+      fetcher: createTrustedUpdateFetcher(ca),
+    });
+
+    try {
+      await expect(service.downloadUpdate()).resolves.toMatchObject({
+        outcome: 'downloaded',
+        version: '0.2.0',
+      });
+      await expect(
+        readFile(path.join(directory, 'Sotto-0.2.0-arm64.dmg')),
+      ).resolves.toEqual(artifact);
+    } finally {
+      server.close();
+      await once(server, 'close');
+    }
+  });
   it('accepts an authenticated release manifest before offering an update', async () => {
     const artifact = Buffer.from('authenticated-build');
     const signed = signReleaseManifest(

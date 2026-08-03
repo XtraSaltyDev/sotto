@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from 'node:crypto';
+import { createHash, X509Certificate } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -67,6 +67,7 @@ const manifestPath = path.join(
 );
 const updateConfigPath = path.join(resourcesPath, 'sotto-update-config.json');
 const buildReceiptPath = path.join(resourcesPath, 'sotto-build.json');
+const updateCaPath = path.join(resourcesPath, 'ca.crt');
 
 const requirePath = async (relativePath) => {
   await access(path.join(resourcesPath, relativePath));
@@ -203,6 +204,18 @@ try {
     );
   }
 }
+let updateCa = 'system trust only';
+try {
+  const certificate = new X509Certificate(await readFile(updateCaPath));
+  updateCa = `${certificate.subject} (${certificate.fingerprint256})`;
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+  if (process.env.SOTTO_REQUIRE_UPDATE_CA === '1') {
+    throw new Error(
+      `The public update CA is required but missing from ${updateCaPath}.`,
+    );
+  }
+}
 const packagedPackage = JSON.parse(
   extractFile(path.join(resourcesPath, 'app.asar'), 'package.json'),
 );
@@ -239,5 +252,5 @@ if (target === 'darwin-arm64') {
 }
 
 console.log(
-  `Verified ${target} package resources, immutable runtime hashes, licenses, ${packagedPackage.name}@${packagedPackage.version} from ${buildReceipt.commit.slice(0, 12)}, and secure update configuration: ${secureUpdateConfiguration}.`,
+  `Verified ${target} package resources, immutable runtime hashes, licenses, ${packagedPackage.name}@${packagedPackage.version} from ${buildReceipt.commit.slice(0, 12)}, secure update configuration: ${secureUpdateConfiguration}, and update CA: ${updateCa}.`,
 );

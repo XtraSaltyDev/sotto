@@ -27,6 +27,7 @@ import {
   pruneUnusedNativeResources,
   resolveElectronExecutablePath,
   resolvePackagedResourcesPath,
+  resolveUpdateCaExtraResources,
   resolveUpdateConfigExtraResources,
   unusedNativeResourcePaths,
 } from './forge.config';
@@ -70,6 +71,36 @@ describe('secure update package configuration', () => {
           projectRoot,
         ),
       ).toThrow(/sotto-update-config\.json/u);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('embeds only an external, predictably named public update CA', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-ca-'));
+    const projectRoot = path.join(root, 'checkout');
+    const externalRoot = path.join(root, 'external');
+    const externalFile = path.join(externalRoot, 'ca.crt');
+    const internalFile = path.join(projectRoot, 'ca.crt');
+
+    try {
+      await mkdir(projectRoot, { recursive: true });
+      await mkdir(externalRoot, { recursive: true });
+      await writeFile(externalFile, 'public CA certificate');
+      await writeFile(internalFile, 'public CA certificate');
+
+      expect(resolveUpdateCaExtraResources(externalFile, projectRoot)).toEqual([
+        await realpath(externalFile),
+      ]);
+      expect(() =>
+        resolveUpdateCaExtraResources(internalFile, projectRoot),
+      ).toThrow(/outside the repository/u);
+      expect(() =>
+        resolveUpdateCaExtraResources(
+          path.join(externalRoot, 'trust.pem'),
+          projectRoot,
+        ),
+      ).toThrow(/ca\.crt/u);
     } finally {
       await rm(root, { force: true, recursive: true });
     }

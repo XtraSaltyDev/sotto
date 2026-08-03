@@ -8,6 +8,7 @@ import { mkdir, readdir, rename, rm, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { ClientRequest, IncomingMessage } from 'node:http';
+import { rootCertificates } from 'node:tls';
 
 import type {
   AvailableAppUpdate,
@@ -61,6 +62,8 @@ export interface UpdateServiceOptions {
   stagingDirectory: string;
   /** The installed .app bundle to replace, or null when not replaceable. */
   installedAppPath: string | null;
+  /** Additional public CA used only for the configured HTTPS update origin. */
+  tlsCa?: string | Buffer;
   fetcher?: typeof fetch;
   /** Test hook; production artifact downloads use native Node HTTP streams. */
   downloadFetcher?: typeof fetch;
@@ -85,6 +88,7 @@ const dittoExtract = async (
 const requestArtifactStream = (
   url: string,
   signal: AbortSignal,
+  tlsCa?: string | Buffer,
 ): Promise<IncomingMessage> => {
   const parsedUrl = new URL(url);
   const client =
@@ -120,9 +124,15 @@ const requestArtifactStream = (
       }
     };
 
+    const requestOptions: https.RequestOptions = {
+      headers: { Accept: 'application/octet-stream' },
+    };
+    if (parsedUrl.protocol === 'https:' && tlsCa !== undefined) {
+      requestOptions.ca = [...rootCertificates, tlsCa];
+    }
     const request: ClientRequest = client.get(
       parsedUrl,
-      { headers: { Accept: 'application/octet-stream' } },
+      requestOptions,
       (incoming) => {
         response = incoming;
         const status = incoming.statusCode ?? 0;
@@ -562,6 +572,7 @@ export class UpdateService {
           const response = await requestArtifactStream(
             artifact.downloadUrl,
             controller.signal,
+            this.options.tlsCa,
           );
           for await (const chunk of response) {
             await writeChunk(chunk);

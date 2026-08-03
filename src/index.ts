@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -45,6 +45,7 @@ import {
   updatePlatformKey,
 } from './main/updates/update-service';
 import { loadUpdateConfiguration } from './main/updates/update-config.cjs';
+import { createTrustedUpdateFetcher } from './main/updates/update-tls';
 import {
   consumePendingPermissionRepair,
   markPendingPermissionRepair,
@@ -404,6 +405,18 @@ const initialize = async (): Promise<void> => {
     );
     return null;
   });
+  const updateCaPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'ca.crt')
+    : process.env.SOTTO_UPDATE_CA_FILE ?? null;
+  const updateCa = updateCaPath
+    ? await readFile(updateCaPath).catch((error: unknown) => {
+        console.warn(
+          '[sotto] The configured update CA could not be loaded; system trust will be used.',
+          error,
+        );
+        return undefined;
+      })
+    : undefined;
   const updateService = new UpdateService({
     manifestUrl:
       updateConfiguration?.manifestUrl ?? DEFAULT_SOTTO_UPDATE_MANIFEST_URL,
@@ -414,6 +427,8 @@ const initialize = async (): Promise<void> => {
     downloadsDirectory: app.getPath('downloads'),
     stagingDirectory: path.join(app.getPath('userData'), 'updates'),
     installedAppPath,
+    tlsCa: updateCa,
+    fetcher: updateCa ? createTrustedUpdateFetcher(updateCa) : undefined,
     onProgress: (progress) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(IPC_CHANNELS.appUpdateProgress, progress);
