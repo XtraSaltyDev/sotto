@@ -355,6 +355,15 @@ def main() -> int:
         MIXED_CLUSTER,
         degraded_turns=frozenset({4, 5, 6, 7, 8}),
     )
+    # Only two short degraded turns (~2.5 s of ~61 s): if they detach into
+    # a flagged cluster, its support share sits far below the reassignment
+    # cap, so the bounded mode must still fire there.
+    generate_scenario(
+        "synthetic-small-mix",
+        {"Speaker A": ("Samantha", 182, 1.05), "Speaker B": ("Daniel", 174, 0.88)},
+        MIXED_CLUSTER,
+        degraded_turns=frozenset({4, 5}),
+    )
     return 0
 
 

@@ -98,3 +98,24 @@ recording), or cap the duration the mode may move to Unclear, falling back
 to guard-only behavior beyond the cap. `synthetic-guarded-mix` plus the
 retained mixed-cluster recording form the test pair: the bounded mode must
 keep the retained win and turn the synthetic regression back into a tie.
+
+## Follow-up (same date): blast radius bounded, test pair passes
+
+`SegmentAnchorReassignmentOptions` gained `maximumFlaggedSupportShare`
+(default 0.15): a flagged cluster carrying more than that share of all
+supported word support keeps guard-only behavior — its segments stay
+untouched instead of being demoted. Experiment-only; production unchanged.
+
+| Test-pair case | Config | Before bound | After bound (default 0.15) |
+| --- | --- | ---: | ---: |
+| `synthetic-guarded-mix` (flagged primary, ~44 % share) | anchor conservative + relaxed | 45.06 % correct, 52.47 % Unclear, 0/9 boundaries | **98.77 % correct — exact production tie** |
+| Retained mixed-cluster recording (flagged cluster ~6 % share) | anchor-conservative | 97.44 % correct, harness verdict **win** | 97.44 % correct, harness verdict **win** (unchanged) |
+| Retained mixed-cluster recording | 250 ms / 0.48 relaxed gates | 100 % correct, 4/4 boundaries, **win** | 100 % correct, **win** (unchanged) |
+
+An attempted synthetic small-flagged-cluster case (`synthetic-small-mix`,
+two degraded turns ≈ 2.5 s) did not detach a cluster — production absorbed
+it at 99.40 % with no guard flag — so the fires-below-cap behavior is
+demonstrated by the retained recording and unit tests rather than a second
+synthetic recording. The candidate's promotion requirement is unchanged
+(an independently annotated real mixed-cluster win), but its known
+unbounded-demotion failure mode is now closed and regression-tested.

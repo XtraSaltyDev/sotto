@@ -553,6 +553,11 @@ export const validateSpeakerEvaluationConfiguration = (
       1,
       10_000,
     ),
+    maximumFlaggedSupportShare: readFiniteNumber(
+      segmentAnchorValue?.maximumFlaggedSupportShare ??
+        DEFAULT_SEGMENT_ANCHOR_REASSIGNMENT_OPTIONS.maximumFlaggedSupportShare,
+      'segmentAnchorOptions.maximumFlaggedSupportShare',
+    ),
   };
   if (
     segmentAnchorOptions.minimumInternalMedianSimilarity < -1 ||
@@ -560,7 +565,9 @@ export const validateSpeakerEvaluationConfiguration = (
     segmentAnchorOptions.minimumSimilarity < -1 ||
     segmentAnchorOptions.minimumSimilarity > 1 ||
     segmentAnchorOptions.minimumMargin < 0 ||
-    segmentAnchorOptions.minimumMargin > 2
+    segmentAnchorOptions.minimumMargin > 2 ||
+    segmentAnchorOptions.maximumFlaggedSupportShare <= 0 ||
+    segmentAnchorOptions.maximumFlaggedSupportShare > 1
   ) {
     return fail('segmentAnchorOptions were out of bounds.');
   }
@@ -870,6 +877,15 @@ export interface SegmentAnchorReassignmentOptions {
   minimumSimilarity: number;
   minimumMargin: number;
   minimumSampleDurationMs: number;
+  /**
+   * Blast-radius bound: reassignment only touches a flagged cluster whose
+   * word support is at most this share of all supported word support.
+   * Larger flagged clusters keep guard-only behavior — their segments stay
+   * untouched — because demoting a primary speaker's unmatched segments
+   * erases most of a transcript (measured in the synthetic ground-truth
+   * report: 98.77% -> 45.06% correct).
+   */
+  maximumFlaggedSupportShare: number;
 }
 
 export const DEFAULT_SEGMENT_ANCHOR_REASSIGNMENT_OPTIONS: SegmentAnchorReassignmentOptions = {
@@ -877,6 +893,7 @@ export const DEFAULT_SEGMENT_ANCHOR_REASSIGNMENT_OPTIONS: SegmentAnchorReassignm
   minimumSimilarity: 0.5,
   minimumMargin: 0.2,
   minimumSampleDurationMs: 500,
+  maximumFlaggedSupportShare: 0.15,
 };
 
 export interface SegmentAnchorReassignmentResult {
@@ -1112,7 +1129,9 @@ export const applyExperimentSegmentAnchorReassignment = (
     options.minimumMargin > 2 ||
     !Number.isSafeInteger(options.minimumSampleDurationMs) ||
     options.minimumSampleDurationMs < 1 ||
-    options.minimumSampleDurationMs > 10_000
+    options.minimumSampleDurationMs > 10_000 ||
+    options.maximumFlaggedSupportShare <= 0 ||
+    options.maximumFlaggedSupportShare > 1
   ) {
     return fail('Segment-anchor reassignment settings were out of bounds.');
   }
@@ -1141,12 +1160,26 @@ export const applyExperimentSegmentAnchorReassignment = (
   if (consistencyByCluster.size !== supportedClusters.size) {
     return fail('Segment-anchor consistency analysis was incomplete.');
   }
+  const totalSupportedWordSupportMs = rawSummary.clusters
+    .filter((cluster) => cluster.supported)
+    .reduce((total, cluster) => total + cluster.wordSupportMs, 0);
+  const wordSupportByCluster = new Map(
+    rawSummary.clusters.map((cluster) => [cluster.cluster, cluster.wordSupportMs]),
+  );
   const inconsistentClusters = new Set(
     [...consistencyByCluster.values()]
       .filter((entry) =>
         entry.pairCount > 0 &&
         entry.medianSimilarity !== null &&
         entry.medianSimilarity < options.minimumInternalMedianSimilarity)
+      // Blast-radius bound: a flagged cluster carrying more than the
+      // configured share of all supported word support keeps guard-only
+      // behavior. Reassignment exists for small mixed clusters; demoting a
+      // primary speaker's unmatched segments erases most of a transcript.
+      .filter((entry) =>
+        totalSupportedWordSupportMs > 0 &&
+        (wordSupportByCluster.get(entry.cluster) ?? 0) <=
+          totalSupportedWordSupportMs * options.maximumFlaggedSupportShare)
       .map((entry) => entry.cluster),
   );
   const anchorsBySegment = new Map<string, SupportedClusterSegmentAnchorMatch>();

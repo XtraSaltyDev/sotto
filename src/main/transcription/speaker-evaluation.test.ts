@@ -253,6 +253,7 @@ describe('speaker evaluation inputs and sweeps', () => {
         minimumSimilarity: 0.5,
         minimumMargin: 0.2,
         minimumSampleDurationMs: 500,
+        maximumFlaggedSupportShare: 0.15,
       },
     });
     expect(first.map((entry) => entry.name)).toEqual([
@@ -336,7 +337,18 @@ describe('speaker evaluation inputs and sweeps', () => {
       minimumSimilarity: 0.48,
       minimumMargin: 0.2,
       minimumSampleDurationMs: 250,
+      maximumFlaggedSupportShare: 0.15,
     });
+    expect(() => validateSpeakerEvaluationConfiguration({
+      name: 'bad-support-share',
+      clusteringThreshold: 0.75,
+      diarizationShiftMs: 0,
+      expectedSpeakerCount: null,
+      recoveryMode: 'novel-speaker-balanced-segment-reassignment',
+      minDurationOn: 0.2,
+      minDurationOff: 0.5,
+      segmentAnchorOptions: { maximumFlaggedSupportShare: 0 },
+    })).toThrow('out of bounds');
     expect(() => validateSpeakerEvaluationConfiguration({
       name: 'bad-segment-reassignment',
       clusteringThreshold: 0.75,
@@ -782,6 +794,9 @@ describe('experiment-only embedding consolidation', () => {
       minimumSimilarity: 0.6,
       minimumMargin: 0.2,
       minimumSampleDurationMs: 500,
+      // The flagged fixture cluster carries 700 of 1600 supported ms; a
+      // permissive cap keeps this test focused on the anchor gates.
+      maximumFlaggedSupportShare: 0.5,
     };
     const first = applyExperimentSegmentAnchorReassignment(
       diarization,
@@ -809,6 +824,77 @@ describe('experiment-only embedding consolidation', () => {
       demotedDurationMs: 900,
     });
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
+
+  it('leaves a flagged primary cluster untouched under the support-share cap', () => {
+    const segmentAnalysis = {
+      ...analysis,
+      segmentConsistency: [
+        {
+          cluster: 0,
+          totalSegmentCount: 1,
+          selectedSegmentCount: 1,
+          readySegmentCount: 1,
+          skippedSegmentCount: 0,
+          pairCount: 0,
+          minimumSimilarity: null,
+          medianSimilarity: null,
+          maximumSimilarity: null,
+        },
+        {
+          cluster: 1,
+          totalSegmentCount: 2,
+          selectedSegmentCount: 2,
+          readySegmentCount: 2,
+          skippedSegmentCount: 0,
+          pairCount: 1,
+          minimumSimilarity: 0.2,
+          medianSimilarity: 0.2,
+          maximumSimilarity: 0.2,
+        },
+      ],
+      segmentAnchorMatches: [
+        {
+          cluster: 1,
+          startMs: 1_000,
+          endMs: 1_900,
+          sampleDurationMs: 900,
+          ready: true,
+          nearestOtherSupportedCluster: 0,
+          similarity: 0.7,
+          secondSimilarity: 0.3,
+          margin: 0.4,
+        },
+      ],
+    };
+    const diarization = [
+      { startMs: 0, endMs: 1_000, cluster: 0 },
+      { startMs: 1_000, endMs: 1_900, cluster: 1 },
+    ];
+
+    // Cluster 1 carries 700 of 1600 supported ms (~44%); the default cap
+    // keeps every one of its segments in place, matching guard-only output.
+    const result = applyExperimentSegmentAnchorReassignment(
+      diarization,
+      rawSummary,
+      segmentAnalysis,
+      new Map(),
+      {
+        minimumInternalMedianSimilarity: 0.4,
+        minimumSimilarity: 0.5,
+        minimumMargin: 0.2,
+        minimumSampleDurationMs: 500,
+        maximumFlaggedSupportShare: 0.15,
+      },
+    );
+
+    expect(result.segments).toEqual(diarization);
+    expect(result).toMatchObject({
+      reassignedSegmentCount: 0,
+      reassignedDurationMs: 0,
+      demotedSegmentCount: 0,
+      demotedDurationMs: 0,
+    });
   });
 
   it('keeps a ready single-cluster segment when no other anchor exists', () => {
@@ -849,6 +935,7 @@ describe('experiment-only embedding consolidation', () => {
         minimumSimilarity: 0.5,
         minimumMargin: 0.2,
         minimumSampleDurationMs: 500,
+        maximumFlaggedSupportShare: 0.15,
       },
     );
 
@@ -870,6 +957,7 @@ describe('experiment-only embedding consolidation', () => {
         minimumSimilarity: 0.5,
         minimumMargin: 0.2,
         minimumSampleDurationMs: 500,
+        maximumFlaggedSupportShare: 0.15,
       },
     )).toThrow('incomplete');
     expect(() => applyExperimentSegmentAnchorReassignment(
@@ -882,6 +970,7 @@ describe('experiment-only embedding consolidation', () => {
         minimumSimilarity: 1.1,
         minimumMargin: 0.2,
         minimumSampleDurationMs: 500,
+        maximumFlaggedSupportShare: 0.15,
       },
     )).toThrow('out of bounds');
   });
