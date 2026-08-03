@@ -111,9 +111,14 @@ Build the unpacked app:
 
 ```bash
 npm install
+npm run setup:hooks
 npm run package
 npm run make
 ```
+
+`setup:hooks` wires the repository's pre-push quality gate (lint, typecheck,
+tests) so nothing broken reaches the remote; bypass a run deliberately with
+`git push --no-verify`. Releases use `scripts/release.sh <version>`.
 
 Then open:
 

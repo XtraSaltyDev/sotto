@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Local quality gate: nothing reaches origin without passing lint,
+# typecheck, and the test suite (~10-15 seconds total). This replaces
+# hosted CI deliberately — everything runs on this machine and costs
+# nothing. Bypass intentionally with: git push --no-verify
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+printf 'pre-push: running lint, typecheck, and tests…\n'
+npm run lint
+npm run typecheck
+npm test
+printf 'pre-push: all gates passed.\n'

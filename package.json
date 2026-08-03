@@ -23,6 +23,7 @@
     "lint": "eslint --ext .ts,.tsx .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude '**/.build/**' --exclude '**/*.integration.test.ts'",
+    "setup:hooks": "git config core.hooksPath scripts/git-hooks",
     "test:runtime": "vitest run src/main/transcription/runtime.integration.test.ts",
     "test:runtime:mac": "npm run test:runtime",
     "test:runtime:windows": "npm run test:runtime",
