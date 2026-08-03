@@ -1,0 +1,4 @@
+{
+  "schemaVersion": 1,
+  "text": "Alright, let's pick up where we left off on the rollout plan. Sure. The staging cluster is ready. Good. But we still need sign off on the migration window. Right, I sent that to operations yesterday. Okay. They want us to run it on Thursday night instead of Friday. Thursday works. Perfect. What about the rollback script? Did anyone test it end to end? I did, twice. It restores the snapshot in about four minutes. Four minutes is fine. Agreed. Then I will update the checklist and notify the support team today. Thanks. One more thing, the dashboard alerts were too noisy last week. Yes. Can you raise the paging threshold before the rollout? I will raise it to five minutes sustained and post the change for review. That closes everything on my list. Same here. Talk tomorrow."
+}

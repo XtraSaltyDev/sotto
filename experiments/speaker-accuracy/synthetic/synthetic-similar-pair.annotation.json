@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "durationMs": 44595,
+  "speakers": [
+    "Speaker A",
+    "Speaker B"
+  ],
+  "ranges": [
+    {
+      "startMs": 400,
+      "endMs": 3159,
+      "speaker": "Speaker A"
+    },
+    {
+      "startMs": 3359,
+      "endMs": 7776,
+      "speaker": "Speaker B"
+    },
+    {
+      "startMs": 7876,
+      "endMs": 8897,
+      "speaker": "Speaker A"
+    },
+    {
+      "startMs": 9027,
+      "endMs": 13153,
+      "speaker": "Speaker B"
+    },
+    {
+      "startMs": 13333,
+      "endMs": 16671,
+      "speaker": "Speaker A"
+    },
+    {
+      "startMs": 16751,
+      "endMs": 17701,
+      "speaker": "Speaker B"
+    },
+    {
+      "startMs": 17771,
+      "endMs": 18349,
+      "speaker": "Speaker A"
+    },
+    {
+      "startMs": 18489,
+      "endMs": 23498,
+      "speaker": "Speaker B"
+    },
+    {
+      "startMs": 23658,
+      "endMs": 27875,
+      "speaker": "Speaker A"
+    },
+    {
+      "startMs": 27985,
+      "endMs": 29974,
+      "speaker": "Speaker B"
+    },
+    {
+      "startMs": 30044,
+      "endMs": 30526,
+      "speaker": "Speaker A"
+    },
+    {
+      "startMs": 30656,
+      "endMs": 34992,
+      "speaker": "Speaker B"
+    },
+    {
+      "startMs": 35112,
+      "endMs": 37239,
+      "speaker": "Speaker A"
+    },
+    {
+      "startMs": 37329,
+      "endMs": 37987,
+      "speaker": "Speaker B"
+    },
+    {
+      "startMs": 38127,
+      "endMs": 40029,
+      "speaker": "Speaker A"
+    },
+    {
+      "startMs": 40149,
+      "endMs": 44095,
+      "speaker": "Speaker B"
+    }
+  ],
+  "words": []
+}

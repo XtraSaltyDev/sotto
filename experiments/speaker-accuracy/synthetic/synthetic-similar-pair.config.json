@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "name": "synthetic-similar-pair",
+  "normalizedWavPath": "media/synthetic-similar-pair.wav",
+  "annotationPath": "synthetic-similar-pair.annotation.json",
+  "transcriptReferencePath": "synthetic-similar-pair.transcript-reference.json",
+  "configurations": [
+    {
+      "clusteringThreshold": 0.75,
+      "diarizationShiftMs": 0,
+      "expectedSpeakerCount": null,
+      "minDurationOn": 0.2,
+      "minDurationOff": 0.5,
+      "name": "production",
+      "recoveryMode": "production"
+    },
+    {
+      "clusteringThreshold": 0.75,
+      "diarizationShiftMs": 0,
+      "expectedSpeakerCount": null,
+      "minDurationOn": 0.2,
+      "minDurationOff": 0.5,
+      "name": "guard",
+      "recoveryMode": "novel-speaker-balanced-segment-guard"
+    },
+    {
+      "clusteringThreshold": 0.75,
+      "diarizationShiftMs": 0,
+      "expectedSpeakerCount": null,
+      "minDurationOn": 0.2,
+      "minDurationOff": 0.5,
+      "name": "anchor-conservative",
+      "recoveryMode": "novel-speaker-balanced-segment-reassignment",
+      "segmentAnchorOptions": {
+        "minimumInternalMedianSimilarity": 0.4,
+        "minimumSimilarity": 0.5,
+        "minimumMargin": 0.2,
+        "minimumSampleDurationMs": 500
+      }
+    },
+    {
+      "clusteringThreshold": 0.75,
+      "diarizationShiftMs": 0,
+      "expectedSpeakerCount": null,
+      "minDurationOn": 0.2,
+      "minDurationOff": 0.5,
+      "name": "anchor-relaxed",
+      "recoveryMode": "novel-speaker-balanced-segment-reassignment",
+      "segmentAnchorOptions": {
+        "minimumInternalMedianSimilarity": 0.4,
+        "minimumSimilarity": 0.48,
+        "minimumMargin": 0.2,
+        "minimumSampleDurationMs": 250
+      }
+    }
+  ]
+}
