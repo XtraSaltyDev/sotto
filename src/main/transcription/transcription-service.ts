@@ -40,6 +40,7 @@ import {
   runSpeakerDiarization,
   speakerDiarizationTimeoutMs,
   type RunSpeakerDiarizationOptions,
+  type SpeakerDiarizationResult,
   type SpeakerDiarizationSegment,
 } from './speaker-diarization';
 
@@ -86,7 +87,7 @@ export interface LocalTranscriptionServiceOptions {
   processRunner?: (options: RunProcessOptions) => Promise<ProcessResult>;
   speakerDiarizationRunner?: (
     options: RunSpeakerDiarizationOptions,
-  ) => Promise<SpeakerDiarizationSegment[]>;
+  ) => Promise<SpeakerDiarizationResult>;
   /** Test seams for the Windows-only thread policy. */
   platform?: NodeJS.Platform;
   availableParallelism?: number;
@@ -329,7 +330,7 @@ export class LocalTranscriptionService {
       if (speakerRuntime && canRunSpeakerDiarization(normalized)) {
         this.update('transcribing', 0.92, 'Separating speakers locally…');
         try {
-          diarization = await (
+          const diarizationResult = await (
             this.options.speakerDiarizationRunner ?? runSpeakerDiarization
           )({
             wavPath: normalizedPath,
@@ -343,6 +344,22 @@ export class LocalTranscriptionService {
             ),
             signal,
           });
+          diarization = diarizationResult.segments;
+          // Diagnostic only: an internally inconsistent cluster is the
+          // known signature of mixed-voice audio (see the speaker-accuracy
+          // experiments). Labels are unchanged today; this log builds the
+          // evidence base for a future bounded recovery step.
+          for (const consistency of diarizationResult.clusterConsistency ?? []) {
+            if (
+              consistency.pairCount > 0 &&
+              consistency.medianSimilarity !== null &&
+              consistency.medianSimilarity < 0.4
+            ) {
+              console.warn(
+                `[sotto] Speaker cluster ${consistency.cluster} shows low internal consistency (median ${consistency.medianSimilarity.toFixed(3)} across ${consistency.pairCount} pairs). Labels are unchanged; diagnostic only.`,
+              );
+            }
+          }
         } catch (error) {
           if (signal.aborted) throw error;
           console.warn(

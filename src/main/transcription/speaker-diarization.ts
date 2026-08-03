@@ -137,9 +137,101 @@ export const normalizeDiarizationSegments = (
   );
 };
 
+export interface SpeakerClusterConsistency {
+  cluster: number;
+  totalSegmentCount: number;
+  selectedSegmentCount: number;
+  readySegmentCount: number;
+  skippedSegmentCount: number;
+  pairCount: number;
+  minimumSimilarity: number | null;
+  medianSimilarity: number | null;
+  maximumSimilarity: number | null;
+}
+
+export interface SpeakerDiarizationResult {
+  segments: SpeakerDiarizationSegment[];
+  /**
+   * Aggregate per-cluster internal-consistency statistics from the child,
+   * or null when not measured. Diagnostic only — invalid diagnostics are
+   * dropped rather than failing the diarization that carried them.
+   */
+  clusterConsistency: SpeakerClusterConsistency[] | null;
+}
+
+const MAX_CONSISTENCY_ENTRIES = 256;
+
+const isValidSimilarity = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= -1 && value <= 1;
+
+export const normalizeClusterConsistency = (
+  value: unknown,
+): SpeakerClusterConsistency[] | null => {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length > MAX_CONSISTENCY_ENTRIES) {
+    return null;
+  }
+  const seenClusters = new Set<number>();
+  const entries: SpeakerClusterConsistency[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate)) return null;
+    const {
+      cluster,
+      totalSegmentCount,
+      selectedSegmentCount,
+      readySegmentCount,
+      skippedSegmentCount,
+      pairCount,
+      minimumSimilarity,
+      medianSimilarity,
+      maximumSimilarity,
+    } = candidate;
+    const counts = [
+      cluster,
+      totalSegmentCount,
+      selectedSegmentCount,
+      readySegmentCount,
+      skippedSegmentCount,
+      pairCount,
+    ];
+    if (
+      counts.some(
+        (count) => !Number.isSafeInteger(count) || (count as number) < 0,
+      ) ||
+      seenClusters.has(cluster as number) ||
+      (selectedSegmentCount as number) > (totalSegmentCount as number) ||
+      (readySegmentCount as number) + (skippedSegmentCount as number) !==
+        (selectedSegmentCount as number) ||
+      pairCount !==
+        ((readySegmentCount as number) * ((readySegmentCount as number) - 1)) / 2
+    ) {
+      return null;
+    }
+    const similarities = [minimumSimilarity, medianSimilarity, maximumSimilarity];
+    if (pairCount === 0) {
+      if (similarities.some((entry) => entry !== null)) return null;
+    } else if (!similarities.every(isValidSimilarity)) {
+      return null;
+    }
+    seenClusters.add(cluster as number);
+    entries.push({
+      cluster: cluster as number,
+      totalSegmentCount: totalSegmentCount as number,
+      selectedSegmentCount: selectedSegmentCount as number,
+      readySegmentCount: readySegmentCount as number,
+      skippedSegmentCount: skippedSegmentCount as number,
+      pairCount: pairCount as number,
+      minimumSimilarity: minimumSimilarity as number | null,
+      medianSimilarity: medianSimilarity as number | null,
+      maximumSimilarity: maximumSimilarity as number | null,
+    });
+  }
+  return entries;
+};
+
 export const parseDiarizationChildJson = (
   json: string,
-): SpeakerDiarizationSegment[] => {
+): SpeakerDiarizationResult => {
   if (Buffer.byteLength(json, 'utf8') > MAX_SPEAKER_DIARIZATION_JSON_BYTES) {
     throw new SpeakerDiarizationError('The speaker engine output exceeded its size limit.');
   }
@@ -173,7 +265,10 @@ export const parseDiarizationChildJson = (
     throw new SpeakerDiarizationError('The speaker engine returned an unsupported output format.');
   }
 
-  return normalizeDiarizationSegments(value.segments);
+  return {
+    segments: normalizeDiarizationSegments(value.segments),
+    clusterConsistency: normalizeClusterConsistency(value.segmentConsistency),
+  };
 };
 
 interface IsolatedDiarizationProcess {
@@ -254,7 +349,7 @@ const boundedDiagnostic = (chunks: readonly Buffer[]): string | undefined => {
 /** Runs the synchronous native diarizer in a crash-isolated child process. */
 export const runSpeakerDiarization = async (
   options: RunSpeakerDiarizationOptions,
-): Promise<SpeakerDiarizationSegment[]> => {
+): Promise<SpeakerDiarizationResult> => {
   assertInputPath(options.wavPath, ['.wav'], 'Normalized audio');
   assertInputPath(options.segmentationModelPath, ['.onnx'], 'Speaker segmentation model');
   assertInputPath(options.embeddingModelPath, ['.onnx'], 'Speaker embedding model');

@@ -24,7 +24,7 @@ import {
   resolveWindowsWhisperThreads,
   type LocalTranscriptionServiceOptions,
 } from './transcription-service';
-import type { SpeakerDiarizationSegment } from './speaker-diarization';
+import type { SpeakerDiarizationResult } from './speaker-diarization';
 import { TRANSCRIPT_SCHEMA_VERSION } from './transcript-types';
 
 const RECORDING_ID = '32ce6fee-8f3e-4f03-a266-46d6c00ef08c';
@@ -176,8 +176,8 @@ describe('LocalTranscriptionService durable recording behavior', () => {
 
   const setup = async (
     processRunner: (options: RunProcessOptions) => Promise<ProcessResult>,
-    speakerDiarizationRunner: () => Promise<SpeakerDiarizationSegment[]> =
-      async () => [],
+    speakerDiarizationRunner: () => Promise<SpeakerDiarizationResult> =
+      async () => ({ segments: [], clusterConsistency: null }),
     withSpeakerRuntime = true,
     serviceOptions: Pick<
       LocalTranscriptionServiceOptions,
@@ -266,7 +266,7 @@ describe('LocalTranscriptionService durable recording behavior', () => {
         windowsCalls.push(options);
         return windowsDelegate(options);
       },
-      async () => [],
+      async () => ({ segments: [], clusterConsistency: null }),
       false,
       { platform: 'win32', availableParallelism: 12 },
     );
@@ -288,7 +288,7 @@ describe('LocalTranscriptionService durable recording behavior', () => {
         macCalls.push(options);
         return macDelegate(options);
       },
-      async () => [],
+      async () => ({ segments: [], clusterConsistency: null }),
       false,
       { platform: 'darwin', availableParallelism: 12 },
     );
@@ -368,7 +368,7 @@ describe('LocalTranscriptionService durable recording behavior', () => {
   });
 
   it('retains an imported playback copy only after a successful transcript', async () => {
-    const context = await setup(makeRunner(() => false), async () => [], false);
+    const context = await setup(makeRunner(() => false), async () => ({ segments: [], clusterConsistency: null }), false);
     const imported: SelectedMedia = {
       ...context.media,
       name: 'Imported meeting.mp4',
@@ -429,9 +429,10 @@ describe('LocalTranscriptionService durable recording behavior', () => {
   });
 
   it('saves stable speaker references when local clustering succeeds', async () => {
-    const speakerDiarizationRunner = vi.fn(async () => [
-      { startMs: 0, endMs: 1_000, cluster: 4 },
-    ]);
+    const speakerDiarizationRunner = vi.fn(async () => ({
+      segments: [{ startMs: 0, endMs: 1_000, cluster: 4 }],
+      clusterConsistency: null,
+    }));
     const context = await setup(makeRunner(() => false), speakerDiarizationRunner);
     const terminal = context.nextTerminal();
     await context.service.start(context.media, 3);
@@ -468,9 +469,12 @@ describe('LocalTranscriptionService durable recording behavior', () => {
       result: { language: 'en' },
       transcription: [],
     });
-    const speakerDiarizationRunner = vi.fn(async () => [
-      { startMs: 0, endMs: 12_750, cluster: 0 },
-    ]);
+    const speakerDiarizationRunner = vi.fn(async () => ({
+      segments: [
+        { startMs: 0, endMs: 12_750, cluster: 0 },
+      ],
+      clusterConsistency: null,
+    }));
     const context = await setup(
       makeUnknownDurationRunner(emptyWhisperJson),
       speakerDiarizationRunner,
@@ -491,7 +495,7 @@ describe('LocalTranscriptionService durable recording behavior', () => {
   it('preserves trailing silence when the container duration is unknown', async () => {
     const context = await setup(
       makeUnknownDurationRunner(whisperJson),
-      async () => [],
+      async () => ({ segments: [], clusterConsistency: null }),
       false,
     );
     const terminal = context.nextTerminal();
@@ -506,9 +510,12 @@ describe('LocalTranscriptionService durable recording behavior', () => {
   });
 
   it('skips speaker separation when Whisper has no timed words', async () => {
-    const speakerDiarizationRunner = vi.fn(async () => [
-      { startMs: 0, endMs: 1_000, cluster: 0 },
-    ]);
+    const speakerDiarizationRunner = vi.fn(async () => ({
+      segments: [
+        { startMs: 0, endMs: 1_000, cluster: 0 },
+      ],
+      clusterConsistency: null,
+    }));
     const context = await setup(
       makeRunner(() => false, untimedWhisperJson),
       speakerDiarizationRunner,
@@ -528,10 +535,13 @@ describe('LocalTranscriptionService durable recording behavior', () => {
   it('recovers a delayed new-speaker opening before the transcript is saved', async () => {
     const context = await setup(
       makeRunner(() => false, delayedSpeakerWhisperJson),
-      async () => [
-        { startMs: 2_039, endMs: 5_296, cluster: 0 },
-        { startMs: 6_376, endMs: 9_228, cluster: 1 },
-      ],
+      async () => ({
+        segments: [
+          { startMs: 2_039, endMs: 5_296, cluster: 0 },
+          { startMs: 6_376, endMs: 9_228, cluster: 1 },
+        ],
+        clusterConsistency: null,
+      }),
     );
     const saveCandidates: Parameters<TranscriptRepository['save']>[0][] = [];
     const save = context.repository.save.bind(context.repository);
@@ -570,7 +580,10 @@ describe('LocalTranscriptionService durable recording behavior', () => {
       makeRunner(() => false),
       async () => {
         speakerRunnerCalled = true;
-        return [{ startMs: 0, endMs: 1_000, cluster: 0 }];
+        return {
+          segments: [{ startMs: 0, endMs: 1_000, cluster: 0 }],
+          clusterConsistency: null,
+        };
       },
       false,
     );

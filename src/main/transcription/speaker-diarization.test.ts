@@ -84,7 +84,48 @@ describe('speaker diarization child process', () => {
           segments: [{ start: 0, end: 1, speaker: 0 }],
         }),
       ),
-    ).toEqual([{ startMs: 0, endMs: 1_000, cluster: 0 }]);
+    ).toEqual({
+      segments: [{ startMs: 0, endMs: 1_000, cluster: 0 }],
+      clusterConsistency: null,
+    });
+    const consistency = {
+      cluster: 2,
+      totalSegmentCount: 8,
+      selectedSegmentCount: 6,
+      readySegmentCount: 5,
+      skippedSegmentCount: 1,
+      pairCount: 10,
+      minimumSimilarity: 0.151,
+      medianSimilarity: 0.289,
+      maximumSimilarity: 0.352,
+    };
+    expect(
+      parseDiarizationChildJson(
+        JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          segments: [{ start: 0, end: 1, speaker: 0 }],
+          segmentConsistency: [consistency],
+        }),
+      ),
+    ).toEqual({
+      segments: [{ startMs: 0, endMs: 1_000, cluster: 0 }],
+      clusterConsistency: [consistency],
+    });
+    // Invalid diagnostics are dropped without failing the diarization.
+    expect(
+      parseDiarizationChildJson(
+        JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          segments: [{ start: 0, end: 1, speaker: 0 }],
+          segmentConsistency: [{ ...consistency, pairCount: 3 }],
+        }),
+      ),
+    ).toEqual({
+      segments: [{ startMs: 0, endMs: 1_000, cluster: 0 }],
+      clusterConsistency: null,
+    });
     expect(() => parseDiarizationChildJson('{"segments":[]}')).toThrow(
       SpeakerDiarizationError,
     );
@@ -122,9 +163,10 @@ describe('speaker diarization child process', () => {
       };
     `);
 
-    await expect(runSpeakerDiarization(options)).resolves.toEqual([
-      { startMs: 1_250, endMs: 2_500, cluster: 3 },
-    ]);
+    await expect(runSpeakerDiarization(options)).resolves.toEqual({
+      segments: [{ startMs: 1_250, endMs: 2_500, cluster: 3 }],
+      clusterConsistency: null,
+    });
   });
 
   it('uses a fixed cluster count when the expected speakers are known', async () => {
@@ -143,7 +185,7 @@ describe('speaker diarization child process', () => {
 
     await expect(
       runSpeakerDiarization({ ...options, expectedSpeakerCount: 3 }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ segments: [], clusterConsistency: null });
   });
 
   it('contains a child crash and reports it as an unavailable speaker pass', async () => {
@@ -195,7 +237,7 @@ describe('speaker diarization child process', () => {
       };
     `);
 
-    await expect(runSpeakerDiarization(options)).resolves.toEqual([]);
+    await expect(runSpeakerDiarization(options)).resolves.toEqual({ segments: [], clusterConsistency: null });
   });
 
   it('rejects invalid timeout values before launching a child', async () => {
