@@ -110,6 +110,15 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.restoreMainWindow),
   requestActivityAction: (action: ActivityAction) =>
     ipcRenderer.invoke(IPC_CHANNELS.requestActivityAction, action),
+  retranscribeTranscript: (
+    transcriptId: string,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.retranscribeTranscript,
+      transcriptId,
+      expectedSpeakerCount,
+    ),
   getAppSettings: () => ipcRenderer.invoke(IPC_CHANNELS.getAppSettings),
   updateAppSettings: (input: UpdateAppSettingsInput) =>
     ipcRenderer.invoke(IPC_CHANNELS.updateAppSettings, input),

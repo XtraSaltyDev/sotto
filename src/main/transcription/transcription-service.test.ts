@@ -428,6 +428,44 @@ describe('LocalTranscriptionService durable recording behavior', () => {
     await expect(context.repository.get(RECORDING_ID)).resolves.toBeNull();
   });
 
+  it('replaces a transcript in place while preserving title, tags, and creation date', async () => {
+    const context = await setup(makeRunner(() => false));
+    const firstTerminal = context.nextTerminal();
+    await context.service.start(context.media);
+    await expect(firstTerminal).resolves.toMatchObject({ stage: 'completed' });
+
+    const original = await context.repository.get(RECORDING_ID);
+    if (!original) throw new Error('The first transcript was not saved.');
+    await context.repository.save({
+      ...original,
+      title: 'Quarterly sync',
+      tags: ['finance', 'q3'],
+    });
+
+    // Re-transcription targets the transcript id directly, with no
+    // recording bookkeeping involved.
+    const secondTerminal = context.nextTerminal();
+    await context.service.start({
+      ...context.media,
+      sourceType: 'imported-file',
+      recordingId: undefined,
+      transcriptId: RECORDING_ID,
+    });
+    await expect(secondTerminal).resolves.toMatchObject({
+      stage: 'completed',
+      id: RECORDING_ID,
+    });
+
+    const replaced = await context.repository.get(RECORDING_ID);
+    expect(replaced).toMatchObject({
+      id: RECORDING_ID,
+      title: 'Quarterly sync',
+      tags: ['finance', 'q3'],
+      createdAt: original.createdAt,
+    });
+    expect(replaced?.localAiMeetingSummary ?? null).toBeNull();
+  });
+
   it('saves stable speaker references when local clustering succeeds', async () => {
     const speakerDiarizationRunner = vi.fn(async () => ({
       segments: [{ startMs: 0, endMs: 1_000, cluster: 4 }],

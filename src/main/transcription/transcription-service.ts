@@ -52,6 +52,10 @@ const RUNNING_STAGES: ReadonlySet<TranscriptionStage> = new Set([
 ]);
 const WHISPER_VERSION = '1.9.1';
 const MODEL_NAME = 'small.en';
+
+/** The saved engine record names the model actually used for the job. */
+const transcriptionModelName = (modelPath: string): string =>
+  /^ggml-(.+)\.bin$/u.exec(path.basename(modelPath))?.[1] ?? MODEL_NAME;
 const MAX_WINDOWS_WHISPER_THREADS = 8;
 
 export const resolveWindowsWhisperThreads = (parallelism: number): number => {
@@ -198,7 +202,13 @@ export class LocalTranscriptionService {
     if (media.recordingId && !isTranscriptId(media.recordingId)) {
       throw new TypeError('A linked recording id must be a UUID.');
     }
-    const id = media.recordingId?.toLowerCase() ?? createTranscriptId();
+    if (media.transcriptId && !isTranscriptId(media.transcriptId)) {
+      throw new TypeError('A re-transcription target id must be a UUID.');
+    }
+    const id =
+      media.recordingId?.toLowerCase() ??
+      media.transcriptId?.toLowerCase() ??
+      createTranscriptId();
     const job: TranscriptionJobSnapshot = {
       id,
       sourceName: media.name,
@@ -317,7 +327,17 @@ export class LocalTranscriptionService {
       });
 
       this.update('transcribing', 0.2, 'Running the local speech model…');
-      await this.runWhisper(normalizedPath, outputPrefix, outputJsonPath, signal);
+      const transcription = (await this.options.transcriptionOptions?.()) ?? {
+        modelPath: this.options.runtime.modelPath,
+        language: 'en',
+      };
+      await this.runWhisper(
+        normalizedPath,
+        outputPrefix,
+        outputJsonPath,
+        signal,
+        transcription,
+      );
 
       const outputStats = await stat(outputJsonPath);
       if (!outputStats.isFile() || outputStats.size > MAX_WHISPER_JSON_BYTES) {
@@ -387,12 +407,15 @@ export class LocalTranscriptionService {
         Math.round((normalizedDurationSeconds ?? 0) * 1_000),
       );
       const completedAt = new Date().toISOString();
+      // A job that reuses an existing transcript id replaces its content in
+      // place; the user's title, tags, and original creation date survive.
+      const existingRecord = await this.options.repository.get(job.id);
       const record: TranscriptRecord = {
         schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
         id: job.id,
-        title: titleFromMediaName(media.name),
-        tags: [],
-        createdAt: job.startedAt,
+        title: existingRecord?.title ?? titleFromMediaName(media.name),
+        tags: existingRecord ? [...existingRecord.tags] : [],
+        createdAt: existingRecord?.createdAt ?? job.startedAt,
         completedAt,
         ...(media.recordingId ? { recordingId: media.recordingId } : {}),
         source: {
@@ -405,7 +428,7 @@ export class LocalTranscriptionService {
         language: normalized.language ?? 'en',
         engine: {
           name: 'whisper.cpp',
-          model: MODEL_NAME,
+          model: transcriptionModelName(transcription.modelPath),
           version: WHISPER_VERSION,
         },
         speakerAnalysis: aligned.speakerAnalysis,
@@ -472,12 +495,9 @@ export class LocalTranscriptionService {
     outputPrefix: string,
     outputJsonPath: string,
     signal: AbortSignal,
+    transcription: { modelPath: string; language: string },
   ): Promise<void> {
     const platform = this.options.platform ?? process.platform;
-    const transcription = (await this.options.transcriptionOptions?.()) ?? {
-      modelPath: this.options.runtime.modelPath,
-      language: 'en',
-    };
     const threadArgs =
       platform === 'win32'
         ? [

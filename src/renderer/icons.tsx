@@ -114,6 +114,13 @@ export const ShareIcon = (props: IconProps) => (
   </svg>
 );
 
+export const RefreshIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+    <path d="M20 3v4h-4" />
+  </svg>
+);
+
 export const GearIcon = (props: IconProps) => (
   <svg {...iconDefaults} {...props}>
     <circle cx="12" cy="12" r="3.25" />

@@ -30,6 +30,7 @@ import {
 import { parseTranscriptTagDraft } from './transcript-library';
 import {
   ArrowLeftIcon,
+  RefreshIcon,
   ShareIcon,
   SpinnerIcon,
   TrashIcon,
@@ -458,6 +459,7 @@ export const TranscriptView = ({
   onBack,
   onDelete,
   onDeletePlayback,
+  onRetranscribe,
   onCopy,
   onExport,
   onExportRecording,
@@ -476,6 +478,7 @@ export const TranscriptView = ({
   onBack: () => void;
   onDelete: () => void;
   onDeletePlayback: () => void;
+  onRetranscribe: () => void;
   onCopy: (kind: TranscriptCopyKind) => void;
   onExport: (format: TranscriptExportFormat) => void;
   onExportRecording: () => void;
@@ -620,6 +623,20 @@ export const TranscriptView = ({
             onExport={onExport}
             onExportRecording={onExportRecording}
           />
+          <button
+            className="icon-button"
+            disabled={transcript.playback.state !== 'available'}
+            onClick={onRetranscribe}
+            title={
+              transcript.playback.state === 'available'
+                ? 'Transcribe this meeting again with the current model and language'
+                : 'The retained audio was deleted, so this meeting cannot be transcribed again'
+            }
+            type="button"
+          >
+            <RefreshIcon />
+            <span>Re-transcribe</span>
+          </button>
           <button className="icon-button icon-button--danger" onClick={onDelete} type="button">
             <TrashIcon />
             <span>Delete transcript</span>

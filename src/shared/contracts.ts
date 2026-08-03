@@ -17,6 +17,7 @@ export const IPC_CHANNELS = {
   updateTranscriptSegment: 'sotto:transcript:segment:update',
   renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
   deleteTranscript: 'sotto:transcript:delete',
+  retranscribeTranscript: 'sotto:transcript:retranscribe',
   exportTranscript: 'sotto:transcript:export',
   copyTranscriptOutput: 'sotto:transcript:copy-output',
   insertDictationText: 'sotto:dictation:insert-text',
@@ -351,6 +352,11 @@ export type GenerateLocalAiMeetingSummaryResult =
   | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
+export type RetranscribeTranscriptResult =
+  | { outcome: 'started'; job: TranscriptionJobSnapshot }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
 export type ImportMediaResult =
   | { outcome: 'cancelled' }
   | { outcome: 'rejected'; reason: string; code: TranscriptionErrorCode }
@@ -552,6 +558,10 @@ export interface SottoDesktopApi {
     label: string,
   ): Promise<RenameTranscriptSpeakerResult>;
   deleteTranscript(transcriptId: string): Promise<DeleteTranscriptResult>;
+  retranscribeTranscript(
+    transcriptId: string,
+    expectedSpeakerCount?: ExpectedSpeakerCount,
+  ): Promise<RetranscribeTranscriptResult>;
   deletePlayback(transcriptId: string): Promise<DeletePlaybackResult>;
   exportTranscript(
     transcriptId: string,

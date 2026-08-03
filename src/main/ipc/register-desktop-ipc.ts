@@ -40,6 +40,7 @@ import {
   type LocalAiConnectionSummary,
   type OpenRecordingSettingsResult,
   type RecordingKind,
+  type RetranscribeTranscriptResult,
   type RetryRecordingResult,
   type RequestRecordingPermissionsResult,
   type RenameTranscriptSpeakerResult,
@@ -291,6 +292,28 @@ export const registerDesktopIpc = ({
     rendererTrust(event);
     return controller.getState();
   });
+
+  ipcMain.handle(
+    IPC_CHANNELS.retranscribeTranscript,
+    async (
+      event,
+      transcriptId: unknown,
+      rawExpectedSpeakerCount: unknown,
+    ): Promise<RetranscribeTranscriptResult> => {
+      trust(event);
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      const expectedSpeakerCount = parseExpectedSpeakerCount(
+        rawExpectedSpeakerCount,
+      );
+      if (!expectedSpeakerCount.ok) {
+        return { outcome: 'rejected', reason: EXPECTED_SPEAKER_COUNT_REASON };
+      }
+      return controller.retranscribeTranscript(
+        transcriptId,
+        expectedSpeakerCount.value,
+      );
+    },
+  );
 
   ipcMain.handle(
     IPC_CHANNELS.getAppSettings,
@@ -1070,6 +1093,7 @@ export const registerDesktopIpc = ({
     unsubscribe();
     for (const channel of [
       IPC_CHANNELS.getAppState,
+      IPC_CHANNELS.retranscribeTranscript,
       IPC_CHANNELS.getAppSettings,
       IPC_CHANNELS.updateAppSettings,
       IPC_CHANNELS.revealTranscriptsFolder,

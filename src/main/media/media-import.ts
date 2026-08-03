@@ -32,6 +32,12 @@ export interface SelectedMedia {
   sourceType?: 'imported-file' | 'recording';
   /** Links a durable live recording to its job and transcript without exposing a path. */
   recordingId?: string;
+  /**
+   * Re-transcription target: reuses an existing transcript's identity so
+   * the regenerated content replaces it in place, without any recording
+   * bookkeeping.
+   */
+  transcriptId?: string;
   /** Only true processing inputs may be removed after the pipeline consumes them. */
   cleanupAfterTranscription?: boolean;
 }

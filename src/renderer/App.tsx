@@ -1164,6 +1164,33 @@ const MainApp = ({
     }
   };
 
+  const handleRetranscribe = async () => {
+    if (!window.sotto || !selectedId) return;
+    if (
+      !window.confirm(
+        'Transcribe this meeting again with the current model and language? The transcript text, speakers, and summaries will be replaced; the title and tags are kept.',
+      )
+    ) {
+      return;
+    }
+    setNotice(null);
+    try {
+      const result = await window.sotto.retranscribeTranscript(selectedId);
+      if (result.outcome === 'started') {
+        setSelectedId(null);
+        showInfo(
+          'Re-transcription started with the current model and language.',
+        );
+      } else if (result.outcome === 'not-found') {
+        showError('That transcript is no longer available.');
+      } else {
+        showError(result.reason);
+      }
+    } catch {
+      showError('Sotto could not start transcribing this meeting again.');
+    }
+  };
+
   const handleDeletePlayback = async () => {
     if (!window.sotto || !selectedId || transcript?.playback.state !== 'available') {
       return;
@@ -1333,6 +1360,7 @@ const MainApp = ({
           }}
           onDelete={() => void handleDelete()}
           onDeletePlayback={() => void handleDeletePlayback()}
+          onRetranscribe={() => void handleRetranscribe()}
           onCopy={(kind) => void handleCopyOutput(kind)}
           onExport={(format) => void handleExport(format)}
           onExportRecording={() => {

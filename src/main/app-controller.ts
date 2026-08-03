@@ -504,6 +504,79 @@ export class AppController {
       : null;
   }
 
+  /**
+   * Regenerates a transcript in place from its retained audio using the
+   * transcription settings in effect now (model and language resolve per
+   * job). Recording-sourced transcripts re-run from the durable recording;
+   * imported ones from the retained playback WAV. Title, tags, and the
+   * creation date survive; text, speakers, and summaries are replaced.
+   */
+  async retranscribeTranscript(
+    transcriptId: string,
+    expectedSpeakerCount: ExpectedSpeakerCount = null,
+  ): Promise<
+    | { outcome: 'started'; job: TranscriptionJobSnapshot }
+    | { outcome: 'not-found' }
+    | { outcome: 'rejected'; reason: string }
+  > {
+    const record = await this.repository.get(transcriptId);
+    if (!record) return { outcome: 'not-found' };
+    try {
+      this.assertNoLiveRecordingForTranscription();
+      if (record.source.type === 'recording') {
+        const recordingId = record.recordingId ?? record.id;
+        await this.recordingUpdateChain;
+        const media =
+          await this.recordingService.getMediaForTranscription(recordingId);
+        if (!media) {
+          return {
+            outcome: 'rejected',
+            reason:
+              'The original recording is no longer saved, so this meeting cannot be transcribed again.',
+          };
+        }
+        const job = await this.startRecordingTranscription(
+          recordingId,
+          media,
+          expectedSpeakerCount,
+        );
+        return { outcome: 'started', job };
+      }
+
+      const playback = await this.playbackRepository.get(record.id);
+      if (!playback) {
+        return {
+          outcome: 'rejected',
+          reason:
+            'The retained audio copy was deleted, so this meeting cannot be transcribed again.',
+        };
+      }
+      const job = await this.startTranscription(
+        {
+          extension: '.wav',
+          mediaKind: 'audio',
+          name: record.source.name,
+          path: playback.path,
+          sizeBytes: playback.sizeBytes,
+          sourceType: 'imported-file',
+          transcriptId: record.id,
+          cleanupAfterTranscription: false,
+        },
+        expectedSpeakerCount,
+      );
+      return { outcome: 'started', job };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof TranscriptionStartError ||
+          error instanceof LiveRecordingError
+            ? error.message
+            : 'Sotto could not start transcribing this meeting again.',
+      };
+    }
+  }
+
   cancelTranscription(jobId: string): boolean {
     return this.service?.cancel(jobId) ?? false;
   }
