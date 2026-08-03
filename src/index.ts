@@ -43,6 +43,10 @@ import {
   UpdateService,
   updatePlatformKey,
 } from './main/updates/update-service';
+import {
+  consumePendingPermissionRepair,
+  markPendingPermissionRepair,
+} from './main/updates/post-update-permissions';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -394,6 +398,26 @@ const initialize = async (): Promise<void> => {
     throw lastError;
   };
 
+  const repairRecordingPermissions = async (): Promise<
+    'native-requested' | 'settings-opened'
+  > => {
+    const granted = await requestMacScreenRecordingAccess({
+      appPath: app.getAppPath(),
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+    });
+    if (!granted) {
+      await openRecordingSettings();
+      return 'settings-opened';
+    }
+
+    setTimeout(() => {
+      app.relaunch({ args: process.argv.slice(1) });
+      app.quit();
+    }, 500);
+    return 'native-requested';
+  };
+
   removeIpcHandlers = registerDesktopIpc({
     controller,
     localAiService,
@@ -406,6 +430,16 @@ const initialize = async (): Promise<void> => {
     openRecordingSettings,
     revealDownloadedUpdate: (filePath) => shell.showItemInFolder(filePath),
     relaunchForUpdate: () => {
+      // The swapped-in bundle is a new ad-hoc-signed app to macOS, so the
+      // next launch must re-request recording access on its own.
+      void markPendingPermissionRepair(app.getPath('userData')).catch(
+        (error: unknown) => {
+          console.warn(
+            '[sotto] Could not record the pending permission repair.',
+            error,
+          );
+        },
+      );
       // Give the renderer a beat to receive the install result before the
       // process exits and the swapped-in version starts.
       setTimeout(() => {
@@ -413,23 +447,7 @@ const initialize = async (): Promise<void> => {
         app.quit();
       }, 400);
     },
-    requestRecordingPermissions: async () => {
-      const granted = await requestMacScreenRecordingAccess({
-        appPath: app.getAppPath(),
-        isPackaged: app.isPackaged,
-        resourcesPath: process.resourcesPath,
-      });
-      if (!granted) {
-        await openRecordingSettings();
-        return 'settings-opened';
-      }
-
-      setTimeout(() => {
-        app.relaunch({ args: process.argv.slice(1) });
-        app.quit();
-      }, 500);
-      return 'native-requested';
-    },
+    requestRecordingPermissions: repairRecordingPermissions,
   });
   if (process.platform === 'darwin') {
     Menu.setApplicationMenu(
@@ -453,6 +471,32 @@ const initialize = async (): Promise<void> => {
     console.warn(
       `[sotto] The dictation shortcut ${DICTATION_ACCELERATOR} is already in use.`,
     );
+  }
+
+  // First launch after an in-place update: run the recording-permission
+  // repair without waiting for a click. The marker is consumed before the
+  // repair so the attempt cannot loop across the relaunch the repair
+  // itself performs; the OS approval prompt stays the only user step.
+  if (process.platform === 'darwin') {
+    void consumePendingPermissionRepair(app.getPath('userData'))
+      .then((pending) => {
+        if (!pending) return;
+        if (liveRecordingCapability().state !== 'permission-required') return;
+        setTimeout(() => {
+          repairRecordingPermissions().catch((error: unknown) => {
+            console.warn(
+              '[sotto] Automatic post-update permission repair failed.',
+              error,
+            );
+          });
+        }, 1_500);
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          '[sotto] Could not check for a pending permission repair.',
+          error,
+        );
+      });
   }
 };
 

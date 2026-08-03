@@ -79,7 +79,9 @@ import { LocalAiSettings } from './LocalAiSettings';
 import {
   DISMISSED_UPDATE_VERSION_KEY,
   shouldOfferUpdate,
+  UpdateBadge,
   UpdateNotice,
+  UpdatePopup,
   type AppUpdateNoticeState,
 } from './UpdateNotice';
 import {
@@ -1698,6 +1700,7 @@ const MainApp = ({
   const [dismissedStorageMessage, setDismissedStorageMessage] =
     useState<string | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateNoticeState | null>(null);
+  const [isUpdatePopupOpen, setIsUpdatePopupOpen] = useState(false);
   const [libraryViewState, setLibraryViewState] =
     useState<TranscriptLibraryViewState>({
       query: '',
@@ -1807,6 +1810,8 @@ const MainApp = ({
           return current;
         }
         if (result.outcome === 'update-available') {
+          // An explicit menu check deserves an immediate, visible answer.
+          setIsUpdatePopupOpen(true);
           return {
             phase: 'available',
             version: result.update.version,
@@ -1903,39 +1908,73 @@ const MainApp = ({
   const dismissAppUpdate = () => {
     if (
       appUpdate &&
-      (appUpdate.phase === 'available' || appUpdate.phase === 'failed')
+      (appUpdate.phase === 'available' ||
+        appUpdate.phase === 'failed' ||
+        appUpdate.phase === 'cancelled')
     ) {
       window.localStorage.setItem(
         DISMISSED_UPDATE_VERSION_KEY,
         appUpdate.version,
       );
     }
+    setIsUpdatePopupOpen(false);
     setAppUpdate(null);
   };
 
-  const updateNotice = appUpdate ? (
-    <UpdateNotice
-      onDismiss={dismissAppUpdate}
+  const startAppUpdate = () => {
+    if (!appUpdate) return;
+    if (appUpdate.phase === 'available') {
+      void downloadAppUpdate(appUpdate.version, appUpdate.size);
+    } else if (
+      appUpdate.phase === 'failed' ||
+      appUpdate.phase === 'cancelled'
+    ) {
+      void downloadAppUpdate(appUpdate.version);
+    }
+  };
+
+  // The badge starts the update immediately and shows progress; the popup
+  // opens without starting anything when the flow is already underway.
+  const openUpdatePopup = () => {
+    setIsUpdatePopupOpen(true);
+    if (appUpdate?.phase === 'available') {
+      void downloadAppUpdate(appUpdate.version, appUpdate.size);
+    }
+  };
+
+  const updateBadge = appUpdate ? (
+    <UpdateBadge onOpen={openUpdatePopup} state={appUpdate} />
+  ) : null;
+
+  const updatePopup = isUpdatePopupOpen &&
+    appUpdate &&
+    appUpdate.phase !== 'up-to-date' &&
+    appUpdate.phase !== 'check-failed' ? (
+    <UpdatePopup
       onCancel={() => {
         if (appUpdate.phase === 'downloading') {
           void cancelAppUpdate(appUpdate.version);
         }
       }}
-      onDownload={() => {
-        if (appUpdate.phase === 'available') {
-          void downloadAppUpdate(appUpdate.version, appUpdate.size);
-        } else if (
-          appUpdate.phase === 'failed' ||
-          appUpdate.phase === 'cancelled'
-        ) {
-          void downloadAppUpdate(appUpdate.version);
-        }
-      }}
+      onClose={() => setIsUpdatePopupOpen(false)}
+      onDismiss={dismissAppUpdate}
+      onDownload={startAppUpdate}
       onInstall={() => {
         if (appUpdate.phase === 'ready') {
           void installAppUpdate(appUpdate.version);
         }
       }}
+      state={appUpdate}
+    />
+  ) : null;
+
+  // The sidebar footer card now serves only manual-check outcomes; every
+  // other update phase lives in the brand badge and its popup.
+  const updateNotice = appUpdate &&
+    (appUpdate.phase === 'up-to-date' || appUpdate.phase === 'check-failed') ? (
+    <UpdateNotice
+      onDismiss={dismissAppUpdate}
+      onDownload={startAppUpdate}
       state={appUpdate}
     />
   ) : null;
@@ -2821,8 +2860,10 @@ const MainApp = ({
           onNavigate={setCurrentPage}
           onToggleTheme={onToggleTheme}
           theme={theme}
+          updateBadge={updateBadge}
           updateNotice={updateNotice}
         />
+        {updatePopup}
         <LocalAiSettings />
       </div>
     );
@@ -2836,8 +2877,10 @@ const MainApp = ({
           onNavigate={setCurrentPage}
           onToggleTheme={onToggleTheme}
           theme={theme}
+          updateBadge={updateBadge}
           updateNotice={updateNotice}
         />
+        {updatePopup}
         <TranscriptView
           localAiConnection={localAiConnection}
           localAiError={localAiError}
@@ -2873,8 +2916,10 @@ const MainApp = ({
         onNavigate={setCurrentPage}
         onToggleTheme={onToggleTheme}
         theme={theme}
+        updateBadge={updateBadge}
         updateNotice={updateNotice}
       />
+      {updatePopup}
       <main className={`workspace${showNewTranscription ? '' : ' workspace--library-home'}`}>
         <header className="topbar">
           <h1>Transcripts</h1>
@@ -3109,16 +3154,22 @@ const Sidebar = ({
   onNavigate,
   onToggleTheme,
   theme,
+  updateBadge,
   updateNotice,
 }: {
   currentPage: AppPage;
   onNavigate: (page: AppPage) => void;
   onToggleTheme: () => void;
   theme: AppTheme;
+  updateBadge?: ReactNode;
   updateNotice?: ReactNode;
 }) => (
   <aside className="sidebar" aria-label="Sotto navigation">
-    <div className="brand"><BrandIcon className="brand__mark" /><span>Sotto</span></div>
+    <div className="brand">
+      <BrandIcon className="brand__mark" />
+      <span>Sotto</span>
+      {updateBadge}
+    </div>
     <nav className="navigation" aria-label="Primary">
       <button
         className={`navigation__item${currentPage === 'transcripts' ? ' navigation__item--active' : ''}`}

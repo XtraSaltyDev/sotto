@@ -5,7 +5,10 @@ import {
   formatUpdateProgress,
   formatUpdateSize,
   shouldOfferUpdate,
+  UpdateBadge,
   UpdateNotice,
+  UpdatePopup,
+  updateProgressPercent,
 } from './UpdateNotice';
 
 describe('UpdateNotice', () => {
@@ -178,5 +181,103 @@ describe('UpdateNotice', () => {
     expect(formatUpdateProgress(50, 100)).toBe('50%');
     expect(formatUpdateProgress(200, 100)).toBe('100%');
     expect(formatUpdateProgress(0, 0)).toBe('Starting…');
+  });
+});
+
+describe('UpdateBadge', () => {
+  it('shows a compact badge with a hover label while an update is available', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateBadge
+        onOpen={vi.fn()}
+        state={{ phase: 'available', version: '0.2.0', size: 626321192 }}
+      />,
+    );
+
+    expect(markup).toContain('update-badge');
+    expect(markup).toContain('aria-label="Sotto update: Update"');
+    expect(markup).toContain('<span class="update-badge__label">Update</span>');
+  });
+
+  it('switches the badge to Restart once the update is staged', () => {
+    const markup = renderToStaticMarkup(
+      <UpdateBadge onOpen={vi.fn()} state={{ phase: 'ready', version: '0.2.0' }} />,
+    );
+
+    expect(markup).toContain('update-badge--ready');
+    expect(markup).toContain('Restart');
+  });
+
+  it('renders nothing for manual-check outcomes', () => {
+    expect(
+      renderToStaticMarkup(
+        <UpdateBadge
+          onOpen={vi.fn()}
+          state={{ phase: 'up-to-date', version: '0.2.0' }}
+        />,
+      ),
+    ).toBe('');
+  });
+});
+
+describe('UpdatePopup', () => {
+  const handlers = {
+    onCancel: vi.fn(),
+    onClose: vi.fn(),
+    onDismiss: vi.fn(),
+    onDownload: vi.fn(),
+    onInstall: vi.fn(),
+  };
+
+  it('shows a determinate progress bar while downloading', () => {
+    const markup = renderToStaticMarkup(
+      <UpdatePopup
+        {...handlers}
+        state={{
+          phase: 'downloading',
+          version: '0.2.0',
+          receivedBytes: 313160596,
+          totalBytes: 626321192,
+        }}
+      />,
+    );
+
+    expect(markup).toContain('role="dialog"');
+    expect(markup).toContain('role="progressbar"');
+    expect(markup).toContain('aria-valuenow="50"');
+    expect(markup).toContain('width:50%');
+    expect(markup).toContain('50% of 597 MB');
+    expect(markup).toContain('Cancel');
+  });
+
+  it('offers Restart now when the update is staged', () => {
+    const markup = renderToStaticMarkup(
+      <UpdatePopup {...handlers} state={{ phase: 'ready', version: '0.2.0' }} />,
+    );
+
+    expect(markup).toContain('Restart to finish updating');
+    expect(markup).toContain('Restart now');
+    expect(markup).toContain('Later');
+  });
+
+  it('offers a retry after a failure', () => {
+    const markup = renderToStaticMarkup(
+      <UpdatePopup
+        {...handlers}
+        state={{
+          phase: 'failed',
+          reason: 'The update download ended early.',
+          version: '0.2.0',
+        }}
+      />,
+    );
+
+    expect(markup).toContain('Update failed');
+    expect(markup).toContain('Retry');
+  });
+
+  it('clamps progress percentages and reports unknown totals as null', () => {
+    expect(updateProgressPercent(50, 100)).toBe(50);
+    expect(updateProgressPercent(200, 100)).toBe(100);
+    expect(updateProgressPercent(10, 0)).toBeNull();
   });
 });
