@@ -1015,6 +1015,101 @@ describe('transcript presentation', () => {
     expect(controller.getState().recordings).toEqual([]);
   });
 
+  it('deletes a linked transcript and saved recording together', async () => {
+    const { controller, recordingRepository, transcriptRepository } =
+      await makeLiveRecordingController();
+
+    await expect(controller.deleteMeeting(record.id, record.id)).resolves.toEqual({
+      outcome: 'deleted',
+    });
+
+    await expect(transcriptRepository.get(record.id)).resolves.toBeNull();
+    await expect(
+      readFile(recordingRepository.durablePath(record.id), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(controller.getState().transcripts).toEqual([]);
+    expect(controller.getState().recordings).toEqual([]);
+  });
+
+  it('does not delete a recording when the requested transcript is not linked to it', async () => {
+    const { controller, recordingRepository, transcriptRepository } =
+      await makeLiveRecordingController();
+    const unrelatedTranscript: TranscriptRecord = {
+      ...record,
+      id: '6c6be6e2-5d03-49a1-80f2-a6d849d46b68',
+      source: {
+        type: 'imported-file',
+        name: 'unrelated.mp3',
+        mediaKind: 'audio',
+        sizeBytes: 42,
+      },
+    };
+    await transcriptRepository.save(unrelatedTranscript);
+
+    await expect(
+      controller.deleteMeeting(record.id, unrelatedTranscript.id),
+    ).resolves.toEqual({ outcome: 'not-found' });
+
+    await expect(transcriptRepository.get(record.id)).resolves.toMatchObject({
+      id: record.id,
+    });
+    await expect(transcriptRepository.get(unrelatedTranscript.id)).resolves.toMatchObject({
+      id: unrelatedTranscript.id,
+    });
+    await expect(
+      readFile(recordingRepository.durablePath(record.id), 'utf8'),
+    ).resolves.toBe('durable webm');
+  });
+
+  it('does not delete either part of a meeting while transcription is active', async () => {
+    const { controller, recordingRepository, transcriptRepository } =
+      await makeLiveRecordingController();
+    await recordingRepository.updateTranscription(record.id, {
+      state: 'transcribing',
+      updatedAt: '2026-07-27T12:06:00.000Z',
+      message: 'Transcribing locally.',
+      jobId: record.id,
+    });
+
+    await expect(controller.deleteMeeting(record.id, record.id)).resolves.toMatchObject({
+      outcome: 'rejected',
+    });
+
+    await expect(transcriptRepository.get(record.id)).resolves.toMatchObject({
+      id: record.id,
+    });
+    await expect(
+      readFile(recordingRepository.durablePath(record.id), 'utf8'),
+    ).resolves.toBe('durable webm');
+  });
+
+  it('reports a partial deletion and refreshes the remaining recording', async () => {
+    const { controller, recordingRepository, transcriptRepository } =
+      await makeLiveRecordingController();
+    const recordingService = (
+      controller as unknown as {
+        recordingService: { delete: (recordingId: string) => Promise<boolean> };
+      }
+    ).recordingService;
+    vi.spyOn(recordingService, 'delete').mockRejectedValue(
+      new Error('The recording is locked.'),
+    );
+
+    await expect(controller.deleteMeeting(record.id, record.id)).resolves.toEqual({
+      outcome: 'partial',
+      reason: 'The transcript was deleted, but Sotto could not delete the saved recording.',
+    });
+
+    await expect(transcriptRepository.get(record.id)).resolves.toBeNull();
+    await expect(
+      readFile(recordingRepository.durablePath(record.id), 'utf8'),
+    ).resolves.toBe('durable webm');
+    expect(controller.getState().transcripts).toEqual([]);
+    expect(controller.getState().recordings).toEqual([
+      expect.objectContaining({ id: record.id }),
+    ]);
+  });
+
   it('deletes imported playback independently and with its transcript', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-imported-playback-'));
     temporaryRoots.push(root);

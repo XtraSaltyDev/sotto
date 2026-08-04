@@ -23,6 +23,7 @@ import type {
   TranscriptExportFormat,
   TranscriptionJobSnapshot,
   LocalAiMeetingSummary,
+  DeleteMeetingResult,
 } from '../shared/contracts';
 import type { SelectedMedia } from './media/media-import';
 import {
@@ -911,6 +912,57 @@ export class AppController {
     return deleted;
   }
 
+  async deleteMeeting(
+    recordingId: string,
+    transcriptId: string,
+  ): Promise<DeleteMeetingResult> {
+    const [record, saved] = await Promise.all([
+      this.repository.get(transcriptId),
+      this.recordingService.getSavedRecording(recordingId),
+    ]);
+    const normalizedRecordingId = recordingId.toLowerCase();
+    if (
+      !record ||
+      !saved ||
+      record.source.type !== 'recording' ||
+      (record.recordingId ?? record.id) !== normalizedRecordingId
+    ) {
+      return { outcome: 'not-found' };
+    }
+    if (
+      saved.transcription.state === 'transcribing' ||
+      (
+        this.activeJob?.recordingId === normalizedRecordingId &&
+        isRunningTranscriptionStage(this.activeJob.stage)
+      )
+    ) {
+      return {
+        outcome: 'rejected',
+        reason: 'Cancel transcription before deleting this meeting.',
+      };
+    }
+    if (saved.transcription.transcriptId !== record.id) {
+      return { outcome: 'not-found' };
+    }
+
+    if (!(await this.repository.delete(record.id))) {
+      return { outcome: 'not-found' };
+    }
+
+    try {
+      if (!(await this.recordingService.delete(saved.id))) {
+        return await this.finishPartialMeetingDeletion(saved.id, record.id);
+      }
+    } catch {
+      return this.finishPartialMeetingDeletion(saved.id, record.id);
+    }
+
+    await this.refreshTranscript(record.id);
+    await this.reloadRecordings();
+    this.emit();
+    return { outcome: 'deleted' };
+  }
+
   async dispose(): Promise<void> {
     await this.recordingService.dispose();
     await this.service?.dispose();
@@ -961,6 +1013,25 @@ export class AppController {
     if (['completed', 'failed', 'cancelled'].includes(job.stage)) {
       this.drainImportQueue();
     }
+  }
+
+  private async finishPartialMeetingDeletion(
+    recordingId: string,
+    transcriptId: string,
+  ): Promise<DeleteMeetingResult> {
+    await this.recordingService
+      .markReady(
+        recordingId,
+        'The transcript was deleted. The original recording is ready to transcribe again.',
+      )
+      .catch(() => undefined);
+    await this.refreshTranscript(transcriptId);
+    await this.reloadRecordings();
+    this.emit();
+    return {
+      outcome: 'partial',
+      reason: 'The transcript was deleted, but Sotto could not delete the saved recording.',
+    };
   }
 
   /**

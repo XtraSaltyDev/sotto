@@ -7,6 +7,7 @@ export const IPC_CHANNELS = {
   cancelLiveRecording: 'sotto:recording:cancel',
   retryRecording: 'sotto:recording:retry',
   deleteRecording: 'sotto:recording:delete',
+  deleteMeeting: 'sotto:meeting:delete',
   exportRecording: 'sotto:recording:export',
   openRecordingSettings: 'sotto:recording:settings',
   requestRecordingPermissions: 'sotto:recording:permissions:request',
@@ -398,6 +399,12 @@ export type DeleteRecordingResult =
   | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
+export type DeleteMeetingResult =
+  | { outcome: 'deleted' }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string }
+  | { outcome: 'partial'; reason: string };
+
 export type ExportRecordingResult =
   | { outcome: 'cancelled' }
   | { outcome: 'saved'; fileName: string }
@@ -535,6 +542,10 @@ export interface SottoDesktopApi {
     expectedSpeakerCount?: ExpectedSpeakerCount,
   ): Promise<RetryRecordingResult>;
   deleteRecording(recordingId: string): Promise<DeleteRecordingResult>;
+  deleteMeeting(
+    recordingId: string,
+    transcriptId: string,
+  ): Promise<DeleteMeetingResult>;
   exportRecording(recordingId: string): Promise<ExportRecordingResult>;
   openRecordingSettings(): Promise<OpenRecordingSettingsResult>;
   requestRecordingPermissions(): Promise<RequestRecordingPermissionsResult>;
