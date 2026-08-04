@@ -1,7 +1,7 @@
 {
   "name": "sotto",
   "productName": "Sotto",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "Private, local-first desktop transcription.",
   "main": ".webpack/main",
   "private": true,
