@@ -24,6 +24,7 @@ import {
   type ConnectLocalAiInput,
   type ConnectLocalAiResult,
   type CopyTranscriptOutputResult,
+  type DeleteMeetingResult,
   type DeleteRecordingResult,
   type DeletePlaybackResult,
   type DeleteTranscriptResult,
@@ -760,6 +761,28 @@ export const registerDesktopIpc = ({
   );
 
   ipcMain.handle(
+    IPC_CHANNELS.deleteMeeting,
+    async (
+      event,
+      recordingId: unknown,
+      transcriptId: unknown,
+    ): Promise<DeleteMeetingResult> => {
+      trust(event);
+      if (!isTranscriptId(recordingId) || !isTranscriptId(transcriptId)) {
+        return { outcome: 'not-found' };
+      }
+      try {
+        return await controller.deleteMeeting(recordingId, transcriptId);
+      } catch {
+        return {
+          outcome: 'rejected',
+          reason: 'Sotto could not delete that meeting.',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.exportRecording,
     async (event, recordingId: unknown): Promise<ExportRecordingResult> => {
       const window = trust(event);
@@ -1113,6 +1136,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.cancelLiveRecording,
       IPC_CHANNELS.retryRecording,
       IPC_CHANNELS.deleteRecording,
+      IPC_CHANNELS.deleteMeeting,
       IPC_CHANNELS.exportRecording,
       IPC_CHANNELS.openRecordingSettings,
       IPC_CHANNELS.requestRecordingPermissions,

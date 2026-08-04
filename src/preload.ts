@@ -51,6 +51,8 @@ const api: SottoDesktopApi = Object.freeze({
     ),
   deleteRecording: (recordingId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.deleteRecording, recordingId),
+  deleteMeeting: (recordingId: string, transcriptId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteMeeting, recordingId, transcriptId),
   exportRecording: (recordingId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.exportRecording, recordingId),
   openRecordingSettings: () =>
