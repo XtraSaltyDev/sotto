@@ -10,6 +10,12 @@ export interface MeetingLibraryItem {
   transcript: TranscriptSummary | null;
 }
 
+export const displayedMeetingLibraryTranscripts = (
+  transcripts: TranscriptSummary[],
+  filteredTranscripts: TranscriptSummary[],
+  hasFilters: boolean,
+): TranscriptSummary[] => hasFilters ? filteredTranscripts : transcripts;
+
 export const mergeMeetingLibraryItems = (
   transcripts: TranscriptSummary[],
   recordings: SavedRecordingSummary[],

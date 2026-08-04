@@ -16,7 +16,10 @@ import {
   createTranscriptLibraryQuery,
   type TranscriptLibraryDateRange,
 } from './transcript-library';
-import { mergeMeetingLibraryItems } from './meeting-library';
+import {
+  displayedMeetingLibraryTranscripts,
+  mergeMeetingLibraryItems,
+} from './meeting-library';
 import { AudioFileIcon, DocumentIcon, InboxIcon } from './icons';
 import {
   closeOutputMenu,
@@ -38,6 +41,7 @@ export const MeetingLibrary = ({
   recordings,
   transcripts,
   onDeleteRecording,
+  onDeleteAll,
   onDeleteTranscript,
   onExportRecording,
   onOpen,
@@ -48,6 +52,10 @@ export const MeetingLibrary = ({
   busyId: string | null;
   recordings: SavedRecordingSummary[];
   transcripts: TranscriptSummary[];
+  onDeleteAll: (
+    recording: SavedRecordingSummary,
+    transcript: TranscriptSummary,
+  ) => void;
   onDeleteRecording: (recording: SavedRecordingSummary) => void;
   onDeleteTranscript: (transcript: TranscriptSummary) => void;
   onExportRecording: (recording: SavedRecordingSummary) => void;
@@ -178,9 +186,14 @@ export const MeetingLibrary = ({
       : recordings,
     [hasFilters, recordings, resultTranscriptIds],
   );
+  const displayedTranscripts = displayedMeetingLibraryTranscripts(
+    transcripts,
+    result.transcripts,
+    hasFilters,
+  );
   const meetings = useMemo(
-    () => mergeMeetingLibraryItems(result.transcripts, visibleRecordings),
-    [result.transcripts, visibleRecordings],
+    () => mergeMeetingLibraryItems(displayedTranscripts, visibleRecordings),
+    [displayedTranscripts, visibleRecordings],
   );
   const totalMeetingCount = useMemo(
     () => mergeMeetingLibraryItems(transcripts, recordings).length,
@@ -312,7 +325,7 @@ export const MeetingLibrary = ({
       ) : (
         <div className="meeting-list" aria-label="Meeting search results">
           {meetings.map(({ key, recording, transcript }) => {
-            const busy = recording ? busyId === recording.id : false;
+            const busy = busyId === recording?.id || busyId === transcript?.id;
             const canRetry = recording
               ? ['ready', 'failed', 'cancelled'].includes(
                   recording.transcriptionState,
@@ -374,65 +387,83 @@ export const MeetingLibrary = ({
                 <details className="meeting-row__menu output-menu">
                   <summary aria-label={`More actions for ${title}`}>More</summary>
                   <div className="output-menu__panel meeting-row__menu-panel">
-                    {transcript ? (
-                      <button
-                        onClick={(event) => {
-                          closeOutputMenu(event.currentTarget);
-                          onOpen(transcript.id);
-                        }}
-                        type="button"
-                      >
-                        Open transcript
-                      </button>
-                    ) : null}
-                    {recording && canRetry ? (
-                      <button
-                        disabled={busy}
-                        onClick={(event) => {
-                          closeOutputMenu(event.currentTarget);
-                          onRetryRecording(recording);
-                        }}
-                        type="button"
-                      >
-                        Retry transcription
-                      </button>
-                    ) : null}
-                    {recording ? (
-                      <button
-                        disabled={busy}
-                        onClick={(event) => {
-                          closeOutputMenu(event.currentTarget);
-                          onExportRecording(recording);
-                        }}
-                        type="button"
-                      >
-                        Export original recording
-                      </button>
-                    ) : null}
-                    {recording ? (
-                      <button
-                        className="meeting-row__danger"
-                        disabled={busy || recording.transcriptionState === 'transcribing'}
-                        onClick={(event) => {
-                          closeOutputMenu(event.currentTarget);
-                          onDeleteRecording(recording);
-                        }}
-                        type="button"
-                      >
-                        Delete saved recording
-                      </button>
-                    ) : null}
-                    {transcript ? (
-                      <button
-                        className="meeting-row__danger"
-                        onClick={(event) => {
-                          closeOutputMenu(event.currentTarget);
-                          onDeleteTranscript(transcript);
-                        }}
-                        type="button"
-                      >
-                        Delete transcript
-                      </button>
+                    <div className="output-menu__group">
+                      {transcript ? (
+                        <button
+                          onClick={(event) => {
+                            closeOutputMenu(event.currentTarget);
+                            onOpen(transcript.id);
+                          }}
+                          type="button"
+                        >
+                          Open transcript
+                        </button>
+                      ) : null}
+                      {recording && canRetry ? (
+                        <button
+                          disabled={busy}
+                          onClick={(event) => {
+                            closeOutputMenu(event.currentTarget);
+                            onRetryRecording(recording);
+                          }}
+                          type="button"
+                        >
+                          Retry transcription
+                        </button>
+                      ) : null}
+                      {recording ? (
+                        <button
+                          disabled={busy}
+                          onClick={(event) => {
+                            closeOutputMenu(event.currentTarget);
+                            onExportRecording(recording);
+                          }}
+                          type="button"
+                        >
+                          Export original recording
+                        </button>
+                      ) : null}
+                      {recording ? (
+                        <button
+                          className="meeting-row__danger"
+                          disabled={busy || recording.transcriptionState === 'transcribing'}
+                          onClick={(event) => {
+                            closeOutputMenu(event.currentTarget);
+                            onDeleteRecording(recording);
+                          }}
+                          type="button"
+                        >
+                          Delete saved recording
+                        </button>
+                      ) : null}
+                      {transcript ? (
+                        <button
+                          className="meeting-row__danger"
+                          disabled={busy}
+                          onClick={(event) => {
+                            closeOutputMenu(event.currentTarget);
+                            onDeleteTranscript(transcript);
+                          }}
+                          type="button"
+                        >
+                          Delete transcript
+                        </button>
+                      ) : null}
+                    </div>
+                    {recording && transcript ? (
+                      <div className="output-menu__group">
+                        <button
+                          className="meeting-row__danger"
+                          disabled={busy || recording.transcriptionState === 'transcribing'}
+                          onClick={(event) => {
+                            closeOutputMenu(event.currentTarget);
+                            onDeleteAll(recording, transcript);
+                          }}
+                          type="button"
+                        >
+                          Delete all
+                        </button>
+                      </div>
                     ) : null}
                   </div>
                 </details>

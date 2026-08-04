@@ -4,7 +4,10 @@ import type {
   SavedRecordingSummary,
   TranscriptSummary,
 } from '../shared/contracts';
-import { mergeMeetingLibraryItems } from './meeting-library';
+import {
+  displayedMeetingLibraryTranscripts,
+  mergeMeetingLibraryItems,
+} from './meeting-library';
 
 const transcript = (
   id: string,
@@ -80,5 +83,31 @@ describe('meeting library items', () => {
       'recording:newer',
       'transcript:older',
     ]);
+  });
+
+  it('uses current transcript state instead of a stale search result when unfiltered', () => {
+    const currentTranscript = transcript(
+      'current',
+      '2026-07-30T12:00:00.000Z',
+    );
+    const staleSearchTranscript = transcript(
+      'stale',
+      '2026-07-29T12:00:00.000Z',
+    );
+
+    expect(
+      displayedMeetingLibraryTranscripts(
+        [currentTranscript],
+        [staleSearchTranscript],
+        false,
+      ),
+    ).toEqual([currentTranscript]);
+    expect(
+      displayedMeetingLibraryTranscripts(
+        [currentTranscript],
+        [staleSearchTranscript],
+        true,
+      ),
+    ).toEqual([staleSearchTranscript]);
   });
 });

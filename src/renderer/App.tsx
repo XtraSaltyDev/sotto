@@ -13,6 +13,7 @@ import type {
   ExpectedSpeakerCount,
   LocalAiConnectionSummary,
   RecordingKind,
+  SavedRecordingSummary,
   StartLiveRecordingResult,
   TranscriptDetail,
   TranscriptCopyKind,
@@ -1132,13 +1133,14 @@ const MainApp = ({
       returnFocusTranscriptIdRef.current = null;
       setSelectedId(null);
       setTranscript(null);
+      await refresh();
     }
   };
 
   const deleteTranscriptFromLibrary = async (
     transcriptSummary: TranscriptSummary,
   ) => {
-    if (!window.sotto) return;
+    if (!window.sotto || recordingActionId) return;
     const linkedRecording = appState?.recordings.some(
       (recording) => recording.transcriptId === transcriptSummary.id,
     );
@@ -1154,6 +1156,7 @@ const MainApp = ({
     }
 
     setNotice(null);
+    setRecordingActionId(transcriptSummary.id);
     try {
       const result = await window.sotto.deleteTranscript(transcriptSummary.id);
       if (result.outcome === 'not-found') {
@@ -1161,6 +1164,9 @@ const MainApp = ({
       }
     } catch {
       showError('Sotto could not delete that transcript.');
+    } finally {
+      await refresh();
+      setRecordingActionId(null);
     }
   };
 
@@ -1298,6 +1304,41 @@ const MainApp = ({
     } catch {
       showError('Sotto could not delete that saved recording.');
     } finally {
+      await refresh();
+      setRecordingActionId(null);
+    }
+  };
+
+  const deleteMeeting = async (
+    recording: SavedRecordingSummary,
+    transcriptSummary: TranscriptSummary,
+  ) => {
+    if (!window.sotto || recordingActionId) return;
+    if (
+      !window.confirm(
+        `Delete “${transcriptSummary.title}”, its transcript, and its saved original recording? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    setNotice(null);
+    setRecordingActionId(recording.id);
+    try {
+      const result = await window.sotto.deleteMeeting(
+        recording.id,
+        transcriptSummary.id,
+      );
+      if (result.outcome === 'rejected' || result.outcome === 'partial') {
+        showError(result.reason);
+      }
+      if (result.outcome === 'not-found') {
+        showError('That saved meeting is no longer available.');
+      }
+    } catch {
+      showError('Sotto could not delete that meeting.');
+    } finally {
+      await refresh();
       setRecordingActionId(null);
     }
   };
@@ -1620,6 +1661,9 @@ const MainApp = ({
         ) : null}
         <MeetingLibrary
           busyId={recordingActionId}
+          onDeleteAll={(recording, transcriptSummary) =>
+            void deleteMeeting(recording, transcriptSummary)
+          }
           onDeleteRecording={(recording) => void deleteRecording(recording.id)}
           onDeleteTranscript={(transcriptSummary) =>
             void deleteTranscriptFromLibrary(transcriptSummary)
