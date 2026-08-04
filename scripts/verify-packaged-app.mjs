@@ -2,7 +2,7 @@
 
 import { createHash, X509Certificate } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { extractFile } from '@electron/asar';
@@ -112,6 +112,19 @@ const commonRequiredPaths = [
   'speaker-diarization-child.cjs',
   'speaker-runtime/sherpa-onnx-node/package.json',
 ];
+
+const bundledModelDirectory = path.join(resourcesPath, 'models');
+const bundledModelEntries = (await readdir(bundledModelDirectory)).filter(
+  (entry) => /^ggml-[a-z0-9][a-z0-9.-]*\.bin$/u.test(entry),
+);
+if (
+  bundledModelEntries.length !== 1 ||
+  bundledModelEntries[0] !== 'ggml-large-v3-turbo.bin'
+) {
+  throw new Error(
+    `Unexpected bundled Whisper models: ${bundledModelEntries.join(', ') || 'none'}`,
+  );
+}
 
 await Promise.all([
   ...commonRequiredPaths.map(requirePath),

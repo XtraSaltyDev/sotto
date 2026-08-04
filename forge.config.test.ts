@@ -259,7 +259,16 @@ describe('Windows packaging', () => {
       await Promise.all([
         mkdir(nativeMacRuntime, { recursive: true }),
         mkdir(foreignWindowsRuntime, { recursive: true }),
+        mkdir(path.join(resourcesPath, 'models'), { recursive: true }),
       ]);
+      await writeFile(
+        path.join(resourcesPath, 'models', 'ggml-large-v3-turbo.bin'),
+        'bundled turbo',
+      );
+      await writeFile(
+        path.join(resourcesPath, 'models', 'ggml-small.en.bin'),
+        'stale small',
+      );
 
       await new Promise<void>((resolve, reject) => {
         pruneUnusedNativeResources(
@@ -276,6 +285,12 @@ describe('Windows packaging', () => {
 
       await expect(access(nativeMacRuntime)).resolves.toBeUndefined();
       await expect(access(foreignWindowsRuntime)).rejects.toThrow();
+      await expect(
+        access(path.join(resourcesPath, 'models', 'ggml-large-v3-turbo.bin')),
+      ).resolves.toBeUndefined();
+      await expect(
+        access(path.join(resourcesPath, 'models', 'ggml-small.en.bin')),
+      ).rejects.toThrow();
     } finally {
       await rm(buildPath, { force: true, recursive: true });
     }

@@ -404,6 +404,18 @@ stage_file() {
   mv -f -- "${temporary_stage}" "${destination_path}"
 }
 
+prune_stale_models() {
+  local staged_model
+
+  for staged_model in "${MODEL_STAGE_DIRECTORY}"/ggml-*.bin; do
+    [[ -e "${staged_model}" ]] || continue
+    [[ "${staged_model}" == "${MODEL_STAGE_PATH}" ]] && continue
+
+    log "Removing stale staged Whisper model: ${staged_model}"
+    rm -f -- "${staged_model}"
+  done
+}
+
 stage_runtime_licenses() {
   download_verified_file \
     "${SHERPA_LICENSE_URL}" \
@@ -737,6 +749,7 @@ main() {
   prepare_ffmpeg_source
   build_whisper_cli
   build_ffmpeg
+  prune_stale_models
   stage_model
   stage_speaker_models
   stage_speaker_runtime

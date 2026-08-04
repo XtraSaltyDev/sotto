@@ -38,7 +38,7 @@ It stages:
 ```text
 resources/
 ├── models/
-│   └── ggml-small.en.bin
+│   └── ggml-large-v3-turbo.bin
 └── sidecars/
     └── darwin-arm64/
         ├── ffmpeg
@@ -91,9 +91,9 @@ Windows 11-era Intel and AMD processors meet that baseline.
   under LGPL 2.1-or-later. Its runtime network protocols are disabled. It
   supports local files/pipes and the bounded set of containers/codecs documented
   in [PROVENANCE.md](PROVENANCE.md).
-- `ggml-small.en.bin` is the English-only small Whisper model. It is larger and
-  slower than `base.en`, but gives a more useful initial accuracy baseline for
-  meetings and recorded video.
+- `ggml-large-v3-turbo.bin` is the bundled multilingual Whisper V3 Turbo model
+  and the default transcription model. Additional Whisper models may be placed
+  in the user's Sotto models directory instead of being copied into the app.
 - macOS itself does not support fully static executables. “Static” here means
   the FFmpeg, whisper.cpp, and GGML project libraries are not external dylibs;
   Apple system libraries and frameworks remain dynamically linked.

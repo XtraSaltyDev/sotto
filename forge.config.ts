@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { rm, writeFile } from 'node:fs/promises';
+import { readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ForgeConfig } from '@electron-forge/shared-types';
@@ -210,6 +210,24 @@ export const resolvePackagedResourcesPath = (
     : path.join(buildPath, 'resources');
 };
 
+const staleBundledModelPaths = async (resourcesPath: string): Promise<string[]> => {
+  let entries: string[];
+  try {
+    entries = await readdir(path.join(resourcesPath, 'models'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+
+  return entries
+    .filter(
+      (entry) =>
+        /^ggml-[a-z0-9][a-z0-9.-]*\.bin$/u.test(entry) &&
+        entry !== 'ggml-large-v3-turbo.bin',
+    )
+    .map((entry) => path.join(resourcesPath, 'models', entry));
+};
+
 export const pruneUnusedNativeResources = (
   buildPath: string,
   _electronVersion: string,
@@ -218,20 +236,22 @@ export const pruneUnusedNativeResources = (
   callback: (error?: Error | null) => void,
 ): void => {
   void Promise.resolve()
-    .then(() => ({
-      resourcesPath: resolvePackagedResourcesPath(buildPath, platform, arch),
-      unusedPaths: unusedNativeResourcePaths(platform, arch),
-    }))
-    .then(({ resourcesPath, unusedPaths }) =>
-      Promise.all(
-        unusedPaths.map((resourcePath) =>
+    .then(async () => {
+      const resourcesPath = resolvePackagedResourcesPath(buildPath, platform, arch);
+      const [unusedPaths, staleModels] = await Promise.all([
+        Promise.resolve(unusedNativeResourcePaths(platform, arch)),
+        staleBundledModelPaths(resourcesPath),
+      ]);
+      await Promise.all([
+        ...unusedPaths.map((resourcePath) =>
           rm(path.join(resourcesPath, resourcePath), {
             force: true,
             recursive: true,
           }),
         ),
-      ),
-    )
+        ...staleModels.map((modelPath) => rm(modelPath, { force: true })),
+      ]);
+    })
     .then(
       () => callback(),
       (error: unknown) =>

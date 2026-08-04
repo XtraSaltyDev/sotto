@@ -35,7 +35,7 @@ records documented in [PROVENANCE.md](PROVENANCE.md).
 
 ## OpenAI Whisper model
 
-- Model: Whisper `small.en`, converted to whisper.cpp GGML format
+- Model: Whisper `large-v3-turbo`, converted to whisper.cpp GGML format
 - Distribution: `ggerganov/whisper.cpp` on Hugging Face
 - Pinned content checksum: see [sources.json](sources.json)
 - Upstream project: <https://github.com/openai/whisper>

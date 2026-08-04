@@ -92,10 +92,11 @@ cannot reach the Windows sockets library.
 ## Model
 
 - Source:
-  <https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.en.bin?download=true>
-- Hugging Face revision: `c521a4b02f422512d734391fdf08bb08c0862f68`
+  <https://huggingface.co/ggerganov/whisper.cpp/resolve/6034871ec87c84e342efab769d4c5c06cd126db3/ggml-large-v3-turbo.bin?download=true>
+- Model: Whisper `large-v3-turbo`, converted to whisper.cpp GGML format
+- Hugging Face revision: `6034871ec87c84e342efab769d4c5c06cd126db3`
 - SHA-256:
-  `c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d`
+  `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69`
 - License: MIT (OpenAI Whisper)
 
 The URL is not treated as an identity: the expected SHA-256 digest is. A changed
