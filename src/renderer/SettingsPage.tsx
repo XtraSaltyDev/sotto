@@ -4,9 +4,10 @@ import {
   SUPPORTED_TRANSCRIPTION_LANGUAGES,
   type AppSettingsSummary,
 } from '../shared/contracts';
+import { DEFAULT_TRANSCRIPTION_MODEL } from '../shared/default-transcription-model';
 
 const EMPTY_SETTINGS: AppSettingsSummary = {
-  transcriptionModelId: 'small.en',
+  transcriptionModelId: DEFAULT_TRANSCRIPTION_MODEL.id,
   transcriptionLanguage: 'en',
   availableModels: [],
   userModelsDirectory: '',

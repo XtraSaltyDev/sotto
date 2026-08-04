@@ -9,6 +9,7 @@ import {
   type TranscriptionJobSnapshot,
   type TranscriptionStage,
 } from '../../shared/contracts';
+import { DEFAULT_TRANSCRIPTION_MODEL } from '../../shared/default-transcription-model';
 import { normalizeMediaToWav, MediaNormalizationError } from '../media/media-normalizer';
 import { MediaProbeError, probeMedia } from '../media/media-probe';
 import type { SelectedMedia } from '../media/media-import';
@@ -51,7 +52,7 @@ const RUNNING_STAGES: ReadonlySet<TranscriptionStage> = new Set([
   'saving',
 ]);
 const WHISPER_VERSION = '1.9.1';
-const MODEL_NAME = 'small.en';
+const MODEL_NAME = DEFAULT_TRANSCRIPTION_MODEL.id;
 
 /** The saved engine record names the model actually used for the job. */
 const transcriptionModelName = (modelPath: string): string =>

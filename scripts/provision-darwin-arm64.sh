@@ -12,9 +12,9 @@ readonly FFMPEG_VERSION='8.1.2'
 readonly FFMPEG_ARCHIVE_SHA256='464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c'
 readonly FFMPEG_ARCHIVE_URL="https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
 
-readonly MODEL_NAME='ggml-small.en.bin'
-readonly MODEL_SHA256='c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d'
-readonly MODEL_REVISION='c521a4b02f422512d734391fdf08bb08c0862f68'
+readonly MODEL_NAME='ggml-large-v3-turbo.bin'
+readonly MODEL_SHA256='1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69'
+readonly MODEL_REVISION='6034871ec87c84e342efab769d4c5c06cd126db3'
 readonly MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/${MODEL_REVISION}/${MODEL_NAME}?download=true"
 
 readonly SHERPA_ONNX_VERSION='1.13.4'
@@ -547,11 +547,11 @@ write_runtime_manifest() {
     "network": false
   },
   "model": {
-    "name": "ggml-small.en",
+    "name": "ggml-large-v3-turbo",
     "revision": "${MODEL_REVISION}",
     "file": "../../models/${MODEL_NAME}",
     "sha256": "${MODEL_SHA256}",
-    "language": "English"
+    "language": "Multilingual"
   },
   "speakerDiarization": {
     "runtime": "sherpa-onnx-node",
@@ -675,7 +675,7 @@ verify_staged_runtime() {
     "The runtime manifest does not name whisper-cli."
   grep -Fq '"binary": "ffmpeg"' "${RUNTIME_MANIFEST_PATH}" || fail \
     "The runtime manifest does not name ffmpeg."
-  grep -Fq '"file": "../../models/ggml-small.en.bin"' "${RUNTIME_MANIFEST_PATH}" || fail \
+  grep -Fq '"file": "../../models/ggml-large-v3-turbo.bin"' "${RUNTIME_MANIFEST_PATH}" || fail \
     "The runtime manifest does not name the staged model path."
   grep -Fq "\"binarySha256\": \"${whisper_sha256}\"" "${RUNTIME_MANIFEST_PATH}" || fail \
     "The runtime manifest whisper-cli checksum does not match the staged executable."

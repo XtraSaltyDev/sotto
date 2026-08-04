@@ -100,7 +100,7 @@ const commonRequiredPaths = [
   'sotto-build.json',
   'diarization/3dspeaker-eres2net-base.onnx',
   'diarization/pyannote-segmentation-3.0.onnx',
-  'models/ggml-small.en.bin',
+  'models/ggml-large-v3-turbo.bin',
   'sidecars/PROVENANCE.md',
   'sidecars/THIRD_PARTY_NOTICES.md',
   'sidecars/licenses/3D-Speaker.Apache-2.0.LICENSE',

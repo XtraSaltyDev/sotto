@@ -154,4 +154,22 @@ describe('resolveTranscriptionOptions', () => {
       language: 'en',
     });
   });
+
+  it('identifies the bundled Turbo model when its directory cannot be read', () => {
+    expect(
+      resolveTranscriptionOptions(
+        {
+          schemaVersion: 1,
+          transcriptionModelId: null,
+          transcriptionLanguage: 'de',
+        },
+        [],
+        '/models/ggml-large-v3-turbo.bin',
+      ),
+    ).toEqual({
+      modelPath: '/models/ggml-large-v3-turbo.bin',
+      modelId: 'large-v3-turbo',
+      language: 'en',
+    });
+  });
 });

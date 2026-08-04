@@ -50,7 +50,7 @@ const writeRuntime = async (
   await chmod(whisperPath, 0o755);
   await chmod(ffmpegPath, 0o755);
   await writeFile(
-    path.join(resourcesRoot, 'models', 'ggml-small.en.bin'),
+    path.join(resourcesRoot, 'models', 'ggml-large-v3-turbo.bin'),
     'model',
   );
   await writeFile(
@@ -103,7 +103,7 @@ describe('resolveEngineRuntime', () => {
         'darwin-arm64',
         'ffmpeg',
       ),
-      modelPath: path.join(resourcesRoot, 'models', 'ggml-small.en.bin'),
+      modelPath: path.join(resourcesRoot, 'models', 'ggml-large-v3-turbo.bin'),
       speakerDiarization: {
         childPath: path.join(appPath, 'scripts', 'speaker-diarization-child.cjs'),
         embeddingModelPath: path.join(
@@ -277,7 +277,7 @@ describe('resolveEngineRuntime', () => {
       'ffmpeg',
     );
     await chmod(ffmpegPath, fsConstants.S_IRUSR | fsConstants.S_IWUSR);
-    await rm(path.join(resourcesRoot, 'models', 'ggml-small.en.bin'));
+    await rm(path.join(resourcesRoot, 'models', 'ggml-large-v3-turbo.bin'));
 
     const status = await resolveEngineRuntime({
       appPath,

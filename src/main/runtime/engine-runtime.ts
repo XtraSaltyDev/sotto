@@ -2,6 +2,7 @@ import { constants as fsConstants } from 'node:fs';
 import { access, lstat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { DEFAULT_TRANSCRIPTION_MODEL } from '../../shared/default-transcription-model';
 import { resolveWhisperSidecarTarget } from '../sidecars/sidecar-resolver';
 
 export const ENGINE_OVERRIDE_ENVIRONMENT = {
@@ -250,7 +251,11 @@ export const resolveEngineRuntime = async (
       sidecarDirectory,
       platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg',
     ),
-    modelPath: path.join(resourcesRoot, 'models', 'ggml-small.en.bin'),
+    modelPath: path.join(
+      resourcesRoot,
+      'models',
+      DEFAULT_TRANSCRIPTION_MODEL.fileName,
+    ),
     speakerChildPath: options.isPackaged
       ? path.join(resourcesRoot, 'speaker-diarization-child.cjs')
       : path.join(options.appPath, 'scripts', 'speaker-diarization-child.cjs'),

@@ -1,5 +1,6 @@
 import path from 'node:path';
 
+import { DEFAULT_TRANSCRIPTION_MODEL } from '../shared/default-transcription-model';
 import type {
   AppState,
   AppendLiveRecordingChunkResult,
@@ -73,7 +74,7 @@ const toRendererEngineStatus = (runtime: RuntimeStatus): RendererEngineStatus =>
     return {
       state: 'ready',
       engineVersion: '1.9.1',
-      modelName: 'small.en',
+      modelName: DEFAULT_TRANSCRIPTION_MODEL.id,
       message: 'The private local transcription engine is ready.',
     };
   }

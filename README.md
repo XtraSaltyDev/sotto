@@ -32,7 +32,7 @@ without embedded secure update configuration keep the feature disabled.
   Sotto is running, with cursor insertion and a safe clipboard fallback
 - Audio-track detection and duration probing
 - Offline conversion to mono 16 kHz PCM with a minimal, network-disabled FFmpeg
-- English transcription with `whisper.cpp` 1.9.1 and the `small.en` model
+- Multilingual transcription with `whisper.cpp` 1.9.1 and the Whisper V3 Turbo model
 - Local speaker clustering with generic Speaker 1, Speaker 2, and similar
   labels, plus per-transcript renaming (macOS 15.5+ for the current native
   speaker runtime)
@@ -84,8 +84,9 @@ AAC, ALAC, FLAC, MP3, Opus, Vorbis, WMA, WavPack, and PCM audio tracks found in
 those containers. A video without a supported audio track fails with an
 actionable error and is never modified.
 
-The transcription model is English-only. Sotto separates voices locally, but
-it cannot read participant names from Teams: labels begin as `Speaker 1`,
+The default transcription model supports multiple languages; Sotto starts new
+transcriptions in English, and you can select another language or Auto in
+Settings. Sotto separates voices locally, but it cannot read participant names from Teams: labels begin as `Speaker 1`,
 `Speaker 2`, and so on, and apply only within that transcript. Rename them after
 the meeting if desired. Before importing or recording, **Expected speakers** can
 be left on **Auto** or set from 1 to 12 when the count is known. A known count
@@ -445,7 +446,7 @@ npm start
 `setup:runtime:mac` downloads pinned source/model inputs, verifies their hashes,
 builds the two native executables, stages complete license material, and writes
 `resources/sidecars/darwin-arm64/runtime-manifest.json`. The model is about
-465 MB, and the two speaker models add about 45 MB. Native binaries and model
+1.5 GiB, and the two speaker models add about 45 MB. Native binaries and model
 files are intentionally ignored by Git.
 
 To verify an already staged runtime without network, builds, or writes:
@@ -485,7 +486,7 @@ bundled AAC-in-MP4 fixture through the real FFmpeg → whisper.cpp → sherpa-on
 → atomic repository pipeline. It checks recognized speech, timing, persistence,
 and speaker IDs. `test:runtime:mac` and `test:runtime:windows` are explicit
 aliases. The integration is separate from the fast unit suite because it loads
-the 465 MB model. The package verifiers inspect the unpacked application that
+the 1.5 GiB model. The package verifiers inspect the unpacked application that
 Forge actually produced: they reject foreign native runtimes, check required
 models and licenses, verify immutable runtime hashes, and confirm that the ASAR
 contains the current package version.
@@ -568,9 +569,9 @@ The committed provisioning metadata pins:
   `f049fff95a089aa9969deb009cdd4892b3e74916`
 - FFmpeg 8.1.2 source archive SHA-256
   `464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c`
-- `ggml-small.en.bin` at Hugging Face revision
-  `c521a4b02f422512d734391fdf08bb08c0862f68`, SHA-256
-  `c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d`
+- `ggml-large-v3-turbo.bin` at Hugging Face revision
+  `6034871ec87c84e342efab769d4c5c06cd126db3`, SHA-256
+  `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69`
 
 The FFmpeg build is static, LGPL 2.1-or-later, and configured with networking,
 shared libraries, documentation, unrelated programs, and unneeded codecs
@@ -645,8 +646,7 @@ installer also needs Authenticode code signing and an install/upgrade test.
    integration fixture, live desktop/microphone timing, code signing, and a
    clean-machine installer/upgrade test.
 2. Add macOS Intel only if there is a real deployment need.
-3. Add an explicit multilingual model choice if non-English meetings are in
-   scope.
+3. Evaluate non-English transcription quality on representative meetings.
 4. Evaluate speaker-label quality on representative multi-person Teams meetings
    and rebuild the native speaker runtime for older macOS versions if needed.
 5. Add cancellation and a pre-send transcript preview to the Local AI summary

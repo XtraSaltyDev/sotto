@@ -22,6 +22,7 @@ import {
   type AppState,
   type LiveRecordingCapability,
 } from './shared/contracts';
+import { DEFAULT_TRANSCRIPTION_MODEL } from './shared/default-transcription-model';
 
 import { AppController } from './main/app-controller';
 import { buildMacAppMenuTemplate } from './main/app-menu';
@@ -352,7 +353,7 @@ const initialize = async (): Promise<void> => {
       models,
       runtimeStatus.ready
         ? runtimeStatus.runtime.modelPath
-        : path.join(bundledModelsDirectory, 'ggml-small.en.bin'),
+        : path.join(bundledModelsDirectory, DEFAULT_TRANSCRIPTION_MODEL.fileName),
     );
     return { modelPath: resolved.modelPath, language: resolved.language };
   };
@@ -520,7 +521,7 @@ const initialize = async (): Promise<void> => {
           (model) => model.path === resolved.modelPath,
         );
         return {
-          transcriptionModelId: resolvedModel?.id ?? 'small.en',
+          transcriptionModelId: resolvedModel?.id ?? DEFAULT_TRANSCRIPTION_MODEL.id,
           transcriptionLanguage: settings.transcriptionLanguage,
           availableModels: models.map((model) => ({
             id: model.id,

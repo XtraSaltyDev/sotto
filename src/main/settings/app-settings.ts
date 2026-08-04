@@ -5,10 +5,11 @@ import {
   SUPPORTED_TRANSCRIPTION_LANGUAGES,
   type TranscriptionModelSummary,
 } from '../../shared/contracts';
+import { DEFAULT_TRANSCRIPTION_MODEL } from '../../shared/default-transcription-model';
 
 export interface AppSettings {
   schemaVersion: 1;
-  /** ggml model id such as 'small.en'; null selects the bundled default. */
+  /** ggml model id such as 'large-v3-turbo'; null selects the bundled default. */
   transcriptionModelId: string | null;
   /** Language code from SUPPORTED_TRANSCRIPTION_LANGUAGES, or 'auto'. */
   transcriptionLanguage: string;
@@ -173,7 +174,11 @@ export const resolveTranscriptionOptions = (
       : undefined) ??
     models.find((model) => model.path === defaultModelPath);
   if (!selected) {
-    return { modelPath: defaultModelPath, modelId: 'small.en', language: 'en' };
+    return {
+      modelPath: defaultModelPath,
+      modelId: DEFAULT_TRANSCRIPTION_MODEL.id,
+      language: 'en',
+    };
   }
   const language =
     selected.multilingual &&
