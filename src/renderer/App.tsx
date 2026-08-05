@@ -40,6 +40,13 @@ import {
   withoutQueuedLocalAiNotice,
   LOCAL_AI_QUEUED_NOTICE,
 } from './local-ai-send-preview';
+import { homeCapabilities } from './home-capabilities';
+import {
+  updateStateFromBackgroundCheck,
+  updateStateFromDownloadResult,
+  updateStateFromManualCheck,
+  updateStateFromProgress,
+} from './app-update-state';
 import { LocalAiSettings } from './LocalAiSettings';
 import { SettingsPage } from './SettingsPage';
 import {
@@ -123,6 +130,8 @@ const MainApp = ({
   >(new Set());
   const [appUpdate, setAppUpdate] = useState<AppUpdateNoticeState | null>(null);
   const [isUpdatePopupOpen, setIsUpdatePopupOpen] = useState(false);
+  /** Latest update notice, for listeners registered once at mount. */
+  const appUpdateRef = useRef<AppUpdateNoticeState | null>(null);
   const [libraryViewState, setLibraryViewState] =
     useState<TranscriptLibraryViewState>({
       query: '',
@@ -225,13 +234,7 @@ const MainApp = ({
         );
         if (!shouldOfferUpdate(result.update.version, dismissed)) return;
         setAppUpdate((current) =>
-          current && current.phase !== 'available'
-            ? current
-            : {
-                phase: 'available',
-                version: result.update.version,
-                size: result.update.size,
-              },
+          updateStateFromBackgroundCheck(current, result.update),
         );
       } catch {
         // A quiet network is normal away from the Spark host; never nag.
@@ -250,58 +253,27 @@ const MainApp = ({
   }, []);
 
   useEffect(() => {
+    appUpdateRef.current = appUpdate;
+  }, [appUpdate]);
+
+  useEffect(() => {
     if (!window.sotto?.onManualUpdateCheck) return undefined;
     return window.sotto.onManualUpdateCheck((result) => {
-      setAppUpdate((current) => {
-        // Never clobber a download or staged install the user already started.
-        if (
-          current?.phase === 'downloading' ||
-          current?.phase === 'preparing' ||
-          current?.phase === 'ready' ||
-          current?.phase === 'restarting'
-        ) {
-          return current;
-        }
-        if (result.outcome === 'update-available') {
-          // An explicit menu check deserves an immediate, visible answer.
-          setIsUpdatePopupOpen(true);
-          return {
-            phase: 'available',
-            version: result.update.version,
-            size: result.update.size,
-          };
-        }
-        if (result.outcome === 'up-to-date') {
-          return { phase: 'up-to-date', version: result.version };
-        }
-        return { phase: 'check-failed', reason: result.reason };
-      });
+      // Decided outside the state updater: opening the popup is an action, and
+      // React may invoke an updater more than once.
+      const { state, openPopup } = updateStateFromManualCheck(
+        appUpdateRef.current,
+        result,
+      );
+      setAppUpdate(state);
+      if (openPopup) setIsUpdatePopupOpen(true);
     });
   }, []);
 
   useEffect(() => {
     if (!window.sotto?.onAppUpdateProgress) return undefined;
     return window.sotto.onAppUpdateProgress((progress: AppUpdateProgress) => {
-      setAppUpdate((current) => {
-        if (
-          !current ||
-          current.phase === 'check-failed' ||
-          current.version !== progress.version ||
-          (current.phase !== 'available' &&
-            current.phase !== 'downloading' &&
-            current.phase !== 'preparing')
-        ) {
-          return current;
-        }
-        return progress.phase === 'preparing'
-          ? { phase: 'preparing', version: progress.version }
-          : {
-              phase: 'downloading',
-              version: progress.version,
-              receivedBytes: progress.receivedBytes,
-              totalBytes: progress.totalBytes,
-            };
-      });
+      setAppUpdate((current) => updateStateFromProgress(current, progress));
     });
   }, []);
 
@@ -314,19 +286,7 @@ const MainApp = ({
     });
     try {
       const result = await window.sotto.downloadAppUpdate();
-      setAppUpdate(
-        result.outcome === 'staged'
-          ? { phase: 'ready', version: result.version }
-          : result.outcome === 'cancelled'
-            ? { phase: 'cancelled', version: result.version }
-            : result.outcome === 'downloaded'
-              ? {
-                  phase: 'downloaded',
-                  fileName: result.fileName,
-                  version: result.version,
-                }
-              : { phase: 'failed', reason: result.reason, version },
-      );
+      setAppUpdate(updateStateFromDownloadResult(result, version));
     } catch {
       setAppUpdate({
         phase: 'failed',
@@ -586,29 +546,12 @@ const MainApp = ({
   const recordingElapsed = activeRecording
     ? Math.max(0, recordingTick - new Date(activeRecording.startedAt).getTime())
     : 0;
-  // Importing stays available while a transcription runs: extra files
-  // join the sequential import queue.
-  const canImport =
-    appState?.engine.state === 'ready' &&
-    !activeRecording &&
-    !isStartingRecording &&
-    !isStoppingRecording &&
-    !isSelecting;
-  const canRecord =
-    appState?.engine.state === 'ready' &&
-    (recordingCapabilityState === 'ready' || needsRecordingSetup) &&
-    !running &&
-    !activeRecording &&
-    !isStartingRecording &&
-    !isStoppingRecording &&
-    !isSelecting;
-  const canDictate =
-    appState?.engine.state === 'ready' &&
-    !running &&
-    !activeRecording &&
-    !isStartingRecording &&
-    !isStoppingRecording &&
-    !isSelecting;
+  const { canImport, canRecord, canDictate } = homeCapabilities(appState, {
+    running,
+    isSelecting,
+    isStartingRecording,
+    isStoppingRecording,
+  });
   const progress = useMemo(
     () => Math.round(Math.min(1, Math.max(0, appState?.activeJob?.progress ?? 0)) * 100),
     [appState?.activeJob?.progress],
