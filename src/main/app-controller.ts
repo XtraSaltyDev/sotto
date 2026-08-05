@@ -367,6 +367,9 @@ export class AppController {
         storageMessage: this.recordingStorageMessage,
       },
       activeJob: this.activeJob ? { ...this.activeJob } : null,
+      activeLocalAiSummary: this.activeLocalAiSummary
+        ? { transcriptId: this.activeLocalAiSummary.id }
+        : null,
       recordings: this.recordings.map((recording) => ({ ...recording })),
       transcripts: this.transcriptSummaries.map((transcript) => ({
         ...transcript,
@@ -783,6 +786,7 @@ export class AppController {
     }
     const controller = new AbortController();
     this.activeLocalAiSummary = { id, controller };
+    this.emit();
     try {
       const generated = await localAiService.generateMeetingSummary(
         withReliableSpeakerPresentation(record),
@@ -827,6 +831,7 @@ export class AppController {
       };
     } finally {
       this.activeLocalAiSummary = null;
+      this.emit();
     }
   }
 

@@ -654,6 +654,72 @@ describe('transcript presentation', () => {
     await controller.dispose();
   });
 
+  it('publishes the running Local AI summary so a reloaded window can still cancel it', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-local-ai-state-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    await repository.save(record);
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+    expect(controller.getState().activeLocalAiSummary).toBeNull();
+
+    const observed: Array<string | null> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/models')) {
+        return new Response(JSON.stringify({
+          data: [{ id: 'gemma3:4b', object: 'model', owned_by: 'library' }],
+        }), { status: 200 });
+      }
+      // Mid-flight is the only moment the published state matters.
+      observed.push(
+        controller.getState().activeLocalAiSummary?.transcriptId ?? null,
+      );
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              overview: 'A short review.',
+              keyPoints: [],
+              decisions: [],
+              actionItems: [],
+            }),
+          },
+        }],
+      }), { status: 200 });
+    });
+    const localAiService = new LocalAiConnectionService({
+      filePath: path.join(root, 'local-ai', 'connection.json'),
+      credentialCipher: { encrypt: (value) => value, decrypt: (value) => value },
+      fetcher: fetcher as typeof fetch,
+      now: () => new Date('2026-07-29T20:00:00.000Z'),
+    });
+    await localAiService.connect({
+      baseUrl: 'http://127.0.0.1:11434',
+      selectedModel: 'gemma3:4b',
+    });
+
+    const previewed = await controller.previewLocalAiMeetingSummary(
+      record.id,
+      localAiService,
+    );
+    if (previewed.outcome !== 'ready') {
+      throw new Error(`Expected a preview, received ${previewed.outcome}.`);
+    }
+    await controller.generateLocalAiMeetingSummary(
+      record.id,
+      localAiService,
+      previewed.preview.approvalFingerprint,
+    );
+
+    expect(observed).toEqual([record.id]);
+    expect(controller.getState().activeLocalAiSummary).toBeNull();
+    await controller.dispose();
+  });
+
   it('does not let a slow rename reload resurrect a deleted transcript', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-reload-order-'));
     temporaryRoots.push(root);

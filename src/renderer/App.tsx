@@ -91,7 +91,7 @@ const MainApp = ({
   const [isRepairingPermissions, setIsRepairingPermissions] = useState(false);
   const [localAiConnection, setLocalAiConnection] =
     useState<LocalAiConnectionSummary | null>(null);
-  const [localAiGenerating, setLocalAiGenerating] = useState(false);
+  const [localAiRequestInFlight, setLocalAiRequestInFlight] = useState(false);
   const [localAiPreparing, setLocalAiPreparing] = useState(false);
   const [localAiPreview, setLocalAiPreview] =
     useState<LocalAiSummaryPreview | null>(null);
@@ -129,6 +129,16 @@ const MainApp = ({
   const desktopStreamRef = useRef<MediaStream | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+
+  /**
+   * Main owns whether a summary is running, so the cancel affordance survives
+   * a renderer reload. The local flag only covers the gap between invoking the
+   * request and the first state event, so the button does not flicker.
+   */
+  const localAiGenerating =
+    localAiRequestInFlight ||
+    (selectedId !== null &&
+      appState?.activeLocalAiSummary?.transcriptId === selectedId);
 
   const showError = useCallback(
     (text: string) => setNotice({ kind: 'error', text }),
@@ -1029,7 +1039,7 @@ const MainApp = ({
     if (!window.sotto || !preview || preview.transcriptId !== selectedId) return;
     setLocalAiPreview(null);
     setLocalAiError(null);
-    setLocalAiGenerating(true);
+    setLocalAiRequestInFlight(true);
     try {
       const result = await window.sotto.generateLocalAiMeetingSummary(
         preview.transcriptId,
@@ -1051,7 +1061,7 @@ const MainApp = ({
     } catch {
       setLocalAiError('Sotto could not improve this summary with Local AI.');
     } finally {
-      setLocalAiGenerating(false);
+      setLocalAiRequestInFlight(false);
     }
   };
 

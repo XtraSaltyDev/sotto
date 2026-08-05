@@ -259,6 +259,13 @@ export interface AppState {
   engine: EngineStatus;
   recording: LiveRecordingStatus;
   activeJob: TranscriptionJobSnapshot | null;
+  /**
+   * The transcript whose Local AI summary is currently being generated. Main
+   * owns the single-flight guard, so publishing it here keeps the renderer's
+   * cancel affordance available across a reload instead of stranding a
+   * request that only a lost local boolean knew how to stop.
+   */
+  activeLocalAiSummary: { transcriptId: string } | null;
   recordings: SavedRecordingSummary[];
   transcripts: TranscriptSummary[];
   /** One-time launch reports: interrupted imports, unreadable records. */
