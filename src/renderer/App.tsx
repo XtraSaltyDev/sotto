@@ -33,7 +33,9 @@ import {
   SpinnerIcon,
 } from './icons';
 import { ActivityOverlay } from './ActivityOverlay';
+import { LocalAiBusyNotice } from './LocalAiBusyNotice';
 import { LocalAiSendPreview } from './LocalAiSendPreview';
+import { localAiSummaryActivity } from './local-ai-send-preview';
 import { LocalAiSettings } from './LocalAiSettings';
 import { SettingsPage } from './SettingsPage';
 import {
@@ -91,7 +93,11 @@ const MainApp = ({
   const [isRepairingPermissions, setIsRepairingPermissions] = useState(false);
   const [localAiConnection, setLocalAiConnection] =
     useState<LocalAiConnectionSummary | null>(null);
-  const [localAiRequestInFlight, setLocalAiRequestInFlight] = useState(false);
+  // Scoped to a transcript, not a bare flag: a run started on one transcript
+  // must not make every other transcript look like it is generating.
+  const [localAiRequestTranscriptId, setLocalAiRequestTranscriptId] =
+    useState<string | null>(null);
+  const [localAiBusyNoticeOpen, setLocalAiBusyNoticeOpen] = useState(false);
   const [localAiPreparing, setLocalAiPreparing] = useState(false);
   const [localAiPreview, setLocalAiPreview] =
     useState<LocalAiSummaryPreview | null>(null);
@@ -104,6 +110,9 @@ const MainApp = ({
   const [dismissedStorageMessage, setDismissedStorageMessage] =
     useState<string | null>(null);
   const [dismissedStartupNotices, setDismissedStartupNotices] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  const [dismissedLocalAiNotices, setDismissedLocalAiNotices] = useState<
     ReadonlySet<string>
   >(new Set());
   const [appUpdate, setAppUpdate] = useState<AppUpdateNoticeState | null>(null);
@@ -135,10 +144,20 @@ const MainApp = ({
    * a renderer reload. The local flag only covers the gap between invoking the
    * request and the first state event, so the button does not flicker.
    */
-  const localAiGenerating =
-    localAiRequestInFlight ||
-    (selectedId !== null &&
-      appState?.activeLocalAiSummary?.transcriptId === selectedId);
+  const {
+    generating: localAiGenerating,
+    queued: localAiQueued,
+    runningElsewhere: localAiRunningElsewhere,
+  } = localAiSummaryActivity({
+    activeTranscriptId: appState?.activeLocalAiSummary?.transcriptId ?? null,
+    queuedTranscriptIds: appState?.queuedLocalAiSummaries ?? [],
+    requestTranscriptId: localAiRequestTranscriptId,
+    selectedTranscriptId: selectedId,
+  });
+  const localAiRunningTitle =
+    appState?.transcripts.find(
+      (entry) => entry.id === appState.activeLocalAiSummary?.transcriptId,
+    )?.title ?? null;
 
   const showError = useCallback(
     (text: string) => setNotice({ kind: 'error', text }),
@@ -1014,6 +1033,13 @@ const MainApp = ({
     if (!window.sotto || !selectedId || localAiGenerating || localAiPreparing) {
       return;
     }
+    // Sotto sends one summary at a time; say so before building a payload the
+    // user might not want to review yet.
+    if (localAiRunningElsewhere && !localAiBusyNoticeOpen) {
+      setLocalAiBusyNoticeOpen(true);
+      return;
+    }
+    setLocalAiBusyNoticeOpen(false);
     setLocalAiError(null);
     setLocalAiPreparing(true);
     try {
@@ -1039,7 +1065,7 @@ const MainApp = ({
     if (!window.sotto || !preview || preview.transcriptId !== selectedId) return;
     setLocalAiPreview(null);
     setLocalAiError(null);
-    setLocalAiRequestInFlight(true);
+    setLocalAiRequestTranscriptId(preview.transcriptId);
     try {
       const result = await window.sotto.generateLocalAiMeetingSummary(
         preview.transcriptId,
@@ -1056,17 +1082,19 @@ const MainApp = ({
         setLocalAiError('That transcript is no longer available.');
       } else if (result.outcome === 'rejected') {
         setLocalAiError(result.reason);
+      } else if (result.outcome === 'queued') {
+        showInfo('Queued. Sotto starts it when the running summary finishes.');
       }
       // A cancelled generation is what the user asked for, so it is not an error.
     } catch {
       setLocalAiError('Sotto could not improve this summary with Local AI.');
     } finally {
-      setLocalAiRequestInFlight(false);
+      setLocalAiRequestTranscriptId(null);
     }
   };
 
   const handleCancelLocalAiSummary = () => {
-    if (!window.sotto || !selectedId || !localAiGenerating) return;
+    if (!window.sotto || !selectedId) return;
     void window.sotto.cancelLocalAiMeetingSummary(selectedId);
   };
 
@@ -1451,6 +1479,7 @@ const MainApp = ({
           localAiError={localAiError}
           localAiGenerating={localAiGenerating}
           localAiPreparing={localAiPreparing}
+          localAiQueued={localAiQueued}
           loading={isLoadingTranscript}
           message={notice?.text ?? null}
           onBack={() => {
@@ -1473,11 +1502,19 @@ const MainApp = ({
           onUpdateSegment={handleUpdateSegment}
           transcript={transcript}
         />
+        {localAiBusyNoticeOpen && !localAiPreview ? (
+          <LocalAiBusyNotice
+            onCancel={() => setLocalAiBusyNoticeOpen(false)}
+            onQueue={() => void handleRequestLocalAiSummary()}
+            runningTitle={localAiRunningTitle}
+          />
+        ) : null}
         {localAiPreview ? (
           <LocalAiSendPreview
             onCancel={() => setLocalAiPreview(null)}
             onConfirm={() => void handleConfirmLocalAiSummary()}
             preview={localAiPreview}
+            willQueue={localAiRunningElsewhere}
           />
         ) : null}
       </div>
@@ -1525,6 +1562,20 @@ const MainApp = ({
                   )
                 }
                 platform={navigator.platform}
+              />
+            </div>
+          ))}
+        {(appState?.localAiNotices ?? [])
+          .filter((localAiNotice) => !dismissedLocalAiNotices.has(localAiNotice))
+          .map((localAiNotice) => (
+            <div className="home-message" key={localAiNotice}>
+              <HomeNotice
+                notice={{ kind: 'error', text: localAiNotice }}
+                onDismiss={() =>
+                  setDismissedLocalAiNotices(
+                    (current) => new Set(current).add(localAiNotice),
+                  )
+                }
               />
             </div>
           ))}

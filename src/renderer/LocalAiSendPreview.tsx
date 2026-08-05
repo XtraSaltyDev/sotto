@@ -21,10 +21,13 @@ export const LocalAiSendPreview = ({
   onCancel,
   onConfirm,
   preview,
+  willQueue = false,
 }: {
   onCancel: () => void;
   onConfirm: () => void;
   preview: LocalAiSummaryPreview;
+  /** True when another summary is running, so this send waits its turn. */
+  willQueue?: boolean;
 }) => {
   const lines = localAiTranscriptLines(preview);
   const requestCount = describeLocalAiRequestCount(preview);
@@ -51,6 +54,9 @@ export const LocalAiSendPreview = ({
           <p>
             Everything else in Sotto stays on this device. This is the only
             action that sends transcript content to the model you connected.
+            {willQueue
+              ? ' Another summary is running, so this one is sent when that finishes.'
+              : ''}
           </p>
         </header>
 
@@ -128,7 +134,7 @@ export const LocalAiSendPreview = ({
             onClick={onConfirm}
             type="button"
           >
-            Send
+            {willQueue ? 'Queue' : 'Send'}
           </button>
           <button
             className="local-ai-preview__secondary"

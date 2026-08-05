@@ -266,10 +266,18 @@ export interface AppState {
    * request that only a lost local boolean knew how to stop.
    */
   activeLocalAiSummary: { transcriptId: string } | null;
+  /** Reviewed and approved summaries waiting for the running one to finish. */
+  queuedLocalAiSummaries: string[];
   recordings: SavedRecordingSummary[];
   transcripts: TranscriptSummary[];
   /** One-time launch reports: interrupted imports, unreadable records. */
   startupNotices?: string[];
+  /**
+   * Outcomes of queued Local AI summaries that finished while the user was
+   * elsewhere. Reported here because a background failure has no open dialog
+   * to land in, and silently dropping it would look like nothing happened.
+   */
+  localAiNotices?: string[];
   /** Source names of imports waiting behind the active transcription. */
   pendingImports?: string[];
 }
@@ -399,6 +407,8 @@ export type GenerateLocalAiMeetingSummaryResult =
     }
   | { outcome: 'not-found' }
   | { outcome: 'cancelled' }
+  /** Another summary was running; this approved send waits its turn. */
+  | { outcome: 'queued'; position: number }
   | { outcome: 'rejected'; reason: string };
 
 export type RetranscribeTranscriptResult =

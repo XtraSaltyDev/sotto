@@ -255,6 +255,12 @@ export class AppController {
     id: string;
     controller: AbortController;
   } | null = null;
+  private queuedLocalAiSummaries: Array<{
+    id: string;
+    approvalFingerprint: string;
+    service: LocalAiConnectionService;
+  }> = [];
+  private localAiNotices: string[] = [];
   private activeRecording: LiveRecordingSnapshot | null = null;
   private finalizingRecordingId: string | null = null;
   private recordings: SavedRecordingSummary[] = [];
@@ -370,6 +376,9 @@ export class AppController {
       activeLocalAiSummary: this.activeLocalAiSummary
         ? { transcriptId: this.activeLocalAiSummary.id }
         : null,
+      queuedLocalAiSummaries: this.queuedLocalAiSummaries.map(
+        (entry) => entry.id,
+      ),
       recordings: this.recordings.map((recording) => ({ ...recording })),
       transcripts: this.transcriptSummaries.map((transcript) => ({
         ...transcript,
@@ -377,6 +386,9 @@ export class AppController {
       })),
       ...(this.startupNotices.length
         ? { startupNotices: [...this.startupNotices] }
+        : {}),
+      ...(this.localAiNotices.length
+        ? { localAiNotices: [...this.localAiNotices] }
         : {}),
       ...(this.pendingImportQueue.length
         ? {
@@ -753,11 +765,49 @@ export class AppController {
     }
   }
 
-  /** Stops an in-flight generation for this transcript, if one is running. */
+  /**
+   * Stops this transcript's summary whether it is running or still waiting.
+   * A queued entry is dropped outright, since nothing has been sent for it.
+   */
   cancelLocalAiMeetingSummary(id: string): void {
     if (this.activeLocalAiSummary?.id === id) {
       this.activeLocalAiSummary.controller.abort();
+      return;
     }
+    const waiting = this.queuedLocalAiSummaries.findIndex(
+      (entry) => entry.id === id,
+    );
+    if (waiting >= 0) {
+      this.queuedLocalAiSummaries.splice(waiting, 1);
+      this.emit();
+    }
+  }
+
+  /**
+   * Runs approved sends one at a time. Each queued entry already carries the
+   * fingerprint of the payload its user reviewed, so waiting its turn cannot
+   * turn into sending something that was never shown — a transcript edited
+   * while it waits fails the same check an immediate send would.
+   */
+  private startNextQueuedLocalAiSummary(): void {
+    if (this.activeLocalAiSummary) return;
+    const next = this.queuedLocalAiSummaries.shift();
+    if (!next) return;
+    void this.generateLocalAiMeetingSummary(
+      next.id,
+      next.service,
+      next.approvalFingerprint,
+    ).then((result) => {
+      if (result.outcome !== 'rejected' && result.outcome !== 'not-found') return;
+      this.localAiNotices.push(
+        result.outcome === 'not-found'
+          ? 'A queued Local AI summary was skipped because its transcript is no longer available.'
+          : `A queued Local AI summary did not finish: ${result.reason}`,
+      );
+      this.emit();
+    });
+    // Each generation starts the next one from its own teardown, so the queue
+    // advances without a loop that could run two sends at once.
   }
 
   async generateLocalAiMeetingSummary(
@@ -779,10 +829,31 @@ export class AppController {
       };
     }
     if (this.activeLocalAiSummary) {
-      return {
-        outcome: 'rejected',
-        reason: 'Another Local AI summary is already running.',
-      };
+      if (this.activeLocalAiSummary.id === id) {
+        return {
+          outcome: 'rejected',
+          reason: 'This summary is already being generated.',
+        };
+      }
+      const waiting = this.queuedLocalAiSummaries.findIndex(
+        (entry) => entry.id === id,
+      );
+      if (waiting >= 0) {
+        // Re-approving replaces the older approval rather than sending twice.
+        this.queuedLocalAiSummaries[waiting] = {
+          id,
+          approvalFingerprint,
+          service: localAiService,
+        };
+        return { outcome: 'queued', position: waiting + 1 };
+      }
+      this.queuedLocalAiSummaries.push({
+        id,
+        approvalFingerprint,
+        service: localAiService,
+      });
+      this.emit();
+      return { outcome: 'queued', position: this.queuedLocalAiSummaries.length };
     }
     const controller = new AbortController();
     this.activeLocalAiSummary = { id, controller };
@@ -832,6 +903,7 @@ export class AppController {
     } finally {
       this.activeLocalAiSummary = null;
       this.emit();
+      this.startNextQueuedLocalAiSummary();
     }
   }
 
@@ -1041,6 +1113,7 @@ export class AppController {
     // Otherwise a quit during generation leaves the endpoint request
     // outstanding until its own two-minute bound expires.
     this.activeLocalAiSummary?.controller.abort();
+    this.queuedLocalAiSummaries = [];
     await this.recordingService.dispose();
     await this.service?.dispose();
     await this.recordingUpdateChain;

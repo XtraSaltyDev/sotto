@@ -5,6 +5,46 @@ export interface LocalAiPreviewDocument {
   body: string;
 }
 
+export interface LocalAiSummaryActivity {
+  /** This transcript's own summary is running. */
+  generating: boolean;
+  /** This transcript is approved and waiting its turn. */
+  queued: boolean;
+  /** A different transcript is running, so a new send would have to wait. */
+  runningElsewhere: boolean;
+}
+
+/**
+ * Resolves what the summary controls should show for the open transcript.
+ * Every part of this is scoped to a transcript id: a run started on one
+ * transcript must never make another look busy, which an unscoped in-flight
+ * flag previously did.
+ */
+export const localAiSummaryActivity = ({
+  activeTranscriptId,
+  queuedTranscriptIds,
+  requestTranscriptId,
+  selectedTranscriptId,
+}: {
+  activeTranscriptId: string | null;
+  queuedTranscriptIds: readonly string[];
+  /** Set between invoking a send and the first state event, to avoid a flicker. */
+  requestTranscriptId: string | null;
+  selectedTranscriptId: string | null;
+}): LocalAiSummaryActivity => {
+  if (selectedTranscriptId === null) {
+    return { generating: false, queued: false, runningElsewhere: false };
+  }
+  return {
+    generating:
+      requestTranscriptId === selectedTranscriptId ||
+      activeTranscriptId === selectedTranscriptId,
+    queued: queuedTranscriptIds.includes(selectedTranscriptId),
+    runningElsewhere:
+      activeTranscriptId !== null && activeTranscriptId !== selectedTranscriptId,
+  };
+};
+
 const formatCount = (count: number, singular: string, plural: string): string =>
   `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 

@@ -2,9 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { LocalAiSummaryPreview } from '../shared/contracts';
+import { LocalAiBusyNotice } from './LocalAiBusyNotice';
 import { LocalAiSendPreview } from './LocalAiSendPreview';
 import {
   describeLocalAiRequestCount,
+  localAiSummaryActivity,
   describeLocalAiSendScope,
   describeLocalAiSpeakers,
   formatLocalAiPayloadSize,
@@ -78,6 +80,83 @@ describe('describeLocalAiSpeakers', () => {
     expect(describeLocalAiSpeakers(createPreview({ speakerLabels: [] }))).toBe(
       'No speaker names',
     );
+  });
+});
+
+describe('localAiSummaryActivity', () => {
+  const A = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const B = 'bbbbbbbb-0000-4000-8000-000000000002';
+
+  it('does not make an unrelated transcript look busy while another generates', () => {
+    // The reported bug: opening B during A's run showed B as generating.
+    expect(localAiSummaryActivity({
+      activeTranscriptId: A,
+      queuedTranscriptIds: [],
+      requestTranscriptId: A,
+      selectedTranscriptId: B,
+    })).toEqual({ generating: false, queued: false, runningElsewhere: true });
+  });
+
+  it('shows the running transcript as generating', () => {
+    expect(localAiSummaryActivity({
+      activeTranscriptId: A,
+      queuedTranscriptIds: [],
+      requestTranscriptId: null,
+      selectedTranscriptId: A,
+    })).toEqual({ generating: true, queued: false, runningElsewhere: false });
+  });
+
+  it('covers the gap before the first state event arrives', () => {
+    expect(localAiSummaryActivity({
+      activeTranscriptId: null,
+      queuedTranscriptIds: [],
+      requestTranscriptId: A,
+      selectedTranscriptId: A,
+    }).generating).toBe(true);
+  });
+
+  it('reports a waiting transcript as queued, not generating', () => {
+    expect(localAiSummaryActivity({
+      activeTranscriptId: A,
+      queuedTranscriptIds: [B],
+      requestTranscriptId: null,
+      selectedTranscriptId: B,
+    })).toEqual({ generating: false, queued: true, runningElsewhere: true });
+  });
+
+  it('is inert with no transcript open', () => {
+    expect(localAiSummaryActivity({
+      activeTranscriptId: A,
+      queuedTranscriptIds: [B],
+      requestTranscriptId: A,
+      selectedTranscriptId: null,
+    })).toEqual({ generating: false, queued: false, runningElsewhere: false });
+  });
+});
+
+describe('LocalAiBusyNotice', () => {
+  it('names the running transcript and offers to queue or cancel', () => {
+    const markup = renderToStaticMarkup(
+      <LocalAiBusyNotice
+        onCancel={vi.fn()}
+        onQueue={vi.fn()}
+        runningTitle="Launch planning"
+      />,
+    );
+
+    expect(markup).toContain('role="dialog"');
+    expect(markup).toContain('A summary is already being generated');
+    expect(markup).toContain('Launch planning');
+    expect(markup).toContain('Review and queue');
+    expect(markup).toContain('>Cancel<');
+  });
+
+  it('stays accurate when the running transcript has no title yet', () => {
+    const markup = renderToStaticMarkup(
+      <LocalAiBusyNotice onCancel={vi.fn()} onQueue={vi.fn()} runningTitle={null} />,
+    );
+
+    expect(markup).toContain('Sotto is finishing another summary.');
   });
 });
 

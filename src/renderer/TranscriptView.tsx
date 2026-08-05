@@ -245,6 +245,7 @@ const MeetingSummaryView = ({
   onSeek,
   playbackAvailable,
   preparing,
+  queued,
   speakers,
   summary,
 }: {
@@ -258,6 +259,7 @@ const MeetingSummaryView = ({
   onSeek: (milliseconds: number) => void;
   playbackAvailable: boolean;
   preparing: boolean;
+  queued: boolean;
   speakers: TranscriptSpeaker[];
   summary: MeetingSummary;
 }) => {
@@ -343,6 +345,19 @@ const MeetingSummaryView = ({
               <div className="meeting-summary__running" role="group" aria-label="Local AI summary in progress">
                 <span className="meeting-summary__generate" aria-live="polite">
                   <SpinnerIcon className="spinner" /> Improving summary…
+                </span>
+                <button
+                  className="meeting-summary__stop"
+                  onClick={onCancel}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : queued ? (
+              <div className="meeting-summary__running" role="group" aria-label="Local AI summary queued">
+                <span className="meeting-summary__queued" aria-live="polite">
+                  Queued — starts when the running summary finishes
                 </span>
                 <button
                   className="meeting-summary__stop"
@@ -473,6 +488,7 @@ export const TranscriptView = ({
   localAiError,
   localAiGenerating,
   localAiPreparing,
+  localAiQueued,
   transcript,
   loading,
   message,
@@ -494,6 +510,7 @@ export const TranscriptView = ({
   localAiError: string | null;
   localAiGenerating: boolean;
   localAiPreparing: boolean;
+  localAiQueued: boolean;
   transcript: TranscriptDetail | null;
   loading: boolean;
   message: string | null;
@@ -755,6 +772,7 @@ export const TranscriptView = ({
             error={localAiError}
             generating={localAiGenerating}
             preparing={localAiPreparing}
+            queued={localAiQueued}
             localAiSummary={transcript.localAiMeetingSummary}
             onCancel={onCancelLocalAiSummary}
             onGenerate={onGenerateLocalAiSummary}

@@ -720,6 +720,190 @@ describe('transcript presentation', () => {
     await controller.dispose();
   });
 
+  it('queues a second approved summary and runs it when the first finishes', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-local-ai-queue-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    const second = { ...record, id: '9d4c1f26-1a3f-4a55-9d1f-1c2f3b4a5d6e' };
+    await repository.save(record);
+    await repository.save(second);
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    const sentOrder: string[] = [];
+    let releaseFirst: () => void = () => undefined;
+    const firstInFlight = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let pending = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/models')) {
+        return new Response(JSON.stringify({
+          data: [{ id: 'gemma3:4b', object: 'model', owned_by: 'library' }],
+        }), { status: 200 });
+      }
+      sentOrder.push(
+        controller.getState().activeLocalAiSummary?.transcriptId ?? 'none',
+      );
+      // Hold the first send open so the second has to queue behind it.
+      if (++pending === 1) await firstInFlight;
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              overview: 'A short review.',
+              keyPoints: [],
+              decisions: [],
+              actionItems: [],
+            }),
+          },
+        }],
+      }), { status: 200 });
+    });
+    const localAiService = new LocalAiConnectionService({
+      filePath: path.join(root, 'local-ai', 'connection.json'),
+      credentialCipher: { encrypt: (value) => value, decrypt: (value) => value },
+      fetcher: fetcher as typeof fetch,
+      now: () => new Date('2026-07-29T20:00:00.000Z'),
+    });
+    await localAiService.connect({
+      baseUrl: 'http://127.0.0.1:11434',
+      selectedModel: 'gemma3:4b',
+    });
+
+    const approvalFor = async (id: string): Promise<string> => {
+      const previewed = await controller.previewLocalAiMeetingSummary(
+        id,
+        localAiService,
+      );
+      if (previewed.outcome !== 'ready') {
+        throw new Error(`Expected a preview, received ${previewed.outcome}.`);
+      }
+      return previewed.preview.approvalFingerprint;
+    };
+
+    const running = controller.generateLocalAiMeetingSummary(
+      record.id,
+      localAiService,
+      await approvalFor(record.id),
+    );
+    // The first send is in flight; the second must wait rather than be refused.
+    await expect(
+      controller.generateLocalAiMeetingSummary(
+        second.id,
+        localAiService,
+        await approvalFor(second.id),
+      ),
+    ).resolves.toEqual({ outcome: 'queued', position: 1 });
+    expect(controller.getState().queuedLocalAiSummaries).toEqual([second.id]);
+
+    releaseFirst();
+    await expect(running).resolves.toMatchObject({ outcome: 'generated' });
+    // The queued send starts from the first one's teardown, so wait for the
+    // saved result rather than for the queue to merely look empty.
+    await vi.waitFor(async () => {
+      await expect(controller.getTranscript(second.id)).resolves.toMatchObject({
+        localAiMeetingSummary: { model: 'gemma3:4b' },
+      });
+    });
+
+    expect(sentOrder).toEqual([record.id, second.id]);
+    expect(controller.getState().activeLocalAiSummary).toBeNull();
+    expect(controller.getState().queuedLocalAiSummaries).toEqual([]);
+    await controller.dispose();
+  });
+
+  it('drops a queued summary that is cancelled before its turn', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-local-ai-dequeue-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    const second = { ...record, id: '9d4c1f26-1a3f-4a55-9d1f-1c2f3b4a5d6e' };
+    await repository.save(record);
+    await repository.save(second);
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    const sent: string[] = [];
+    let releaseFirst: () => void = () => undefined;
+    const firstInFlight = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let pending = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/models')) {
+        return new Response(JSON.stringify({
+          data: [{ id: 'gemma3:4b', object: 'model', owned_by: 'library' }],
+        }), { status: 200 });
+      }
+      sent.push(controller.getState().activeLocalAiSummary?.transcriptId ?? 'none');
+      if (++pending === 1) await firstInFlight;
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              overview: 'A short review.',
+              keyPoints: [],
+              decisions: [],
+              actionItems: [],
+            }),
+          },
+        }],
+      }), { status: 200 });
+    });
+    const localAiService = new LocalAiConnectionService({
+      filePath: path.join(root, 'local-ai', 'connection.json'),
+      credentialCipher: { encrypt: (value) => value, decrypt: (value) => value },
+      fetcher: fetcher as typeof fetch,
+      now: () => new Date('2026-07-29T20:00:00.000Z'),
+    });
+    await localAiService.connect({
+      baseUrl: 'http://127.0.0.1:11434',
+      selectedModel: 'gemma3:4b',
+    });
+
+    const previewFirst = await controller.previewLocalAiMeetingSummary(
+      record.id,
+      localAiService,
+    );
+    const previewSecond = await controller.previewLocalAiMeetingSummary(
+      second.id,
+      localAiService,
+    );
+    if (previewFirst.outcome !== 'ready' || previewSecond.outcome !== 'ready') {
+      throw new Error('Expected both previews to be ready.');
+    }
+
+    const running = controller.generateLocalAiMeetingSummary(
+      record.id,
+      localAiService,
+      previewFirst.preview.approvalFingerprint,
+    );
+    await controller.generateLocalAiMeetingSummary(
+      second.id,
+      localAiService,
+      previewSecond.preview.approvalFingerprint,
+    );
+    controller.cancelLocalAiMeetingSummary(second.id);
+    expect(controller.getState().queuedLocalAiSummaries).toEqual([]);
+
+    releaseFirst();
+    await running;
+    await expect(controller.getTranscript(second.id)).resolves.toMatchObject({
+      localAiMeetingSummary: null,
+    });
+    // Only the first transcript was ever sent.
+    expect(sent).toEqual([record.id]);
+    await controller.dispose();
+  });
+
   it('does not let a slow rename reload resurrect a deleted transcript', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-reload-order-'));
     temporaryRoots.push(root);
