@@ -56,6 +56,8 @@ without embedded secure update configuration keep the feature disabled.
 - A sandboxed renderer and narrow typed IPC boundary
 - An optional Local AI connection surface for Ollama and private-network
   OpenAI-compatible endpoints, with model discovery and protected API keys
+- A reviewed, cancellable Local AI summary send that shows the exact outbound
+  payload before contacting the endpoint
 - Reproducible, checksummed macOS arm64 and Windows x64 runtime builds
 
 On macOS 13 and newer and Windows 11, **Record live meeting** captures the desktop/system audio
@@ -230,6 +232,19 @@ so its timestamp and speaker link come from the recording rather than the
 model. The built-in draft remains available for comparison. Editing transcript
 text or a speaker label clears the AI draft so stale results are not shown or
 exported.
+
+Because this is the only action that moves transcript content off the device,
+**Improve with Local AI** does not send anything until the payload has been
+reviewed. It first builds the outbound requests locally and shows them:
+destination URL, model, whether the saved API key is attached, the speaker
+labels included, the request and segment counts, and the full text of every
+message that would be transmitted. Choosing **Don't send** contacts nothing.
+The preview is built from the same code that performs the send, so the two
+cannot describe different content, and the approval is bound to the transcript
+that was shown — editing a segment between review and confirmation cancels the
+send and asks for a fresh review rather than transmitting unreviewed text. A
+running generation can be stopped with **Stop**, which aborts the in-flight
+request and saves nothing.
 
 For a live Teams call on macOS 13+, complete the Screen & System Audio
 Recording setup above, then click **Record live meeting** before the call
@@ -649,8 +664,6 @@ installer also needs Authenticode code signing and an install/upgrade test.
 3. Evaluate non-English transcription quality on representative meetings.
 4. Evaluate speaker-label quality on representative multi-person Teams meetings
    and rebuild the native speaker runtime for older macOS versions if needed.
-5. Add cancellation and a pre-send transcript preview to the Local AI summary
-   action.
 
 Cloud sync, accounts, an updater, and internet-hosted summarization remain
 intentionally out of scope.

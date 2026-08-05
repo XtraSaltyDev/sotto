@@ -239,10 +239,12 @@ const MeetingSummaryView = ({
   error,
   generating,
   localAiSummary,
+  onCancel,
   onGenerate,
   onOpenLocalAi,
   onSeek,
   playbackAvailable,
+  preparing,
   speakers,
   summary,
 }: {
@@ -250,10 +252,12 @@ const MeetingSummaryView = ({
   error: string | null;
   generating: boolean;
   localAiSummary: LocalAiMeetingSummary | null;
+  onCancel: () => void;
   onGenerate: () => void;
   onOpenLocalAi: () => void;
   onSeek: (milliseconds: number) => void;
   playbackAvailable: boolean;
+  preparing: boolean;
   speakers: TranscriptSpeaker[];
   summary: MeetingSummary;
 }) => {
@@ -335,20 +339,35 @@ const MeetingSummaryView = ({
             </div>
           ) : null}
           {connection?.configured ? (
-            <button
-              className="meeting-summary__generate"
-              disabled={generating}
-              onClick={onGenerate}
-              type="button"
-            >
-              {generating ? (
-                <><SpinnerIcon className="spinner" /> Improving summary…</>
-              ) : localAiSummary ? (
-                'Regenerate with Local AI'
-              ) : (
-                'Improve with Local AI'
-              )}
-            </button>
+            generating ? (
+              <div className="meeting-summary__running" role="group" aria-label="Local AI summary in progress">
+                <span className="meeting-summary__generate" aria-live="polite">
+                  <SpinnerIcon className="spinner" /> Improving summary…
+                </span>
+                <button
+                  className="meeting-summary__stop"
+                  onClick={onCancel}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                className="meeting-summary__generate"
+                disabled={preparing}
+                onClick={onGenerate}
+                type="button"
+              >
+                {preparing ? (
+                  <><SpinnerIcon className="spinner" /> Preparing…</>
+                ) : localAiSummary ? (
+                  'Regenerate with Local AI'
+                ) : (
+                  'Improve with Local AI'
+                )}
+              </button>
+            )
           ) : (
             <button
               className="meeting-summary__generate"
@@ -453,10 +472,12 @@ export const TranscriptView = ({
   localAiConnection,
   localAiError,
   localAiGenerating,
+  localAiPreparing,
   transcript,
   loading,
   message,
   onBack,
+  onCancelLocalAiSummary,
   onDelete,
   onDeletePlayback,
   onRetranscribe,
@@ -472,10 +493,12 @@ export const TranscriptView = ({
   localAiConnection: LocalAiConnectionSummary | null;
   localAiError: string | null;
   localAiGenerating: boolean;
+  localAiPreparing: boolean;
   transcript: TranscriptDetail | null;
   loading: boolean;
   message: string | null;
   onBack: () => void;
+  onCancelLocalAiSummary: () => void;
   onDelete: () => void;
   onDeletePlayback: () => void;
   onRetranscribe: () => void;
@@ -731,7 +754,9 @@ export const TranscriptView = ({
             connection={localAiConnection}
             error={localAiError}
             generating={localAiGenerating}
+            preparing={localAiPreparing}
             localAiSummary={transcript.localAiMeetingSummary}
+            onCancel={onCancelLocalAiSummary}
             onGenerate={onGenerateLocalAiSummary}
             onOpenLocalAi={onOpenLocalAi}
             onSeek={seekTo}

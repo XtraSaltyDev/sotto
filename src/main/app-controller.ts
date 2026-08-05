@@ -6,6 +6,7 @@ import type {
   AppendLiveRecordingChunkResult,
   ExpectedSpeakerCount,
   GenerateLocalAiMeetingSummaryResult,
+  PreviewLocalAiMeetingSummaryResult,
   LiveRecordingCapability,
   LiveRecordingSnapshot,
   RecordingKind,
@@ -53,7 +54,10 @@ import {
 import { buildMeetingSummary } from './summarization/meeting-summary';
 import { MAX_RELIABLE_AUTOMATIC_SPEAKERS } from './transcription/speaker-alignment';
 import type { LocalAiConnectionService } from './local-ai/local-ai-connection';
-import { fingerprintTranscriptForLocalAi } from './local-ai/local-ai-meeting-summary';
+import {
+  fingerprintTranscriptForLocalAi,
+  LocalAiSummaryCancelledError,
+} from './local-ai/local-ai-meeting-summary';
 
 type StateListener = (state: AppState) => void;
 export type LiveRecordingCapabilitySource =
@@ -247,6 +251,10 @@ export class AppController {
   private readonly recordingCapabilityProvider: () => LiveRecordingCapability;
   private recordingCapability: LiveRecordingCapability;
   private activeJob: TranscriptionJobSnapshot | null = null;
+  private activeLocalAiSummary: {
+    id: string;
+    controller: AbortController;
+  } | null = null;
   private activeRecording: LiveRecordingSnapshot | null = null;
   private finalizingRecordingId: string | null = null;
   private recordings: SavedRecordingSummary[] = [];
@@ -713,16 +721,72 @@ export class AppController {
     );
   }
 
+  async previewLocalAiMeetingSummary(
+    id: string,
+    localAiService: LocalAiConnectionService,
+  ): Promise<PreviewLocalAiMeetingSummaryResult> {
+    const record = await this.repository.getAfterPendingMutations(id);
+    if (!record) return { outcome: 'not-found' };
+    try {
+      const preview = await localAiService.planMeetingSummary(
+        withReliableSpeakerPresentation(record),
+      );
+      return {
+        outcome: 'ready',
+        preview: {
+          ...preview,
+          transcriptId: record.id,
+          approvalFingerprint: fingerprintTranscriptForLocalAi(record),
+        },
+      };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Sotto could not prepare this transcript for the local model.',
+      };
+    }
+  }
+
+  /** Stops an in-flight generation for this transcript, if one is running. */
+  cancelLocalAiMeetingSummary(id: string): void {
+    if (this.activeLocalAiSummary?.id === id) {
+      this.activeLocalAiSummary.controller.abort();
+    }
+  }
+
   async generateLocalAiMeetingSummary(
     id: string,
     localAiService: LocalAiConnectionService,
+    approvalFingerprint: string,
   ): Promise<GenerateLocalAiMeetingSummaryResult> {
     const record = await this.repository.getAfterPendingMutations(id);
     if (!record) return { outcome: 'not-found' };
     const fingerprint = fingerprintTranscriptForLocalAi(record);
+    // The preview the user approved described this exact content. If the
+    // transcript changed in between, send nothing and ask for a fresh review
+    // rather than transmitting text that was never shown.
+    if (fingerprint !== approvalFingerprint) {
+      return {
+        outcome: 'rejected',
+        reason:
+          'The transcript changed after you reviewed what would be sent. Review it again before sending.',
+      };
+    }
+    if (this.activeLocalAiSummary) {
+      return {
+        outcome: 'rejected',
+        reason: 'Another Local AI summary is already running.',
+      };
+    }
+    const controller = new AbortController();
+    this.activeLocalAiSummary = { id, controller };
     try {
       const generated = await localAiService.generateMeetingSummary(
         withReliableSpeakerPresentation(record),
+        controller.signal,
       );
       const saved = await this.repository.saveLocalAiMeetingSummary(
         id,
@@ -751,6 +815,9 @@ export class AppController {
       };
       return { outcome: 'generated', localAiMeetingSummary };
     } catch (error) {
+      if (error instanceof LocalAiSummaryCancelledError) {
+        return { outcome: 'cancelled' };
+      }
       return {
         outcome: 'rejected',
         reason:
@@ -758,6 +825,8 @@ export class AppController {
             ? error.message
             : 'Sotto could not improve this summary with the local model.',
       };
+    } finally {
+      this.activeLocalAiSummary = null;
     }
   }
 
@@ -964,6 +1033,9 @@ export class AppController {
   }
 
   async dispose(): Promise<void> {
+    // Otherwise a quit during generation leaves the endpoint request
+    // outstanding until its own two-minute bound expires.
+    this.activeLocalAiSummary?.controller.abort();
     await this.recordingService.dispose();
     await this.service?.dispose();
     await this.recordingUpdateChain;

@@ -507,8 +507,20 @@ describe('transcript presentation', () => {
     );
     await controller.initialize();
 
+    const previewed = await controller.previewLocalAiMeetingSummary(
+      record.id,
+      localAiService,
+    );
+    if (previewed.outcome !== 'ready') {
+      throw new Error(`Expected a preview, received ${previewed.outcome}.`);
+    }
+
     await expect(
-      controller.generateLocalAiMeetingSummary(record.id, localAiService),
+      controller.generateLocalAiMeetingSummary(
+        record.id,
+        localAiService,
+        previewed.preview.approvalFingerprint,
+      ),
     ).resolves.toMatchObject({
       outcome: 'generated',
       localAiMeetingSummary: {
@@ -531,6 +543,113 @@ describe('transcript presentation', () => {
     });
     await expect(controller.getTranscriptExport(record.id, 'txt')).resolves.toMatchObject({
       content: expect.stringContaining('The team reviewed two agenda items.'),
+    });
+    await controller.dispose();
+  });
+
+  it('sends nothing when the transcript changed after the preview was approved', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-local-ai-stale-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    await repository.save(record);
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/models')) {
+        return new Response(JSON.stringify({
+          data: [{ id: 'gemma3:4b', object: 'model', owned_by: 'library' }],
+        }), { status: 200 });
+      }
+      throw new Error('The transcript must never be sent after it changed.');
+    });
+    const localAiService = new LocalAiConnectionService({
+      filePath: path.join(root, 'local-ai', 'connection.json'),
+      credentialCipher: { encrypt: (value) => value, decrypt: (value) => value },
+      fetcher: fetcher as typeof fetch,
+      now: () => new Date('2026-07-29T20:00:00.000Z'),
+    });
+    await localAiService.connect({
+      baseUrl: 'http://127.0.0.1:11434',
+      selectedModel: 'gemma3:4b',
+    });
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+
+    const previewed = await controller.previewLocalAiMeetingSummary(
+      record.id,
+      localAiService,
+    );
+    if (previewed.outcome !== 'ready') {
+      throw new Error(`Expected a preview, received ${previewed.outcome}.`);
+    }
+    // The user edits a segment between reviewing the payload and confirming it.
+    await controller.updateTranscriptSegment(record.id, 0, 'A different first item.');
+
+    await expect(
+      controller.generateLocalAiMeetingSummary(
+        record.id,
+        localAiService,
+        previewed.preview.approvalFingerprint,
+      ),
+    ).resolves.toEqual({
+      outcome: 'rejected',
+      reason:
+        'The transcript changed after you reviewed what would be sent. Review it again before sending.',
+    });
+    await controller.dispose();
+  });
+
+  it('reports a cancelled Local AI summary as cancelled and saves nothing', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-local-ai-cancel-'));
+    temporaryRoots.push(root);
+    const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+    await repository.save(record);
+    const controller = new AppController(
+      repository,
+      readyRuntimeStatus(root),
+      path.join(root, 'jobs'),
+    );
+    await controller.initialize();
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/models')) {
+        return new Response(JSON.stringify({
+          data: [{ id: 'gemma3:4b', object: 'model', owned_by: 'library' }],
+        }), { status: 200 });
+      }
+      // Stop the generation exactly while the model request is outstanding.
+      controller.cancelLocalAiMeetingSummary(record.id);
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    });
+    const localAiService = new LocalAiConnectionService({
+      filePath: path.join(root, 'local-ai', 'connection.json'),
+      credentialCipher: { encrypt: (value) => value, decrypt: (value) => value },
+      fetcher: fetcher as typeof fetch,
+      now: () => new Date('2026-07-29T20:00:00.000Z'),
+    });
+    await localAiService.connect({
+      baseUrl: 'http://127.0.0.1:11434',
+      selectedModel: 'gemma3:4b',
+    });
+
+    const previewed = await controller.previewLocalAiMeetingSummary(
+      record.id,
+      localAiService,
+    );
+    if (previewed.outcome !== 'ready') {
+      throw new Error(`Expected a preview, received ${previewed.outcome}.`);
+    }
+
+    await expect(
+      controller.generateLocalAiMeetingSummary(
+        record.id,
+        localAiService,
+        previewed.preview.approvalFingerprint,
+      ),
+    ).resolves.toEqual({ outcome: 'cancelled' });
+    await expect(controller.getTranscript(record.id)).resolves.toMatchObject({
+      localAiMeetingSummary: null,
     });
     await controller.dispose();
   });

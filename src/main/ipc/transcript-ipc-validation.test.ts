@@ -80,4 +80,5 @@ describe('Transcript Library IPC validation', () => {
     expect(isTranscriptCopyKind('transcript')).toBe(false);
     expect(isTranscriptCopyKind('/private/meeting.txt')).toBe(false);
   });
+
 });

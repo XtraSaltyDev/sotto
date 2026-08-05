@@ -9,9 +9,14 @@ import type {
   LocalAiMeetingSummary,
   LocalAiConnectionSummary,
   LocalAiModel,
+  LocalAiSummaryPreview,
 } from '../../shared/contracts';
 import type { TranscriptRecord } from '../transcription/transcript-types';
-import { generateLocalAiMeetingSummary } from './local-ai-meeting-summary';
+import {
+  chatCompletionsUrl,
+  generateLocalAiMeetingSummary,
+  planLocalAiMeetingSummary,
+} from './local-ai-meeting-summary';
 
 const CONNECTION_SCHEMA_VERSION = 1;
 const MAX_CONNECTION_BYTES = 64 * 1_024;
@@ -343,6 +348,7 @@ export class LocalAiConnectionService {
 
   async generateMeetingSummary(
     record: TranscriptRecord,
+    signal?: AbortSignal,
   ): Promise<LocalAiMeetingSummary> {
     const connection = await this.read();
     if (!connection) {
@@ -361,7 +367,30 @@ export class LocalAiConnectionService {
       fetcher: this.fetcher,
       now: this.now,
       record,
+      signal,
     });
+  }
+
+  /**
+   * Describes the send without performing it. The decrypted key never leaves
+   * this method — the caller learns only that one would be attached, which is
+   * the same guarantee the rest of the connection surface makes.
+   */
+  async planMeetingSummary(
+    record: TranscriptRecord,
+  ): Promise<Omit<LocalAiSummaryPreview, 'approvalFingerprint' | 'transcriptId'>> {
+    const connection = await this.read();
+    if (!connection) {
+      throw new TypeError(
+        'Connect a local model before improving this meeting summary.',
+      );
+    }
+    return {
+      ...planLocalAiMeetingSummary(record).payload,
+      endpoint: chatCompletionsUrl(connection),
+      model: connection.selectedModel,
+      sendsApiKey: Boolean(connection.encryptedApiKey),
+    };
   }
 
   private async fetchModels(

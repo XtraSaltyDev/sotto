@@ -2621,6 +2621,234 @@ textarea:focus-visible {
   height: 12px;
 }
 
+.meeting-summary__running {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meeting-summary__stop {
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.meeting-summary__stop:hover {
+  background: var(--background-deep);
+}
+
+.local-ai-preview-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(24 23 21 / 32%);
+}
+
+.local-ai-preview {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgb(24 23 21 / 22%);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.local-ai-preview__header h2 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.local-ai-preview__header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.local-ai-preview__facts {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--background-deep);
+}
+
+.local-ai-preview__facts div {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 10px;
+}
+
+.local-ai-preview__facts dt {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.local-ai-preview__facts dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.local-ai-preview__documents {
+  flex: 1;
+  min-height: 120px;
+  margin-top: 16px;
+  padding: 4px 12px 12px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* Skip layout for the requests scrolled out of view; a long meeting can carry
+   well over a hundred kilobytes of prompt text across a dozen sections. */
+.local-ai-preview__documents section {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 600px;
+}
+
+.local-ai-preview__documents h3 {
+  position: sticky;
+  top: 0;
+  margin: 0;
+  padding: 10px 0 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.local-ai-preview__documents pre {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.local-ai-preview__note {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
+.local-ai-preview__endpoint {
+  display: block;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.local-ai-preview__lines {
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+}
+
+.local-ai-preview__lines li {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 2px 10px;
+  padding: 5px 0;
+}
+
+.local-ai-preview__time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.local-ai-preview__speaker {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.local-ai-preview__text {
+  grid-column: 2;
+  color: var(--ink);
+  user-select: text;
+}
+
+.local-ai-preview__exact {
+  margin-top: 12px;
+}
+
+.local-ai-preview__exact summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.local-ai-preview__exact summary:hover {
+  color: var(--ink);
+}
+
+.local-ai-preview__exact .local-ai-preview__documents {
+  max-height: 260px;
+  margin-top: 8px;
+}
+
+.local-ai-preview__actions {
+  display: flex;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.local-ai-preview__primary {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.local-ai-preview__primary:hover {
+  background: var(--accent-dark);
+}
+
+.local-ai-preview__secondary {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.local-ai-preview__secondary:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
 .meeting-summary__overview {
   max-width: 720px;
   margin: 16px 0 0;

@@ -35,6 +35,7 @@ import {
   type ExpectedSpeakerCount,
   type FinishLiveRecordingResult,
   type GenerateLocalAiMeetingSummaryResult,
+  type PreviewLocalAiMeetingSummaryResult,
   type ImportMediaResult,
   type InsertDictationTextResult,
   type InstallAppUpdateResult,
@@ -77,6 +78,7 @@ import { copyRecordingForExport } from '../recording/recording-export';
 import { writeTranscriptExport } from '../export/transcript-export';
 import { insertTextAtCursor } from '../dictation/cursor-insertion';
 import type { LocalAiConnectionService } from '../local-ai/local-ai-connection';
+import { isLocalAiTranscriptFingerprint } from '../local-ai/local-ai-meeting-summary';
 import type { UpdateService } from '../updates/update-service';
 import {
   isTranscriptCopyKind,
@@ -437,17 +439,49 @@ export const registerDesktopIpc = ({
   );
 
   ipcMain.handle(
+    IPC_CHANNELS.previewLocalAiMeetingSummary,
+    async (
+      event,
+      transcriptId: unknown,
+    ): Promise<PreviewLocalAiMeetingSummaryResult> => {
+      trust(event);
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      return controller.previewLocalAiMeetingSummary(
+        transcriptId,
+        localAiService,
+      );
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.generateLocalAiMeetingSummary,
     async (
       event,
       transcriptId: unknown,
+      approvalFingerprint: unknown,
     ): Promise<GenerateLocalAiMeetingSummaryResult> => {
       trust(event);
       if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      if (!isLocalAiTranscriptFingerprint(approvalFingerprint)) {
+        return {
+          outcome: 'rejected',
+          reason: 'Review what would be sent before generating this summary.',
+        };
+      }
       return controller.generateLocalAiMeetingSummary(
         transcriptId,
         localAiService,
+        approvalFingerprint,
       );
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.cancelLocalAiMeetingSummary,
+    (event, transcriptId: unknown): void => {
+      trust(event);
+      if (!isTranscriptId(transcriptId)) return;
+      controller.cancelLocalAiMeetingSummary(transcriptId);
     },
   );
 
@@ -1124,7 +1158,9 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.getLocalAiConnection,
       IPC_CHANNELS.connectLocalAi,
       IPC_CHANNELS.disconnectLocalAi,
+      IPC_CHANNELS.previewLocalAiMeetingSummary,
       IPC_CHANNELS.generateLocalAiMeetingSummary,
+      IPC_CHANNELS.cancelLocalAiMeetingSummary,
       IPC_CHANNELS.checkForAppUpdate,
       IPC_CHANNELS.downloadAppUpdate,
       IPC_CHANNELS.cancelAppUpdate,

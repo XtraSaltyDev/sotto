@@ -32,7 +32,9 @@ export const IPC_CHANNELS = {
   getLocalAiConnection: 'sotto:local-ai:get',
   connectLocalAi: 'sotto:local-ai:connect',
   disconnectLocalAi: 'sotto:local-ai:disconnect',
+  previewLocalAiMeetingSummary: 'sotto:local-ai:meeting-summary:preview',
   generateLocalAiMeetingSummary: 'sotto:local-ai:meeting-summary:generate',
+  cancelLocalAiMeetingSummary: 'sotto:local-ai:meeting-summary:cancel',
   deletePlayback: 'sotto:playback:delete',
   checkForAppUpdate: 'sotto:updates:check',
   downloadAppUpdate: 'sotto:updates:download',
@@ -345,12 +347,51 @@ export type ConnectLocalAiResult =
 
 export type DisconnectLocalAiResult = { outcome: 'disconnected' };
 
+/**
+ * The complete outbound payload for one Improve with Local AI action, shown
+ * before anything is sent. Local AI is the only place Sotto contacts a
+ * network endpoint with transcript content, so the user reviews the exact
+ * bytes rather than a description of them.
+ */
+export interface LocalAiSummaryPreview {
+  /** The transcript this payload was built from, so an approval cannot be applied to another. */
+  transcriptId: string;
+  endpoint: string;
+  model: string;
+  /** Whether the saved bearer key is attached. The key itself never leaves the main process. */
+  sendsApiKey: boolean;
+  systemPrompt: string;
+  /** One entry per outbound request, in order, with its full user prompt. */
+  transcriptRequests: string[];
+  /**
+   * True when a final request consolidates the sections above. It carries the
+   * model's own replies rather than transcript text, so its exact content is
+   * not known until those replies arrive.
+   */
+  needsConsolidationRequest: boolean;
+  segmentCount: number;
+  speakerLabels: string[];
+  characterCount: number;
+  /**
+   * Identifies the transcript content the user approved. Generation refuses to
+   * send when the transcript no longer matches, so an edit between review and
+   * confirmation cannot quietly change what is transmitted.
+   */
+  approvalFingerprint: string;
+}
+
+export type PreviewLocalAiMeetingSummaryResult =
+  | { outcome: 'ready'; preview: LocalAiSummaryPreview }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
 export type GenerateLocalAiMeetingSummaryResult =
   | {
       outcome: 'generated';
       localAiMeetingSummary: LocalAiMeetingSummary;
     }
   | { outcome: 'not-found' }
+  | { outcome: 'cancelled' }
   | { outcome: 'rejected'; reason: string };
 
 export type RetranscribeTranscriptResult =
@@ -597,9 +638,14 @@ export interface SottoDesktopApi {
   getLocalAiConnection(): Promise<LocalAiConnectionSummary>;
   connectLocalAi(input: ConnectLocalAiInput): Promise<ConnectLocalAiResult>;
   disconnectLocalAi(): Promise<DisconnectLocalAiResult>;
+  previewLocalAiMeetingSummary(
+    transcriptId: string,
+  ): Promise<PreviewLocalAiMeetingSummaryResult>;
   generateLocalAiMeetingSummary(
     transcriptId: string,
+    approvalFingerprint: string,
   ): Promise<GenerateLocalAiMeetingSummaryResult>;
+  cancelLocalAiMeetingSummary(transcriptId: string): Promise<void>;
   checkForAppUpdate(): Promise<CheckForAppUpdateResult>;
   downloadAppUpdate(): Promise<DownloadAppUpdateResult>;
   cancelAppUpdate(): Promise<void>;

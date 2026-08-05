@@ -12,6 +12,7 @@ import type {
   AppState,
   ExpectedSpeakerCount,
   LocalAiConnectionSummary,
+  LocalAiSummaryPreview,
   RecordingKind,
   SavedRecordingSummary,
   StartLiveRecordingResult,
@@ -32,6 +33,7 @@ import {
   SpinnerIcon,
 } from './icons';
 import { ActivityOverlay } from './ActivityOverlay';
+import { LocalAiSendPreview } from './LocalAiSendPreview';
 import { LocalAiSettings } from './LocalAiSettings';
 import { SettingsPage } from './SettingsPage';
 import {
@@ -90,6 +92,9 @@ const MainApp = ({
   const [localAiConnection, setLocalAiConnection] =
     useState<LocalAiConnectionSummary | null>(null);
   const [localAiGenerating, setLocalAiGenerating] = useState(false);
+  const [localAiPreparing, setLocalAiPreparing] = useState(false);
+  const [localAiPreview, setLocalAiPreview] =
+    useState<LocalAiSummaryPreview | null>(null);
   const [localAiError, setLocalAiError] = useState<string | null>(null);
   const [expectedSpeakerCount, setExpectedSpeakerCount] =
     useState<ExpectedSpeakerCount>(null);
@@ -438,10 +443,13 @@ const MainApp = ({
       setTranscript(null);
       setLocalAiConnection(null);
       setLocalAiError(null);
+      setLocalAiPreview(null);
       return undefined;
     }
 
     let cancelled = false;
+    // A payload built for the previous transcript must not linger over this one.
+    setLocalAiPreview(null);
     setNotice(null);
     setIsLoadingTranscript(true);
     window.sotto
@@ -988,12 +996,45 @@ const MainApp = ({
     }
   };
 
-  const handleGenerateLocalAiSummary = async () => {
-    if (!window.sotto || !selectedId || localAiGenerating) return;
+  /**
+   * Builds the outbound payload and shows it. Nothing is sent until the user
+   * confirms the dialog this opens.
+   */
+  const handleRequestLocalAiSummary = async () => {
+    if (!window.sotto || !selectedId || localAiGenerating || localAiPreparing) {
+      return;
+    }
+    setLocalAiError(null);
+    setLocalAiPreparing(true);
+    try {
+      const result = await window.sotto.previewLocalAiMeetingSummary(selectedId);
+      if (result.outcome === 'ready') {
+        setLocalAiPreview(result.preview);
+      } else if (result.outcome === 'not-found') {
+        setLocalAiError('That transcript is no longer available.');
+      } else {
+        setLocalAiError(result.reason);
+      }
+    } catch {
+      setLocalAiError('Sotto could not prepare this summary for Local AI.');
+    } finally {
+      setLocalAiPreparing(false);
+    }
+  };
+
+  const handleConfirmLocalAiSummary = async () => {
+    const preview = localAiPreview;
+    // The approval belongs to the transcript it was built from, so a preview
+    // left over from another meeting can never authorize this send.
+    if (!window.sotto || !preview || preview.transcriptId !== selectedId) return;
+    setLocalAiPreview(null);
     setLocalAiError(null);
     setLocalAiGenerating(true);
     try {
-      const result = await window.sotto.generateLocalAiMeetingSummary(selectedId);
+      const result = await window.sotto.generateLocalAiMeetingSummary(
+        preview.transcriptId,
+        preview.approvalFingerprint,
+      );
       if (result.outcome === 'generated') {
         setTranscript((current) => current
           ? {
@@ -1003,14 +1044,20 @@ const MainApp = ({
           : current);
       } else if (result.outcome === 'not-found') {
         setLocalAiError('That transcript is no longer available.');
-      } else {
+      } else if (result.outcome === 'rejected') {
         setLocalAiError(result.reason);
       }
+      // A cancelled generation is what the user asked for, so it is not an error.
     } catch {
       setLocalAiError('Sotto could not improve this summary with Local AI.');
     } finally {
       setLocalAiGenerating(false);
     }
+  };
+
+  const handleCancelLocalAiSummary = () => {
+    if (!window.sotto || !selectedId || !localAiGenerating) return;
+    void window.sotto.cancelLocalAiMeetingSummary(selectedId);
   };
 
   // Segment and speaker edits change the transcript fingerprint, which
@@ -1393,6 +1440,7 @@ const MainApp = ({
           localAiConnection={localAiConnection}
           localAiError={localAiError}
           localAiGenerating={localAiGenerating}
+          localAiPreparing={localAiPreparing}
           loading={isLoadingTranscript}
           message={notice?.text ?? null}
           onBack={() => {
@@ -1407,13 +1455,21 @@ const MainApp = ({
           onExportRecording={() => {
             if (transcript?.recordingId) void exportRecording(transcript.recordingId);
           }}
-          onGenerateLocalAiSummary={() => void handleGenerateLocalAiSummary()}
+          onCancelLocalAiSummary={handleCancelLocalAiSummary}
+          onGenerateLocalAiSummary={() => void handleRequestLocalAiSummary()}
           onOpenLocalAi={() => setCurrentPage('local-ai')}
           onRenameSpeaker={handleRenameSpeaker}
           onUpdateMetadata={handleUpdateMetadata}
           onUpdateSegment={handleUpdateSegment}
           transcript={transcript}
         />
+        {localAiPreview ? (
+          <LocalAiSendPreview
+            onCancel={() => setLocalAiPreview(null)}
+            onConfirm={() => void handleConfirmLocalAiSummary()}
+            preview={localAiPreview}
+          />
+        ) : null}
       </div>
     );
   }

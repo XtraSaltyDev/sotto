@@ -134,9 +134,23 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.connectLocalAi, input),
   disconnectLocalAi: () =>
     ipcRenderer.invoke(IPC_CHANNELS.disconnectLocalAi),
-  generateLocalAiMeetingSummary: (transcriptId: string) =>
+  previewLocalAiMeetingSummary: (transcriptId: string) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.previewLocalAiMeetingSummary,
+      transcriptId,
+    ),
+  generateLocalAiMeetingSummary: (
+    transcriptId: string,
+    approvalFingerprint: string,
+  ) =>
     ipcRenderer.invoke(
       IPC_CHANNELS.generateLocalAiMeetingSummary,
+      transcriptId,
+      approvalFingerprint,
+    ),
+  cancelLocalAiMeetingSummary: (transcriptId: string) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.cancelLocalAiMeetingSummary,
       transcriptId,
     ),
   checkForAppUpdate: () =>

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type {
   LocalAiMeetingSummary,
+  LocalAiSummaryPreview,
   MeetingSummary,
   MeetingSummaryItem,
 } from '../../shared/contracts';
@@ -47,10 +48,67 @@ interface GenerateOptions {
   fetcher?: typeof fetch;
   now?: () => Date;
   record: TranscriptRecord;
+  signal?: AbortSignal;
 }
+
+/**
+ * The single definition of where a summary request goes. Both the preview and
+ * the send read it here, so the destination the dialog discloses cannot drift
+ * from the one actually contacted.
+ */
+export const chatCompletionsUrl = (
+  connection: Pick<LocalAiRuntimeConnection, 'baseUrl'>,
+): string => `${connection.baseUrl}/chat/completions`;
+
+/**
+ * Every byte this transcript would send to the configured endpoint, built
+ * before any request is made. The preview surface renders exactly this, and
+ * generation sends exactly this, so the confirmation the user gives cannot
+ * describe different content than the one that leaves the device.
+ *
+ * The reviewable fields are the preview's own, so a field added here reaches
+ * the dialog rather than being dropped by a hand-written copy.
+ */
+export type LocalAiSummaryPayload = Pick<
+  LocalAiSummaryPreview,
+  // transcriptId, endpoint, model, sendsApiKey, and approvalFingerprint are
+  // supplied by the layers that own them, not by the payload builder.
+  | 'systemPrompt'
+  | 'transcriptRequests'
+  | 'needsConsolidationRequest'
+  | 'segmentCount'
+  | 'speakerLabels'
+  | 'characterCount'
+>;
+
+export interface LocalAiSummaryPlan {
+  /** Passed to the preview whole, so a new field reaches the dialog by construction. */
+  payload: LocalAiSummaryPayload;
+  /** Main-process detail used to ground results; not part of the review. */
+  segments: IndexedSegment[];
+}
+
+/**
+ * Raised when the user stops a generation that is already in flight. Kept
+ * distinct from a failure so the caller can stay silent instead of showing
+ * an error for something the user asked for.
+ */
+export class LocalAiSummaryCancelledError extends Error {
+  constructor() {
+    super('Local AI summary was cancelled.');
+    this.name = 'LocalAiSummaryCancelledError';
+  }
+}
+
+const throwIfCancelled = (signal: AbortSignal | undefined): void => {
+  if (signal?.aborted) throw new LocalAiSummaryCancelledError();
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const sortedUnique = (values: string[]): string[] =>
+  [...new Set(values)].sort((left, right) => left.localeCompare(right));
 
 const normalizeText = (
   value: unknown,
@@ -154,12 +212,20 @@ const requestDraft = async (
   fetcher: typeof fetch,
   systemPrompt: string,
   userPrompt: string,
+  cancellation: AbortSignal | undefined,
 ): Promise<SummaryDraft> => {
+  throwIfCancelled(cancellation);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // The user's stop action and the two-minute bound both have to reach an
+  // in-flight request, but they are reported differently, so the originating
+  // signal is inspected rather than the combined one.
+  const signal = cancellation
+    ? AbortSignal.any([cancellation, controller.signal])
+    : controller.signal;
   let response: Response;
   try {
-    response = await fetcher(`${connection.baseUrl}/chat/completions`, {
+    response = await fetcher(chatCompletionsUrl(connection), {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -178,10 +244,11 @@ const requestDraft = async (
         temperature: 0.1,
       }),
       redirect: 'error',
-      signal: controller.signal,
+      signal,
     });
   } catch {
     clearTimeout(timeout);
+    throwIfCancelled(cancellation);
     if (controller.signal.aborted) {
       throw new TypeError('The local model did not finish within two minutes.');
     }
@@ -195,6 +262,9 @@ const requestDraft = async (
       throw new TypeError(`The local model endpoint returned HTTP ${response.status}.`);
     }
     return parseLocalAiSummaryDraft(responseContent(await readBoundedResponse(response)));
+  } catch (error) {
+    throwIfCancelled(cancellation);
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -282,6 +352,16 @@ const summaryItems = (
       : [];
   });
 
+/**
+ * Shape guard for a value claiming to be a fingerprint. Lives beside the
+ * function that produces one so the digest's encoding is pinned in a single
+ * place; the authority on whether an approval is valid remains the equality
+ * check against a freshly computed fingerprint.
+ */
+export const isLocalAiTranscriptFingerprint = (
+  value: unknown,
+): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/u.test(value);
+
 export const fingerprintTranscriptForLocalAi = (record: TranscriptRecord): string =>
   createHash('sha256')
     .update(JSON.stringify({
@@ -296,24 +376,57 @@ export const fingerprintTranscriptForLocalAi = (record: TranscriptRecord): strin
     }))
     .digest('hex');
 
-export const generateLocalAiMeetingSummary = async ({
-  connection,
-  fetcher = fetch,
-  now = () => new Date(),
-  record,
-}: GenerateOptions): Promise<LocalAiMeetingSummary> => {
+/**
+ * Builds the outbound content without contacting anything. Rejections that
+ * depend only on the transcript — no speech, too long — surface here, before
+ * the user is asked to approve a send that could not have succeeded.
+ */
+export const planLocalAiMeetingSummary = (
+  record: TranscriptRecord,
+): LocalAiSummaryPlan => {
   const segments = toIndexedSegments(record);
   if (segments.length === 0) {
     throw new TypeError('This transcript has no spoken content to summarize.');
   }
   const chunks = chunkSegments(segments);
+  const transcriptRequests = chunks.map((chunk, index) =>
+    chunkPrompt(chunk, index + 1, chunks.length),
+  );
+  const speakerLabels = sortedUnique(
+    segments.flatMap((segment) => (segment.speakerLabel ? [segment.speakerLabel] : [])),
+  );
+  return {
+    payload: {
+      systemPrompt: SYSTEM_PROMPT,
+      transcriptRequests,
+      needsConsolidationRequest: transcriptRequests.length > 1,
+      segmentCount: segments.length,
+      speakerLabels,
+      characterCount: transcriptRequests.reduce(
+        (total, prompt) => total + SYSTEM_PROMPT.length + prompt.length,
+        0,
+      ),
+    },
+    segments,
+  };
+};
+
+export const generateLocalAiMeetingSummary = async ({
+  connection,
+  fetcher = fetch,
+  now = () => new Date(),
+  record,
+  signal,
+}: GenerateOptions): Promise<LocalAiMeetingSummary> => {
+  const { payload, segments } = planLocalAiMeetingSummary(record);
   const drafts: SummaryDraft[] = [];
-  for (const [index, chunk] of chunks.entries()) {
+  for (const request of payload.transcriptRequests) {
     drafts.push(await requestDraft(
       connection,
       fetcher,
-      SYSTEM_PROMPT,
-      chunkPrompt(chunk, index + 1, chunks.length),
+      payload.systemPrompt,
+      request,
+      signal,
     ));
   }
   const draft = drafts.length === 1
@@ -321,10 +434,14 @@ export const generateLocalAiMeetingSummary = async ({
     : await requestDraft(
         connection,
         fetcher,
-        SYSTEM_PROMPT,
+        payload.systemPrompt,
         mergePrompt(drafts),
+        signal,
       );
-  const segmentByIndex = new Map(segments.map((segment) => [segment.index, segment]));
+  throwIfCancelled(signal);
+  const segmentByIndex = new Map(
+    segments.map((segment) => [segment.index, segment]),
+  );
   const summary: MeetingSummary = {
     overview: draft.overview,
     keyPoints: summaryItems(draft.keyPoints, segmentByIndex),
