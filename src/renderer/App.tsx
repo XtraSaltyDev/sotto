@@ -40,6 +40,11 @@ import {
   withoutQueuedLocalAiNotice,
   LOCAL_AI_QUEUED_NOTICE,
 } from './local-ai-send-preview';
+import {
+  CAPTURE_CHANNELS,
+  CAPTURE_CHANNEL_COUNT,
+  recordingChannelLayout,
+} from '../shared/capture-channels';
 import { CaptureResources } from './capture-resources';
 import { homeCapabilities } from './home-capabilities';
 import { LiveRecordingChunkQueue } from './live-recording-chunk-queue';
@@ -732,11 +737,29 @@ const MainApp = ({
       captureRef.current.claimAudioContext(context);
       await context.resume();
       const destination = context.createMediaStreamDestination();
+      const hasDesktopAudio = Boolean(desktopStream?.getAudioTracks().length);
+      const hasMicrophoneAudio = Boolean(microphoneStream?.getAudioTracks().length);
+      // With both sources present, keep them on their own channels rather than
+      // summing: which channel a voice arrived on identifies the local speaker
+      // outright, and that is unrecoverable once the two are added together.
+      const channelLayout = recordingChannelLayout({
+        hasDesktopAudio,
+        hasMicrophoneAudio,
+      });
+      const sink =
+        channelLayout === 'desktop-microphone'
+          ? context.createChannelMerger(CAPTURE_CHANNEL_COUNT)
+          : destination;
+      if (sink !== destination) sink.connect(destination);
       if (desktopStream?.getAudioTracks().length) {
-        context.createMediaStreamSource(desktopStream).connect(destination);
+        const source = context.createMediaStreamSource(desktopStream);
+        if (sink === destination) source.connect(destination);
+        else source.connect(sink, 0, CAPTURE_CHANNELS.desktop);
       }
       if (microphoneStream?.getAudioTracks().length) {
-        context.createMediaStreamSource(microphoneStream).connect(destination);
+        const source = context.createMediaStreamSource(microphoneStream);
+        if (sink === destination) source.connect(destination);
+        else source.connect(sink, 0, CAPTURE_CHANNELS.microphone);
       }
 
       if (typeof MediaRecorder === 'undefined') {
