@@ -80,6 +80,7 @@ const createController = () => ({
   generateLocalAiMeetingSummary: vi.fn(async () => ({ outcome: 'not-found' })),
   cancelLocalAiMeetingSummary: vi.fn(),
   assignTranscriptSegmentSpeaker: vi.fn(async () => ({ outcome: 'not-found' })),
+  assignTranscriptSegmentSpeakers: vi.fn(async () => ({ outcome: 'not-found' })),
   addTranscriptSpeaker: vi.fn(async () => ({ outcome: 'not-found' })),
   getSpeakerAnnotation: vi.fn(async () => null),
   isAnnotationEnabled: false,
@@ -331,6 +332,7 @@ describe('registerDesktopIpc argument validation', () => {
 describe('registerDesktopIpc speaker annotation gate', () => {
   const ANNOTATION_CHANNELS = [
     IPC_CHANNELS.assignTranscriptSegmentSpeaker,
+    IPC_CHANNELS.assignTranscriptSegmentSpeakers,
     IPC_CHANNELS.addTranscriptSpeaker,
     IPC_CHANNELS.exportSpeakerAnnotation,
   ];
@@ -348,6 +350,7 @@ describe('registerDesktopIpc speaker annotation gate', () => {
     }
 
     expect(controller.assignTranscriptSegmentSpeaker).not.toHaveBeenCalled();
+    expect(controller.assignTranscriptSegmentSpeakers).not.toHaveBeenCalled();
     expect(controller.addTranscriptSpeaker).not.toHaveBeenCalled();
     expect(controller.getSpeakerAnnotation).not.toHaveBeenCalled();
   });
@@ -367,6 +370,37 @@ describe('registerDesktopIpc speaker annotation gate', () => {
     expect(controller.addTranscriptSpeaker).toHaveBeenCalledWith(
       TRANSCRIPT_ID,
       'Morgan',
+    );
+  });
+
+  it('refuses a bulk assignment whose indexes are not bounded integers', async () => {
+    const { controller, mainWindow } = setup({ annotationEnabled: true });
+    const event = eventFrom(mainWindow);
+
+    for (const indexes of ['all', null, [0, -1], [0, 1.5], [0, 'two'], [{}]]) {
+      await expect(
+        invoke(
+          IPC_CHANNELS.assignTranscriptSegmentSpeakers,
+          event,
+          TRANSCRIPT_ID,
+          indexes,
+          null,
+        ),
+      ).resolves.toEqual({ outcome: 'not-found' });
+    }
+    expect(controller.assignTranscriptSegmentSpeakers).not.toHaveBeenCalled();
+
+    await invoke(
+      IPC_CHANNELS.assignTranscriptSegmentSpeakers,
+      event,
+      TRANSCRIPT_ID,
+      [0, 3, 7],
+      null,
+    );
+    expect(controller.assignTranscriptSegmentSpeakers).toHaveBeenCalledWith(
+      TRANSCRIPT_ID,
+      [0, 3, 7],
+      null,
     );
   });
 

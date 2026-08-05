@@ -7,6 +7,7 @@ import type {
   ExpectedSpeakerCount,
   AddTranscriptSpeakerResult,
   AssignTranscriptSegmentSpeakerResult,
+  AssignTranscriptSegmentSpeakersResult,
   GenerateLocalAiMeetingSummaryResult,
   PreviewLocalAiMeetingSummaryResult,
   LiveRecordingCapability,
@@ -1022,6 +1023,32 @@ export class AppController {
           error instanceof Error
             ? error.message
             : 'Sotto could not reassign that segment.',
+      };
+    }
+  }
+
+  async assignTranscriptSegmentSpeakers(
+    transcriptId: string,
+    segmentIndexes: number[],
+    speakerId: string | null,
+  ): Promise<AssignTranscriptSegmentSpeakersResult> {
+    try {
+      const result = await this.repository.assignSegmentSpeakers(
+        transcriptId,
+        segmentIndexes,
+        speakerId,
+      );
+      if (result.outcome === 'not-found') return result;
+      await this.refreshTranscript(transcriptId);
+      this.emit();
+      return { outcome: 'updated', assignedCount: result.assignedCount };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Sotto could not reassign those segments.',
       };
     }
   }

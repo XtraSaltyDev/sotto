@@ -96,6 +96,17 @@ const api: SottoDesktopApi = Object.freeze({
       segmentIndex,
       speakerId,
     ),
+  assignTranscriptSegmentSpeakers: (
+    transcriptId: string,
+    segmentIndexes: number[],
+    speakerId: string | null,
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.assignTranscriptSegmentSpeakers,
+      transcriptId,
+      segmentIndexes,
+      speakerId,
+    ),
   addTranscriptSpeaker: (transcriptId: string, label: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.addTranscriptSpeaker, transcriptId, label),
   exportSpeakerAnnotation: (transcriptId: string) =>

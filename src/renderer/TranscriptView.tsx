@@ -495,6 +495,7 @@ export const TranscriptView = ({
   localAiQueued,
   annotationEnabled,
   onAssignSegmentSpeaker,
+  onAssignSegmentSpeakers,
   onAddSpeaker,
   onExportAnnotation,
   transcript,
@@ -523,6 +524,10 @@ export const TranscriptView = ({
   annotationEnabled: boolean;
   onAssignSegmentSpeaker: (
     segmentIndex: number,
+    speakerId: string | null,
+  ) => Promise<string | null>;
+  onAssignSegmentSpeakers: (
+    segmentIndexes: number[],
     speakerId: string | null,
   ) => Promise<string | null>;
   onAddSpeaker: (label: string) => Promise<string | null>;
@@ -564,6 +569,44 @@ export const TranscriptView = ({
   const speakerNotice = transcript ? speakerDiagnosticsNotice(transcript) : null;
   const [newSpeakerLabel, setNewSpeakerLabel] = useState('');
   const [annotationError, setAnnotationError] = useState<string | null>(null);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [selectedSegments, setSelectedSegments] = useState<ReadonlySet<number>>(
+    new Set(),
+  );
+  const lastToggledSegmentRef = useRef<number | null>(null);
+
+  // A selection describes positions in one transcript, so it cannot survive
+  // opening another.
+  useEffect(() => {
+    setSelectedSegments(new Set());
+    lastToggledSegmentRef.current = null;
+  }, [transcript?.id]);
+
+  /**
+   * Shift-click extends from the previous toggle, which is what makes
+   * annotating a long meeting bearable: a speaker's turn is usually a run of
+   * consecutive segments.
+   */
+  const toggleSegmentSelection = (index: number, extend: boolean): void => {
+    setSelectedSegments((current) => {
+      const next = new Set(current);
+      const anchor = lastToggledSegmentRef.current;
+      if (extend && anchor !== null) {
+        const [from, to] = anchor <= index ? [anchor, index] : [index, anchor];
+        const selecting = !current.has(index);
+        for (let position = from; position <= to; position += 1) {
+          if (selecting) next.add(position);
+          else next.delete(position);
+        }
+      } else if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+    lastToggledSegmentRef.current = index;
+  };
   const activeSegmentIndex = transcript
     ? activeSegmentIndexAt(transcript.segments, currentTimeMs)
     : -1;
@@ -941,6 +984,60 @@ export const TranscriptView = ({
                 Export annotation
               </button>
             </form>
+            <div className="annotation-tools__bulk" role="group" aria-label="Bulk speaker assignment">
+              <span aria-live="polite">
+                {selectedSegments.size === 0
+                  ? 'No segments selected. Tick segments below; hold Shift to take a range.'
+                  : `${selectedSegments.size.toLocaleString()} selected`}
+              </span>
+              <label htmlFor="annotation-bulk-speaker">Assign selected to</label>
+              <select
+                disabled={selectedSegments.size === 0 || bulkAssigning}
+                id="annotation-bulk-speaker"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === '') return;
+                  event.target.value = '';
+                  const indexes = [...selectedSegments];
+                  setBulkAssigning(true);
+                  setAnnotationError(null);
+                  void onAssignSegmentSpeakers(
+                    indexes,
+                    value === 'unclear' ? null : value,
+                  ).then((reason) => {
+                    setBulkAssigning(false);
+                    setAnnotationError(reason);
+                    if (!reason) setSelectedSegments(new Set());
+                  });
+                }}
+                value=""
+              >
+                <option value="">{bulkAssigning ? 'Assigning…' : 'Choose…'}</option>
+                <option value="unclear">Unclear</option>
+                {(transcript.speakerAnalysis?.speakers ?? []).map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={selectedSegments.size === 0}
+                onClick={() => setSelectedSegments(new Set())}
+                type="button"
+              >
+                Clear selection
+              </button>
+              <button
+                onClick={() =>
+                  setSelectedSegments(
+                    new Set(transcript.segments.map((_, index) => index)),
+                  )
+                }
+                type="button"
+              >
+                Select all
+              </button>
+            </div>
             {annotationError ? (
               <p className="transcript-metadata__error" role="alert">{annotationError}</p>
             ) : null}
@@ -1044,6 +1141,18 @@ export const TranscriptView = ({
                     </button>
                   ) : formatDuration(segment.startMs)}
                 </time>
+                {annotationEnabled ? (
+                  <input
+                    aria-label={`Select the segment at ${formatDuration(segment.startMs)}`}
+                    checked={selectedSegments.has(index)}
+                    className="segment__select"
+                    onChange={() => undefined}
+                    onClick={(event) =>
+                      toggleSegmentSelection(index, event.shiftKey)
+                    }
+                    type="checkbox"
+                  />
+                ) : null}
                 {annotationEnabled ? (
                   <select
                     aria-label={`Speaker for the segment at ${formatDuration(segment.startMs)}`}

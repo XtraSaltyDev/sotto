@@ -61,6 +61,15 @@ export type AssignSegmentSpeakerResult =
     }
   | { outcome: 'not-found' };
 
+export type AssignSegmentSpeakersResult =
+  | {
+      outcome: 'updated';
+      record: TranscriptRecord;
+      /** Segments actually changed; a stale index is skipped, not refused. */
+      assignedCount: number;
+    }
+  | { outcome: 'not-found' };
+
 export type AddSpeakerResult =
   | { outcome: 'added'; record: TranscriptRecord; speaker: TranscriptSpeaker }
   | { outcome: 'not-found' }
@@ -294,6 +303,68 @@ export class TranscriptRepository {
         localAiMeetingSummary: null,
       });
       return { outcome: 'updated', record, segment: record.segments[segmentIndex] };
+    });
+  }
+
+  /**
+   * Reassigns many segments at once. Annotating a long meeting means moving
+   * hundreds of segments, and doing that one call at a time would rewrite the
+   * whole record hundreds of times; this reads and writes it once. It is also
+   * atomic, so a bulk assignment cannot half-apply.
+   */
+  async assignSegmentSpeakers(
+    transcriptId: TranscriptId,
+    segmentIndexes: readonly number[],
+    speakerId: TranscriptSpeakerId | null,
+  ): Promise<AssignSegmentSpeakersResult> {
+    if (!isTranscriptId(transcriptId)) {
+      throw new TranscriptValidationError('Transcript id must be a UUID.');
+    }
+    if (
+      segmentIndexes.some(
+        (index) => !Number.isSafeInteger(index) || index < 0,
+      )
+    ) {
+      throw new TranscriptValidationError('Transcript segment index is invalid.');
+    }
+    if (speakerId !== null && !isTranscriptSpeakerId(speakerId)) {
+      throw new TranscriptValidationError('Speaker id must be a UUID or null.');
+    }
+
+    const normalizedSpeakerId = speakerId === null ? null : speakerId.toLowerCase();
+    const targets = new Set(segmentIndexes);
+
+    return this.serializeMutation(async () => {
+      const current = await this.get(transcriptId.toLowerCase());
+      if (!current) return { outcome: 'not-found' };
+      if (
+        normalizedSpeakerId !== null &&
+        !current.speakerAnalysis?.speakers.some(
+          (speaker) => speaker.id === normalizedSpeakerId,
+        )
+      ) {
+        return { outcome: 'not-found' };
+      }
+      // An index past the end is a stale selection, not a reason to refuse the
+      // rest: the transcript may have been re-transcribed in another window.
+      const applicable = [...targets].filter(
+        (index) => index < current.segments.length,
+      );
+      if (applicable.length === 0) {
+        return { outcome: 'updated', record: current, assignedCount: 0 };
+      }
+
+      const segments = current.segments.map((segment, index) =>
+        targets.has(index) && index < current.segments.length
+          ? { ...segment, speakerId: normalizedSpeakerId }
+          : segment,
+      );
+      const record = await this.save({
+        ...current,
+        segments,
+        localAiMeetingSummary: null,
+      });
+      return { outcome: 'updated', record, assignedCount: applicable.length };
     });
   }
 

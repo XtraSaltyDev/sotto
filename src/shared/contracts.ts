@@ -17,6 +17,7 @@ export const IPC_CHANNELS = {
   updateTranscriptMetadata: 'sotto:transcript:metadata:update',
   updateTranscriptSegment: 'sotto:transcript:segment:update',
   assignTranscriptSegmentSpeaker: 'sotto:transcript:segment:assign-speaker',
+  assignTranscriptSegmentSpeakers: 'sotto:transcript:segments:assign-speaker',
   addTranscriptSpeaker: 'sotto:transcript:speaker:add',
   exportSpeakerAnnotation: 'sotto:transcript:speaker-annotation:export',
   renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
@@ -444,6 +445,11 @@ export type AssignTranscriptSegmentSpeakerResult =
   | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
+export type AssignTranscriptSegmentSpeakersResult =
+  | { outcome: 'updated'; assignedCount: number }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
 export type AddTranscriptSpeakerResult =
   | { outcome: 'added'; speaker: TranscriptSpeaker }
   | { outcome: 'not-found' }
@@ -670,6 +676,11 @@ export interface SottoDesktopApi {
     segmentIndex: number,
     speakerId: string | null,
   ): Promise<AssignTranscriptSegmentSpeakerResult>;
+  assignTranscriptSegmentSpeakers(
+    transcriptId: string,
+    segmentIndexes: number[],
+    speakerId: string | null,
+  ): Promise<AssignTranscriptSegmentSpeakersResult>;
   addTranscriptSpeaker(
     transcriptId: string,
     label: string,

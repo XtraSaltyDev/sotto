@@ -1059,6 +1059,29 @@ const MainApp = ({
     return null;
   };
 
+  const handleAssignSegmentSpeakers = async (
+    segmentIndexes: number[],
+    speakerId: string | null,
+  ): Promise<string | null> => {
+    if (!window.sotto || !selectedId) return 'Sotto is not ready.';
+    const result = await window.sotto.assignTranscriptSegmentSpeakers(
+      selectedId,
+      segmentIndexes,
+      speakerId,
+    );
+    if (result.outcome === 'not-found') return 'That transcript is no longer available.';
+    if (result.outcome === 'rejected') return result.reason;
+    // One bulk write changed many segments, so re-read rather than patching.
+    const detail = await window.sotto.getTranscript(selectedId);
+    if (detail) setTranscript(detail);
+    showInfo(
+      `Assigned ${result.assignedCount.toLocaleString()} ${
+        result.assignedCount === 1 ? 'segment' : 'segments'
+      }.`,
+    );
+    return null;
+  };
+
   const handleAddSpeaker = async (label: string): Promise<string | null> => {
     if (!window.sotto || !selectedId) return 'Sotto is not ready.';
     const result = await window.sotto.addTranscriptSpeaker(selectedId, label);
@@ -1470,6 +1493,7 @@ const MainApp = ({
           localAiQueued={localAiQueued}
           annotationEnabled={appState?.annotationEnabled ?? false}
           onAssignSegmentSpeaker={handleAssignSegmentSpeaker}
+          onAssignSegmentSpeakers={handleAssignSegmentSpeakers}
           onAddSpeaker={handleAddSpeaker}
           onExportAnnotation={handleExportAnnotation}
           loading={isLoadingTranscript}

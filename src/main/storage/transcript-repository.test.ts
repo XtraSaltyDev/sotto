@@ -175,6 +175,59 @@ describe('TranscriptRepository', () => {
     expect(await readdir(rootPath)).toEqual([`${record.id}.json`]);
   });
 
+  it('reassigns many segments in one atomic write', async () => {
+    const record = createSpeakerRecord();
+    await repository.save(record);
+
+    await expect(
+      repository.assignSegmentSpeakers(record.id, [0, 1], SECOND_SPEAKER_ID),
+    ).resolves.toMatchObject({ outcome: 'updated', assignedCount: 2 });
+
+    const reopened = await repository.get(record.id);
+    expect(reopened?.segments.map((segment) => segment.speakerId)).toEqual([
+      SECOND_SPEAKER_ID,
+      SECOND_SPEAKER_ID,
+    ]);
+  });
+
+  it('clears speakers in bulk when assigning to nobody', async () => {
+    const record = createSpeakerRecord();
+    await repository.save(record);
+
+    await repository.assignSegmentSpeakers(record.id, [0, 1], null);
+
+    const reopened = await repository.get(record.id);
+    expect(reopened?.segments.every((segment) => segment.speakerId === null)).toBe(
+      true,
+    );
+  });
+
+  it('skips a stale index rather than refusing the whole assignment', async () => {
+    // The transcript may have been re-transcribed since the selection was made.
+    const record = createSpeakerRecord();
+    await repository.save(record);
+
+    await expect(
+      repository.assignSegmentSpeakers(record.id, [0, 99], SECOND_SPEAKER_ID),
+    ).resolves.toMatchObject({ outcome: 'updated', assignedCount: 1 });
+
+    const reopened = await repository.get(record.id);
+    expect(reopened?.segments[0].speakerId).toBe(SECOND_SPEAKER_ID);
+  });
+
+  it('refuses a bulk assignment to a speaker this transcript does not have', async () => {
+    const record = createSpeakerRecord();
+    await repository.save(record);
+
+    await expect(
+      repository.assignSegmentSpeakers(
+        record.id,
+        [0],
+        '99999999-9999-4999-8999-999999999999',
+      ),
+    ).resolves.toEqual({ outcome: 'not-found' });
+  });
+
   it('round-trips why the speaker pass reached its result', async () => {
     const record: TranscriptRecord = {
       ...createRecord(),

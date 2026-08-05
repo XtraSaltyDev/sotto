@@ -37,6 +37,7 @@ import {
   type GenerateLocalAiMeetingSummaryResult,
   type PreviewLocalAiMeetingSummaryResult,
   type AssignTranscriptSegmentSpeakerResult,
+  type AssignTranscriptSegmentSpeakersResult,
   type AddTranscriptSpeakerResult,
   type ExportSpeakerAnnotationResult,
   type ImportMediaResult,
@@ -985,6 +986,41 @@ export const registerDesktopIpc = ({
   );
 
   ipcMain.handle(
+    IPC_CHANNELS.assignTranscriptSegmentSpeakers,
+    async (
+      event,
+      transcriptId: unknown,
+      segmentIndexes: unknown,
+      speakerId: unknown,
+    ): Promise<AssignTranscriptSegmentSpeakersResult> => {
+      trust(event);
+      if (!controller.isAnnotationEnabled) return annotationRefusal;
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      if (
+        !Array.isArray(segmentIndexes) ||
+        segmentIndexes.length > MAX_TRANSCRIPT_SEGMENTS ||
+        segmentIndexes.some(
+          (index) =>
+            typeof index !== 'number' ||
+            !Number.isSafeInteger(index) ||
+            index < 0 ||
+            index >= MAX_TRANSCRIPT_SEGMENTS,
+        )
+      ) {
+        return { outcome: 'not-found' };
+      }
+      if (speakerId !== null && !isTranscriptSpeakerId(speakerId)) {
+        return { outcome: 'not-found' };
+      }
+      return controller.assignTranscriptSegmentSpeakers(
+        transcriptId,
+        segmentIndexes as number[],
+        speakerId,
+      );
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.addTranscriptSpeaker,
     async (
       event,
@@ -1282,6 +1318,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.updateTranscriptMetadata,
       IPC_CHANNELS.updateTranscriptSegment,
       IPC_CHANNELS.assignTranscriptSegmentSpeaker,
+      IPC_CHANNELS.assignTranscriptSegmentSpeakers,
       IPC_CHANNELS.addTranscriptSpeaker,
       IPC_CHANNELS.exportSpeakerAnnotation,
       IPC_CHANNELS.renameTranscriptSpeaker,
