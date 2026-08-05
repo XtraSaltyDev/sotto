@@ -154,5 +154,21 @@ export const localAiPreviewDocuments = (
   ];
 };
 
+/**
+ * Confirms a queued send. Held as a constant so the banner can be withdrawn
+ * by exact match once the queued summary starts, without clearing an
+ * unrelated message the user raised in the meantime.
+ */
+export const LOCAL_AI_QUEUED_NOTICE =
+  'Queued. Sotto starts it when the running summary finishes.';
+
+/**
+ * Withdraws the queued confirmation once it stops being true, leaving any
+ * other message the user raised in the meantime alone.
+ */
+export const withoutQueuedLocalAiNotice = <T extends { text: string }>(
+  current: T | null,
+): T | null => (current?.text === LOCAL_AI_QUEUED_NOTICE ? null : current);
+
 export const LOCAL_AI_CONSOLIDATION_NOTE =
   'One further request combines the model’s own replies to the parts above. It carries no transcript text beyond what those replies contain, and its exact wording is not known until they arrive.';

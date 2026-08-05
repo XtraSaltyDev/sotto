@@ -35,7 +35,11 @@ import {
 import { ActivityOverlay } from './ActivityOverlay';
 import { LocalAiBusyNotice } from './LocalAiBusyNotice';
 import { LocalAiSendPreview } from './LocalAiSendPreview';
-import { localAiSummaryActivity } from './local-ai-send-preview';
+import {
+  localAiSummaryActivity,
+  withoutQueuedLocalAiNotice,
+  LOCAL_AI_QUEUED_NOTICE,
+} from './local-ai-send-preview';
 import { LocalAiSettings } from './LocalAiSettings';
 import { SettingsPage } from './SettingsPage';
 import {
@@ -98,6 +102,8 @@ const MainApp = ({
   const [localAiRequestTranscriptId, setLocalAiRequestTranscriptId] =
     useState<string | null>(null);
   const [localAiBusyNoticeOpen, setLocalAiBusyNoticeOpen] = useState(false);
+  const [queuedNoticeTranscriptId, setQueuedNoticeTranscriptId] =
+    useState<string | null>(null);
   const [localAiPreparing, setLocalAiPreparing] = useState(false);
   const [localAiPreview, setLocalAiPreview] =
     useState<LocalAiSummaryPreview | null>(null);
@@ -154,6 +160,9 @@ const MainApp = ({
     requestTranscriptId: localAiRequestTranscriptId,
     selectedTranscriptId: selectedId,
   });
+  const queuedNoticeStillWaiting =
+    queuedNoticeTranscriptId !== null &&
+    (appState?.queuedLocalAiSummaries ?? []).includes(queuedNoticeTranscriptId);
   const localAiRunningTitle =
     appState?.transcripts.find(
       (entry) => entry.id === appState.activeLocalAiSummary?.transcriptId,
@@ -187,6 +196,14 @@ const MainApp = ({
 
     return window.sotto.onAppStateChanged((nextState) => setAppState(nextState));
   }, [refresh]);
+
+  // The queued confirmation stops being true the moment that summary starts,
+  // so withdraw it then rather than leaving a stale banner to be dismissed.
+  useEffect(() => {
+    if (queuedNoticeTranscriptId === null || queuedNoticeStillWaiting) return;
+    setQueuedNoticeTranscriptId(null);
+    setNotice(withoutQueuedLocalAiNotice);
+  }, [queuedNoticeTranscriptId, queuedNoticeStillWaiting]);
 
   useEffect(() => {
     if (!appState || initializedNewTranscriptionRef.current) return;
@@ -1083,7 +1100,8 @@ const MainApp = ({
       } else if (result.outcome === 'rejected') {
         setLocalAiError(result.reason);
       } else if (result.outcome === 'queued') {
-        showInfo('Queued. Sotto starts it when the running summary finishes.');
+        setQueuedNoticeTranscriptId(preview.transcriptId);
+        showInfo(LOCAL_AI_QUEUED_NOTICE);
       }
       // A cancelled generation is what the user asked for, so it is not an error.
     } catch {

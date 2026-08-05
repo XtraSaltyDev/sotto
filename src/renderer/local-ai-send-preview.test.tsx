@@ -7,6 +7,8 @@ import { LocalAiSendPreview } from './LocalAiSendPreview';
 import {
   describeLocalAiRequestCount,
   localAiSummaryActivity,
+  withoutQueuedLocalAiNotice,
+  LOCAL_AI_QUEUED_NOTICE,
   describeLocalAiSendScope,
   describeLocalAiSpeakers,
   formatLocalAiPayloadSize,
@@ -131,6 +133,21 @@ describe('localAiSummaryActivity', () => {
       requestTranscriptId: A,
       selectedTranscriptId: null,
     })).toEqual({ generating: false, queued: false, runningElsewhere: false });
+  });
+});
+
+describe('withoutQueuedLocalAiNotice', () => {
+  it('withdraws the queued confirmation once it stops being true', () => {
+    expect(withoutQueuedLocalAiNotice({
+      kind: 'info',
+      text: LOCAL_AI_QUEUED_NOTICE,
+    })).toBeNull();
+  });
+
+  it('leaves an unrelated message the user raised in the meantime alone', () => {
+    const other = { kind: 'error' as const, text: 'Sotto could not copy that.' };
+    expect(withoutQueuedLocalAiNotice(other)).toBe(other);
+    expect(withoutQueuedLocalAiNotice(null)).toBeNull();
   });
 });
 
