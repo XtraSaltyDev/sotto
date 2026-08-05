@@ -92,6 +92,13 @@ import {
 import { TranscriptView } from './TranscriptView';
 import { Sidebar, type AppPage } from './Sidebar';
 
+/**
+ * Generous enough that a cold start reading a large local library is never
+ * mistaken for a failure, short enough that a stuck app says so while the
+ * user is still watching.
+ */
+const STATE_READ_TIMEOUT_MS = 15_000;
+
 const MainApp = ({
   theme,
   onToggleTheme,
@@ -197,9 +204,22 @@ const MainApp = ({
     }
 
     try {
-      setAppState(await window.sotto.getAppState());
-    } catch {
-      showError('Sotto could not load its local state.');
+      // Bounded so a main process that never answers becomes a message rather
+      // than an indefinite "Checking…". A read that hangs looks exactly like
+      // one that is merely slow, and the difference is the whole diagnosis.
+      setAppState(
+        await withTimeout(
+          window.sotto.getAppState(),
+          STATE_READ_TIMEOUT_MS,
+          'Sotto could not read its local state. Quit and reopen Sotto; if it keeps happening, the app is not finishing startup.',
+        ),
+      );
+    } catch (error) {
+      showError(
+        error instanceof Error
+          ? error.message
+          : 'Sotto could not load its local state.',
+      );
     }
   }, [showError]);
 
