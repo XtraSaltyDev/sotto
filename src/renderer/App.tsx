@@ -40,7 +40,9 @@ import {
   withoutQueuedLocalAiNotice,
   LOCAL_AI_QUEUED_NOTICE,
 } from './local-ai-send-preview';
+import { CaptureResources } from './capture-resources';
 import { homeCapabilities } from './home-capabilities';
+import { LiveRecordingChunkQueue } from './live-recording-chunk-queue';
 import {
   updateStateFromBackgroundCheck,
   updateStateFromDownloadResult,
@@ -139,10 +141,10 @@ const MainApp = ({
       speaker: '',
       tag: '',
     });
+  const captureRef = useRef(new CaptureResources());
+  const chunkQueueRef = useRef<LiveRecordingChunkQueue | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStopPromiseRef = useRef<Promise<void> | null>(null);
-  const recordingChunkQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const recordingChunkErrorRef = useRef<string | null>(null);
   const recordingIdRef = useRef<string | null>(null);
   const recordingExpectedSpeakerCountRef =
     useRef<ExpectedSpeakerCount>(null);
@@ -150,9 +152,6 @@ const MainApp = ({
   const returnFocusTranscriptIdRef = useRef<string | null>(null);
   const stoppingRecordingRef = useRef(false);
   const initializedNewTranscriptionRef = useRef(false);
-  const desktopStreamRef = useRef<MediaStream | null>(null);
-  const microphoneStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
 
   /**
    * Main owns whether a summary is running, so the cancel affordance survives
@@ -562,13 +561,7 @@ const MainApp = ({
 
   const cleanupCapture = async () => {
     mediaRecorderRef.current = null;
-    desktopStreamRef.current?.getTracks().forEach((track) => track.stop());
-    microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
-    desktopStreamRef.current = null;
-    microphoneStreamRef.current = null;
-    const context = audioContextRef.current;
-    audioContextRef.current = null;
-    if (context && context.state !== 'closed') await context.close();
+    await captureRef.current.release();
   };
 
   const handleStopLiveRecording = async () => {
@@ -594,13 +587,12 @@ const MainApp = ({
         'Sotto timed out while closing the local audio encoder.',
       );
       await withTimeout(
-        recordingChunkQueueRef.current,
+        chunkQueueRef.current?.drain() ?? Promise.resolve(),
         20_000,
         'Sotto timed out while saving the final recording data.',
       );
-      if (recordingChunkErrorRef.current) {
-        throw new Error(recordingChunkErrorRef.current);
-      }
+      const chunkFailure = chunkQueueRef.current?.failureReason;
+      if (chunkFailure) throw new Error(chunkFailure);
 
       await cleanupCapture();
       const result = await withTimeout(
@@ -653,8 +645,7 @@ const MainApp = ({
       recordingIdRef.current = null;
       recordingExpectedSpeakerCountRef.current = null;
       recordingStopPromiseRef.current = null;
-      recordingChunkQueueRef.current = Promise.resolve();
-      recordingChunkErrorRef.current = null;
+      chunkQueueRef.current = null;
       stoppingRecordingRef.current = false;
       setIsStoppingRecording(false);
     }
@@ -712,7 +703,7 @@ const MainApp = ({
       let desktopStream: MediaStream | null = null;
       if (desktopCapture) {
         desktopStream = await desktopCapture;
-        desktopStreamRef.current = desktopStream;
+        captureRef.current.claimDesktopStream(desktopStream);
         desktopStreamClaimed = true;
         if (desktopStream.getAudioTracks().length === 0) {
           throw new Error(
@@ -727,7 +718,7 @@ const MainApp = ({
           audio: true,
           video: false,
         });
-        microphoneStreamRef.current = microphoneStream;
+        captureRef.current.claimMicrophoneStream(microphoneStream);
       } catch {
         if (kind === 'dictation') {
           throw new Error(
@@ -738,7 +729,7 @@ const MainApp = ({
       }
 
       const context = new AudioContext();
-      audioContextRef.current = context;
+      captureRef.current.claimAudioContext(context);
       await context.resume();
       const destination = context.createMediaStreamDestination();
       if (desktopStream?.getAudioTracks().length) {
@@ -759,42 +750,30 @@ const MainApp = ({
           })
         : new MediaRecorder(destination.stream, { audioBitsPerSecond: 96_000 });
 
-      recordingChunkQueueRef.current = Promise.resolve();
-      recordingChunkErrorRef.current = null;
-      recorder.ondataavailable = (event) => {
-        if (
-          !event.data.size ||
-          !window.sotto ||
-          !recordingId ||
-          recordingChunkErrorRef.current
-        ) {
-          return;
-        }
-        const currentId = recordingId;
-        const sendChunk = recordingChunkQueueRef.current.then(async () => {
+      const currentId = recordingId;
+      const chunkQueue = new LiveRecordingChunkQueue({
+        write: async (chunk) => {
           const result = await withTimeout(
-            window.sotto.appendLiveRecordingChunk(
-              currentId,
-              await event.data.arrayBuffer(),
-            ),
+            window.sotto.appendLiveRecordingChunk(currentId, chunk),
             20_000,
             'Sotto timed out while writing the live recording to disk.',
           );
-          if (result.outcome === 'rejected') throw new Error(result.reason);
-        });
-        recordingChunkQueueRef.current = sendChunk.catch((error: unknown) => {
-          recordingChunkErrorRef.current =
-            error instanceof Error
-              ? error.message
-              : 'Sotto could not save the live recording.';
+          return {
+            rejected: result.outcome === 'rejected' ? result.reason : null,
+          };
+        },
+        onFailure: () => {
           if (recorder.state === 'recording') recorder.stop();
           queueMicrotask(() => void handleStopLiveRecording());
-        });
+        },
+      });
+      chunkQueueRef.current = chunkQueue;
+      recorder.ondataavailable = (event) => {
+        if (!event.data.size || !window.sotto) return;
+        chunkQueue.enqueue(() => event.data.arrayBuffer());
       };
       recorder.onerror = () => {
-        recordingChunkErrorRef.current = 'Sotto could not encode the live recording.';
-        if (recorder.state === 'recording') recorder.stop();
-        queueMicrotask(() => void handleStopLiveRecording());
+        chunkQueue.reportFailure('Sotto could not encode the live recording.');
       };
       recordingStopPromiseRef.current = new Promise<void>((resolve, reject) => {
         recorder.addEventListener('stop', () => resolve(), { once: true });
