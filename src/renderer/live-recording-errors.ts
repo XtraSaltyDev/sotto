@@ -7,6 +7,17 @@ export const WINDOWS_RECORDING_CAPTURE_GUIDANCE =
 export const GENERIC_RECORDING_PERMISSION_GUIDANCE =
   'Sotto could not access system audio. Check this device\'s recording permissions, then try again. No recording was started.';
 
+/**
+ * The operating system refused to open the audio source at all, rather than
+ * refusing a permission prompt. On macOS that is usually a copy of Sotto that
+ * has never been approved — the grant is per app copy, so a rebuilt or newly
+ * installed one starts with none — and occasionally another app holding the
+ * device. Both are named, because the raw browser message ("Could not start
+ * audio source") says neither.
+ */
+export const MACOS_RECORDING_SOURCE_GUIDANCE =
+  'Sotto could not start system-audio capture. macOS approves this per copy of an app, so a rebuilt or newly installed Sotto needs approving again: open System Settings → Privacy & Security → Screen & System Audio Recording, make sure this copy of Sotto is listed and turned on, then quit and reopen it. If another app is holding the audio device, quit that app and try again. No recording was started.';
+
 export interface RecordingFailurePresentation {
   kind: 'error' | 'recovery';
   title: string;
@@ -42,6 +53,17 @@ export const liveRecordingStartErrorMessage = (
     return GENERIC_RECORDING_PERMISSION_GUIDANCE;
   }
 
+  // Checked after an outright denial, because a denial is the more specific
+  // explanation when the browser reports both.
+  if (
+    error.name === 'NotReadableError' ||
+    /could not start (?:audio|video) source/iu.test(error.message)
+  ) {
+    if (isMacOSPlatform(platform)) return MACOS_RECORDING_SOURCE_GUIDANCE;
+    if (isWindowsPlatform(platform)) return WINDOWS_RECORDING_CAPTURE_GUIDANCE;
+    return GENERIC_RECORDING_PERMISSION_GUIDANCE;
+  }
+
   return error.message;
 };
 
@@ -60,6 +82,11 @@ export const recordingFailurePresentation = (
   }
   if (/storage|disk|free up space|ENOSPC/iu.test(message)) {
     return { kind: 'error', title: 'Local storage needs attention' };
+  }
+  // Ahead of the permission titles: this failure has two plausible causes and
+  // the heading should not assert the wrong one.
+  if (/could not start system-audio capture/iu.test(message)) {
+    return { kind: 'error', title: 'Sotto could not start system audio' };
   }
   if (/permission|access|system settings|system-audio capture|capture prompt/iu.test(message)) {
     if (isMacOSPlatform(platform)) {
