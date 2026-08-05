@@ -1033,6 +1033,54 @@ const MainApp = ({
     }
   };
 
+  const handleAssignSegmentSpeaker = async (
+    segmentIndex: number,
+    speakerId: string | null,
+  ): Promise<string | null> => {
+    if (!window.sotto || !selectedId) return 'Sotto is not ready.';
+    const result = await window.sotto.assignTranscriptSegmentSpeaker(
+      selectedId,
+      segmentIndex,
+      speakerId,
+    );
+    if (result.outcome === 'not-found') return 'That segment is no longer available.';
+    if (result.outcome === 'rejected') return result.reason;
+    setTranscript((current) =>
+      current
+        ? {
+            ...current,
+            segments: current.segments.map((segment, index) =>
+              index === segmentIndex ? result.segment : segment,
+            ),
+            localAiMeetingSummary: null,
+          }
+        : current,
+    );
+    return null;
+  };
+
+  const handleAddSpeaker = async (label: string): Promise<string | null> => {
+    if (!window.sotto || !selectedId) return 'Sotto is not ready.';
+    const result = await window.sotto.addTranscriptSpeaker(selectedId, label);
+    if (result.outcome === 'not-found') return 'That transcript is no longer available.';
+    if (result.outcome === 'rejected') return result.reason;
+    const detail = await window.sotto.getTranscript(selectedId);
+    if (detail) setTranscript(detail);
+    return null;
+  };
+
+  const handleExportAnnotation = async (): Promise<void> => {
+    if (!window.sotto || !selectedId) return;
+    const result = await window.sotto.exportSpeakerAnnotation(selectedId);
+    if (result.outcome === 'exported') {
+      showInfo('Saved the speaker annotation.');
+    } else if (result.outcome === 'rejected') {
+      showError(result.reason);
+    } else if (result.outcome === 'not-found') {
+      showError('That transcript is no longer available.');
+    }
+  };
+
   const handleCancelLocalAiSummary = () => {
     if (!window.sotto || !selectedId) return;
     void window.sotto.cancelLocalAiMeetingSummary(selectedId);
@@ -1420,6 +1468,10 @@ const MainApp = ({
           localAiGenerating={localAiGenerating}
           localAiPreparing={localAiPreparing}
           localAiQueued={localAiQueued}
+          annotationEnabled={appState?.annotationEnabled ?? false}
+          onAssignSegmentSpeaker={handleAssignSegmentSpeaker}
+          onAddSpeaker={handleAddSpeaker}
+          onExportAnnotation={handleExportAnnotation}
           loading={isLoadingTranscript}
           message={notice?.text ?? null}
           onBack={() => {

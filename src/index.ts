@@ -365,6 +365,12 @@ const initialize = async (): Promise<void> => {
     liveRecordingCapability,
     resolveTranscription,
   );
+  // Speaker annotation edits transcripts to build evaluation ground truth. It
+  // belongs to development only, so a packaged Sotto never turns it on and its
+  // IPC channels refuse regardless of what a renderer asks for.
+  if (!app.isPackaged) {
+    controller.enableAnnotation();
+  }
   await controller.initialize();
   const localAiService = new LocalAiConnectionService({
     filePath: path.join(app.getPath('userData'), 'local-ai', 'connection.json'),

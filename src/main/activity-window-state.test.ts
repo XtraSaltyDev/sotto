@@ -20,6 +20,7 @@ const createState = (job: TranscriptionJobSnapshot | null = null): AppState => (
   },
   activeLocalAiSummary: null,
   queuedLocalAiSummaries: [],
+  annotationEnabled: false,
   activeJob: job,
   recordings: [],
   transcripts: [],

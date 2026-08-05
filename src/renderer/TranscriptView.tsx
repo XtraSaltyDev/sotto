@@ -493,6 +493,10 @@ export const TranscriptView = ({
   localAiGenerating,
   localAiPreparing,
   localAiQueued,
+  annotationEnabled,
+  onAssignSegmentSpeaker,
+  onAddSpeaker,
+  onExportAnnotation,
   transcript,
   loading,
   message,
@@ -515,6 +519,14 @@ export const TranscriptView = ({
   localAiGenerating: boolean;
   localAiPreparing: boolean;
   localAiQueued: boolean;
+  /** Development builds only: hand annotation of speakers for evaluation. */
+  annotationEnabled: boolean;
+  onAssignSegmentSpeaker: (
+    segmentIndex: number,
+    speakerId: string | null,
+  ) => Promise<string | null>;
+  onAddSpeaker: (label: string) => Promise<string | null>;
+  onExportAnnotation: () => Promise<void>;
   transcript: TranscriptDetail | null;
   loading: boolean;
   message: string | null;
@@ -550,6 +562,8 @@ export const TranscriptView = ({
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const playbackAvailable = transcript?.playback.state === 'available';
   const speakerNotice = transcript ? speakerDiagnosticsNotice(transcript) : null;
+  const [newSpeakerLabel, setNewSpeakerLabel] = useState('');
+  const [annotationError, setAnnotationError] = useState<string | null>(null);
   const activeSegmentIndex = transcript
     ? activeSegmentIndexAt(transcript.segments, currentTimeMs)
     : -1;
@@ -890,6 +904,48 @@ export const TranscriptView = ({
           />
           </details>
         ) : null}
+        {annotationEnabled ? (
+          <section
+            className="transcript-secondary annotation-tools"
+            aria-labelledby="annotation-tools-title"
+          >
+            <h2 id="annotation-tools-title">Speaker annotation (development build)</h2>
+            <p>
+              Set each segment&rsquo;s speaker to build ground truth, then export it
+              for the speaker-accuracy harness. Boundaries come from this
+              transcript, so the export measures label accuracy rather than
+              segmentation.
+            </p>
+            <form
+              className="annotation-tools__add"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const label = newSpeakerLabel.trim();
+                if (!label) return;
+                setAnnotationError(null);
+                void onAddSpeaker(label).then((reason) => {
+                  setAnnotationError(reason);
+                  if (!reason) setNewSpeakerLabel('');
+                });
+              }}
+            >
+              <label htmlFor="annotation-new-speaker">Add a speaker</label>
+              <input
+                id="annotation-new-speaker"
+                onChange={(event) => setNewSpeakerLabel(event.target.value)}
+                placeholder="Real name for the reference"
+                value={newSpeakerLabel}
+              />
+              <button type="submit">Add</button>
+              <button onClick={() => void onExportAnnotation()} type="button">
+                Export annotation
+              </button>
+            </form>
+            {annotationError ? (
+              <p className="transcript-metadata__error" role="alert">{annotationError}</p>
+            ) : null}
+          </section>
+        ) : null}
         {speakerNotice ? (
           <section
             className="transcript-secondary speaker-notice"
@@ -988,7 +1044,28 @@ export const TranscriptView = ({
                     </button>
                   ) : formatDuration(segment.startMs)}
                 </time>
-                {transcript.speakerAnalysis ? (
+                {annotationEnabled ? (
+                  <select
+                    aria-label={`Speaker for the segment at ${formatDuration(segment.startMs)}`}
+                    className={`segment__speaker segment__speaker--annotate${
+                      speaker ? '' : ' segment__speaker--unknown'
+                    }`}
+                    onChange={(event) => {
+                      void onAssignSegmentSpeaker(
+                        index,
+                        event.target.value === '' ? null : event.target.value,
+                      );
+                    }}
+                    value={segment.speakerId ?? ''}
+                  >
+                    <option value="">Unclear</option>
+                    {(transcript.speakerAnalysis?.speakers ?? []).map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : transcript.speakerAnalysis ? (
                   <span className={`segment__speaker${speaker ? '' : ' segment__speaker--unknown'}`}>
                     {speaker?.label ?? 'Unclear'}
                   </span>

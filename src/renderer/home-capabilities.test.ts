@@ -25,6 +25,7 @@ const createState = (overrides: Partial<AppState> = {}): AppState => ({
   activeJob: null,
   activeLocalAiSummary: null,
   queuedLocalAiSummaries: [],
+  annotationEnabled: false,
   recordings: [],
   transcripts: [],
   ...overrides,

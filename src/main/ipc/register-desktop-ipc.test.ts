@@ -79,6 +79,10 @@ const createController = () => ({
   previewLocalAiMeetingSummary: vi.fn(async () => ({ outcome: 'not-found' })),
   generateLocalAiMeetingSummary: vi.fn(async () => ({ outcome: 'not-found' })),
   cancelLocalAiMeetingSummary: vi.fn(),
+  assignTranscriptSegmentSpeaker: vi.fn(async () => ({ outcome: 'not-found' })),
+  addTranscriptSpeaker: vi.fn(async () => ({ outcome: 'not-found' })),
+  getSpeakerAnnotation: vi.fn(async () => null),
+  isAnnotationEnabled: false,
 });
 
 type Harness = {
@@ -94,13 +98,14 @@ const eventFrom = (window: FakeWindow) => ({
 });
 
 const setup = (
-  overrides: { mainWindow?: FakeWindow | null } = {},
+  overrides: { mainWindow?: FakeWindow | null; annotationEnabled?: boolean } = {},
 ): Harness => {
   const mainWindow = overrides.mainWindow === undefined
     ? createWindow()
     : overrides.mainWindow;
   const activityWindow = createWindow();
   const controller = createController();
+  controller.isAnnotationEnabled = overrides.annotationEnabled === true;
   const dispose = registerDesktopIpc({
     controller: controller as never,
     localAiService: {
@@ -320,6 +325,70 @@ describe('registerDesktopIpc argument validation', () => {
         invoke(IPC_CHANNELS.requestActivityAction, event, action),
       ).toThrow();
     }
+  });
+});
+
+describe('registerDesktopIpc speaker annotation gate', () => {
+  const ANNOTATION_CHANNELS = [
+    IPC_CHANNELS.assignTranscriptSegmentSpeaker,
+    IPC_CHANNELS.addTranscriptSpeaker,
+    IPC_CHANNELS.exportSpeakerAnnotation,
+  ];
+
+  it('refuses every annotation channel when annotation is not enabled', async () => {
+    const { controller, mainWindow } = setup();
+    const event = eventFrom(mainWindow);
+    // Packaged builds never call enableAnnotation, so the controller reports
+    // false and the boundary must refuse regardless of the arguments.
+    expect(controller.isAnnotationEnabled).toBe(false);
+
+    for (const channel of ANNOTATION_CHANNELS) {
+      await expect(invoke(channel, event, TRANSCRIPT_ID, 0, null))
+        .resolves.toMatchObject({ outcome: 'rejected' });
+    }
+
+    expect(controller.assignTranscriptSegmentSpeaker).not.toHaveBeenCalled();
+    expect(controller.addTranscriptSpeaker).not.toHaveBeenCalled();
+    expect(controller.getSpeakerAnnotation).not.toHaveBeenCalled();
+  });
+
+  it('reaches the controller once annotation is enabled', async () => {
+    const { controller, mainWindow } = setup({ annotationEnabled: true });
+    const event = eventFrom(mainWindow);
+
+    await invoke(IPC_CHANNELS.assignTranscriptSegmentSpeaker, event, TRANSCRIPT_ID, 0, null);
+    await invoke(IPC_CHANNELS.addTranscriptSpeaker, event, TRANSCRIPT_ID, 'Morgan');
+
+    expect(controller.assignTranscriptSegmentSpeaker).toHaveBeenCalledWith(
+      TRANSCRIPT_ID,
+      0,
+      null,
+    );
+    expect(controller.addTranscriptSpeaker).toHaveBeenCalledWith(
+      TRANSCRIPT_ID,
+      'Morgan',
+    );
+  });
+
+  it('still validates its arguments when annotation is enabled', async () => {
+    const { controller, mainWindow } = setup({ annotationEnabled: true });
+    const event = eventFrom(mainWindow);
+
+    await expect(
+      invoke(IPC_CHANNELS.assignTranscriptSegmentSpeaker, event, 'not-a-uuid', 0, null),
+    ).resolves.toEqual({ outcome: 'not-found' });
+    await expect(
+      invoke(IPC_CHANNELS.assignTranscriptSegmentSpeaker, event, TRANSCRIPT_ID, -1, null),
+    ).resolves.toEqual({ outcome: 'not-found' });
+    await expect(
+      invoke(IPC_CHANNELS.assignTranscriptSegmentSpeaker, event, TRANSCRIPT_ID, 0, 'nope'),
+    ).resolves.toEqual({ outcome: 'not-found' });
+    await expect(
+      invoke(IPC_CHANNELS.addTranscriptSpeaker, event, TRANSCRIPT_ID, '   '),
+    ).resolves.toMatchObject({ outcome: 'rejected' });
+
+    expect(controller.assignTranscriptSegmentSpeaker).not.toHaveBeenCalled();
+    expect(controller.addTranscriptSpeaker).not.toHaveBeenCalled();
   });
 });
 

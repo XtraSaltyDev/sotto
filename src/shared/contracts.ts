@@ -16,6 +16,9 @@ export const IPC_CHANNELS = {
   getTranscript: 'sotto:transcript:get',
   updateTranscriptMetadata: 'sotto:transcript:metadata:update',
   updateTranscriptSegment: 'sotto:transcript:segment:update',
+  assignTranscriptSegmentSpeaker: 'sotto:transcript:segment:assign-speaker',
+  addTranscriptSpeaker: 'sotto:transcript:speaker:add',
+  exportSpeakerAnnotation: 'sotto:transcript:speaker-annotation:export',
   renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
   deleteTranscript: 'sotto:transcript:delete',
   retranscribeTranscript: 'sotto:transcript:retranscribe',
@@ -280,6 +283,11 @@ export interface AppState {
    * request that only a lost local boolean knew how to stop.
    */
   activeLocalAiSummary: { transcriptId: string } | null;
+  /**
+   * True only in an unpackaged development build, where hand annotation of
+   * speakers is offered. Packaged builds never enable it.
+   */
+  annotationEnabled: boolean;
   /** Reviewed and approved summaries waiting for the running one to finish. */
   queuedLocalAiSummaries: string[];
   recordings: SavedRecordingSummary[];
@@ -423,6 +431,28 @@ export type GenerateLocalAiMeetingSummaryResult =
   | { outcome: 'cancelled' }
   /** Another summary was running; this approved send waits its turn. */
   | { outcome: 'queued'; position: number }
+  | { outcome: 'rejected'; reason: string };
+
+/**
+ * Hand annotation of speakers, available only in unpackaged development
+ * builds. It exists to produce ground truth for the speaker-accuracy harness,
+ * and the main process refuses these channels in a packaged build regardless
+ * of what the renderer asks for.
+ */
+export type AssignTranscriptSegmentSpeakerResult =
+  | { outcome: 'updated'; segment: TranscriptSegment; localAiMeetingSummary: null }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
+export type AddTranscriptSpeakerResult =
+  | { outcome: 'added'; speaker: TranscriptSpeaker }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
+export type ExportSpeakerAnnotationResult =
+  | { outcome: 'exported'; filePath: string }
+  | { outcome: 'cancelled' }
+  | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
 export type RetranscribeTranscriptResult =
@@ -635,6 +665,18 @@ export interface SottoDesktopApi {
     segmentIndex: number,
     text: string,
   ): Promise<UpdateTranscriptSegmentResult>;
+  assignTranscriptSegmentSpeaker(
+    transcriptId: string,
+    segmentIndex: number,
+    speakerId: string | null,
+  ): Promise<AssignTranscriptSegmentSpeakerResult>;
+  addTranscriptSpeaker(
+    transcriptId: string,
+    label: string,
+  ): Promise<AddTranscriptSpeakerResult>;
+  exportSpeakerAnnotation(
+    transcriptId: string,
+  ): Promise<ExportSpeakerAnnotationResult>;
   renameTranscriptSpeaker(
     transcriptId: string,
     speakerId: string,

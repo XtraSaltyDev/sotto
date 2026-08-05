@@ -5,6 +5,8 @@ import type {
   AppState,
   AppendLiveRecordingChunkResult,
   ExpectedSpeakerCount,
+  AddTranscriptSpeakerResult,
+  AssignTranscriptSegmentSpeakerResult,
   GenerateLocalAiMeetingSummaryResult,
   PreviewLocalAiMeetingSummaryResult,
   LiveRecordingCapability,
@@ -54,6 +56,7 @@ import {
 import { buildMeetingSummary } from './summarization/meeting-summary';
 import { MAX_RELIABLE_AUTOMATIC_SPEAKERS } from './transcription/speaker-alignment';
 import type { LocalAiConnectionService } from './local-ai/local-ai-connection';
+import { formatSpeakerAnnotation } from './export/speaker-annotation';
 import {
   fingerprintTranscriptForLocalAi,
   LocalAiSummaryCancelledError,
@@ -254,6 +257,21 @@ export class AppController {
   private readonly recordingCapabilityProvider: () => LiveRecordingCapability;
   private recordingCapability: LiveRecordingCapability;
   private activeJob: TranscriptionJobSnapshot | null = null;
+  /**
+   * Hand annotation of speakers. Defaults off so a build that forgets to
+   * enable it exposes nothing; only an unpackaged build turns it on.
+   */
+  private annotationEnabled = false;
+
+  /** Enables development-only speaker annotation. Never called when packaged. */
+  enableAnnotation(): void {
+    this.annotationEnabled = true;
+  }
+
+  get isAnnotationEnabled(): boolean {
+    return this.annotationEnabled;
+  }
+
   private activeLocalAiSummary: {
     id: string;
     controller: AbortController;
@@ -376,6 +394,7 @@ export class AppController {
         storageMessage: this.recordingStorageMessage,
       },
       activeJob: this.activeJob ? { ...this.activeJob } : null,
+      annotationEnabled: this.annotationEnabled,
       activeLocalAiSummary: this.activeLocalAiSummary
         ? { transcriptId: this.activeLocalAiSummary.id }
         : null,
@@ -967,6 +986,70 @@ export class AppController {
             : 'Sotto could not save that transcript information.',
       };
     }
+  }
+
+  /**
+   * Reassigns one segment to a different speaker. Development-only: the IPC
+   * layer refuses the channel in a packaged build, so reaching here already
+   * means annotation is enabled.
+   */
+  async assignTranscriptSegmentSpeaker(
+    transcriptId: string,
+    segmentIndex: number,
+    speakerId: string | null,
+  ): Promise<AssignTranscriptSegmentSpeakerResult> {
+    try {
+      const result = await this.repository.assignSegmentSpeaker(
+        transcriptId,
+        segmentIndex,
+        speakerId,
+      );
+      if (result.outcome === 'not-found') return result;
+      await this.refreshTranscript(transcriptId);
+      this.emit();
+      return {
+        outcome: 'updated',
+        segment: {
+          ...result.segment,
+          words: result.segment.words.map((word) => ({ ...word })),
+        },
+        localAiMeetingSummary: null,
+      };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Sotto could not reassign that segment.',
+      };
+    }
+  }
+
+  async addTranscriptSpeaker(
+    transcriptId: string,
+    label: string,
+  ): Promise<AddTranscriptSpeakerResult> {
+    try {
+      const result = await this.repository.addSpeaker(transcriptId, label);
+      if (result.outcome !== 'added') return result;
+      await this.refreshTranscript(transcriptId);
+      this.emit();
+      return { outcome: 'added', speaker: { ...result.speaker } };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'Sotto could not add that speaker.',
+      };
+    }
+  }
+
+  async getSpeakerAnnotation(id: string): Promise<string | null> {
+    const record = await this.repository.getAfterPendingMutations(id);
+    return record ? formatSpeakerAnnotation(record) : null;
   }
 
   async updateTranscriptSegment(

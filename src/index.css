@@ -2752,6 +2752,67 @@ textarea:focus-visible {
   color: var(--muted);
 }
 
+.segment__speaker--annotate {
+  max-width: 140px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.annotation-tools h2 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.annotation-tools p {
+  margin: 6px 0 10px;
+  max-width: 68ch;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.annotation-tools__add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.annotation-tools__add input {
+  flex: 1;
+  min-width: 200px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.annotation-tools__add button {
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.annotation-tools__add button:hover {
+  background: var(--background-deep);
+}
+
 .speaker-notice h2 {
   margin: 0;
   font-size: 13px;

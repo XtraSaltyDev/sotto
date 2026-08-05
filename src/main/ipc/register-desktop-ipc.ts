@@ -36,6 +36,9 @@ import {
   type FinishLiveRecordingResult,
   type GenerateLocalAiMeetingSummaryResult,
   type PreviewLocalAiMeetingSummaryResult,
+  type AssignTranscriptSegmentSpeakerResult,
+  type AddTranscriptSpeakerResult,
+  type ExportSpeakerAnnotationResult,
   type ImportMediaResult,
   type InsertDictationTextResult,
   type InstallAppUpdateResult,
@@ -940,6 +943,103 @@ export const registerDesktopIpc = ({
     },
   );
 
+  /**
+   * Speaker annotation is a development affordance for producing ground truth.
+   * The refusal lives here rather than only in the interface, because a
+   * packaged build must not expose transcript mutations merely because its
+   * renderer normally hides the controls.
+   */
+  const annotationRefusal = {
+    outcome: 'rejected',
+    reason: 'Speaker annotation is only available in a development build.',
+  } as const;
+
+  ipcMain.handle(
+    IPC_CHANNELS.assignTranscriptSegmentSpeaker,
+    async (
+      event,
+      transcriptId: unknown,
+      segmentIndex: unknown,
+      speakerId: unknown,
+    ): Promise<AssignTranscriptSegmentSpeakerResult> => {
+      trust(event);
+      if (!controller.isAnnotationEnabled) return annotationRefusal;
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      if (
+        typeof segmentIndex !== 'number' ||
+        !Number.isSafeInteger(segmentIndex) ||
+        segmentIndex < 0 ||
+        segmentIndex >= MAX_TRANSCRIPT_SEGMENTS
+      ) {
+        return { outcome: 'not-found' };
+      }
+      if (speakerId !== null && !isTranscriptSpeakerId(speakerId)) {
+        return { outcome: 'not-found' };
+      }
+      return controller.assignTranscriptSegmentSpeaker(
+        transcriptId,
+        segmentIndex,
+        speakerId,
+      );
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.addTranscriptSpeaker,
+    async (
+      event,
+      transcriptId: unknown,
+      label: unknown,
+    ): Promise<AddTranscriptSpeakerResult> => {
+      trust(event);
+      if (!controller.isAnnotationEnabled) return annotationRefusal;
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      if (
+        typeof label !== 'string' ||
+        label.trim().length === 0 ||
+        label.length > MAX_SPEAKER_LABEL_CHARACTERS
+      ) {
+        return {
+          outcome: 'rejected',
+          reason: `Speaker names must be 1–${MAX_SPEAKER_LABEL_CHARACTERS} characters.`,
+        };
+      }
+      return controller.addTranscriptSpeaker(transcriptId, label);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.exportSpeakerAnnotation,
+    async (
+      event,
+      transcriptId: unknown,
+    ): Promise<ExportSpeakerAnnotationResult> => {
+      const window = trust(event);
+      if (!controller.isAnnotationEnabled) return annotationRefusal;
+      if (!isTranscriptId(transcriptId)) return { outcome: 'not-found' };
+      const contents = await controller.getSpeakerAnnotation(transcriptId);
+      if (contents === null) return { outcome: 'not-found' };
+      const selection = await dialog.showSaveDialog(window, {
+        title: 'Export Speaker Annotation',
+        buttonLabel: 'Export Annotation',
+        defaultPath: `${transcriptId}.annotation.json`,
+        filters: [{ name: 'Speaker annotation', extensions: ['json'] }],
+      });
+      if (selection.canceled || !selection.filePath) {
+        return { outcome: 'cancelled' };
+      }
+      try {
+        await writeTranscriptExport(selection.filePath, contents);
+        return { outcome: 'exported', filePath: selection.filePath };
+      } catch {
+        return {
+          outcome: 'rejected',
+          reason: 'Sotto could not write that annotation file.',
+        };
+      }
+    },
+  );
+
   ipcMain.handle(
     IPC_CHANNELS.renameTranscriptSpeaker,
     async (
@@ -1181,6 +1281,9 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.getTranscript,
       IPC_CHANNELS.updateTranscriptMetadata,
       IPC_CHANNELS.updateTranscriptSegment,
+      IPC_CHANNELS.assignTranscriptSegmentSpeaker,
+      IPC_CHANNELS.addTranscriptSpeaker,
+      IPC_CHANNELS.exportSpeakerAnnotation,
       IPC_CHANNELS.renameTranscriptSpeaker,
       IPC_CHANNELS.deleteTranscript,
       IPC_CHANNELS.deletePlayback,

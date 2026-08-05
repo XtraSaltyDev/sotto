@@ -19,6 +19,8 @@ import {
   normalizeTranscriptSegmentText,
   normalizeSpeakerLabel,
   parseTranscriptRecord,
+  createTranscriptSpeakerId,
+  MAX_TRANSCRIPT_SPEAKERS,
   TranscriptValidationError,
   type TranscriptId,
   type TranscriptRecord,
@@ -50,6 +52,26 @@ export type UpdateTranscriptMetadataResult =
       record: TranscriptRecord;
     }
   | { outcome: 'not-found' };
+
+export type AssignSegmentSpeakerResult =
+  | {
+      outcome: 'updated';
+      record: TranscriptRecord;
+      segment: TranscriptRecord['segments'][number];
+    }
+  | { outcome: 'not-found' };
+
+export type AddSpeakerResult =
+  | { outcome: 'added'; record: TranscriptRecord; speaker: TranscriptSpeaker }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
+/** Recorded when a transcript gains a speaker no automatic pass produced. */
+const MANUAL_SPEAKER_ENGINE = {
+  name: 'manual-annotation',
+  model: 'none',
+  version: '1',
+} as const;
 
 export type SaveLocalAiMeetingSummaryResult =
   | { outcome: 'saved'; record: TranscriptRecord }
@@ -214,6 +236,109 @@ export class TranscriptRepository {
       });
 
       return { outcome: 'updated', record, segment: record.segments[segmentIndex] };
+    });
+  }
+
+  /**
+   * Reassigns one segment to a different speaker, or to none. Unlike a text
+   * correction this leaves the words untouched: which voice said a line does
+   * not change what was said, and the word timings stay usable for playback.
+   *
+   * Ground-truth annotation is the reason this exists, so it deliberately
+   * allows what automatic labelling cannot express — merging two clusters that
+   * were the same person by pointing their segments at one speaker.
+   */
+  async assignSegmentSpeaker(
+    transcriptId: TranscriptId,
+    segmentIndex: number,
+    speakerId: TranscriptSpeakerId | null,
+  ): Promise<AssignSegmentSpeakerResult> {
+    if (!isTranscriptId(transcriptId)) {
+      throw new TranscriptValidationError('Transcript id must be a UUID.');
+    }
+    if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0) {
+      throw new TranscriptValidationError('Transcript segment index is invalid.');
+    }
+    if (speakerId !== null && !isTranscriptSpeakerId(speakerId)) {
+      throw new TranscriptValidationError('Speaker id must be a UUID or null.');
+    }
+
+    const normalizedTranscriptId = transcriptId.toLowerCase();
+    const normalizedSpeakerId = speakerId === null ? null : speakerId.toLowerCase();
+
+    return this.serializeMutation(async () => {
+      const current = await this.get(normalizedTranscriptId);
+      const currentSegment = current?.segments[segmentIndex];
+      if (!current || !currentSegment) return { outcome: 'not-found' };
+      if (
+        normalizedSpeakerId !== null &&
+        !current.speakerAnalysis?.speakers.some(
+          (speaker) => speaker.id === normalizedSpeakerId,
+        )
+      ) {
+        return { outcome: 'not-found' };
+      }
+      if (currentSegment.speakerId === normalizedSpeakerId) {
+        return { outcome: 'updated', record: current, segment: currentSegment };
+      }
+
+      const segments = current.segments.map((candidate, index) =>
+        index === segmentIndex
+          ? { ...candidate, speakerId: normalizedSpeakerId }
+          : candidate,
+      );
+      const record = await this.save({
+        ...current,
+        segments,
+        // A summary quotes speakers, so a reassignment invalidates it.
+        localAiMeetingSummary: null,
+      });
+      return { outcome: 'updated', record, segment: record.segments[segmentIndex] };
+    });
+  }
+
+  /**
+   * Adds a speaker that automatic labelling did not produce. Annotation needs
+   * this because the truth can contain people the clustering never separated.
+   */
+  async addSpeaker(
+    transcriptId: TranscriptId,
+    label: string,
+  ): Promise<AddSpeakerResult> {
+    if (!isTranscriptId(transcriptId)) {
+      throw new TranscriptValidationError('Transcript id must be a UUID.');
+    }
+    const normalizedLabel = normalizeSpeakerLabel(label);
+
+    return this.serializeMutation(async () => {
+      const current = await this.get(transcriptId.toLowerCase());
+      if (!current) return { outcome: 'not-found' };
+      const existing = current.speakerAnalysis?.speakers ?? [];
+      if (existing.length >= MAX_TRANSCRIPT_SPEAKERS) {
+        return { outcome: 'rejected', reason: 'This transcript already has the maximum number of speakers.' };
+      }
+      if (
+        existing.some(
+          (speaker) =>
+            speaker.label.localeCompare(normalizedLabel, undefined, {
+              sensitivity: 'accent',
+            }) === 0,
+        )
+      ) {
+        return { outcome: 'rejected', reason: 'That speaker name is already used in this transcript.' };
+      }
+
+      const speaker = { id: createTranscriptSpeakerId(), label: normalizedLabel };
+      const record = await this.save({
+        ...current,
+        speakerAnalysis: {
+          // A transcript annotated by hand no longer describes only what the
+          // automatic pass produced, so the engine record says so.
+          engine: current.speakerAnalysis?.engine ?? MANUAL_SPEAKER_ENGINE,
+          speakers: [...existing, speaker],
+        },
+      });
+      return { outcome: 'added', record, speaker };
     });
   }
 
