@@ -59,6 +59,27 @@ export interface TranscriptSpeakerAnalysis {
   speakers: TranscriptSpeaker[];
 }
 
+/**
+ * What the speaker pass actually did, recorded whether or not it produced
+ * labels. `clusterCount` is the raw number of voice clusters before any were
+ * filtered or capped, which is the one number that distinguishes a clean
+ * result from clustering that fragmented a few voices into dozens.
+ */
+export interface TranscriptSpeakerDiagnostics {
+  outcome:
+    | 'labeled'
+    /** Clustering did not converge; far more clusters than a meeting can hold. */
+    | 'over-fragmented'
+    /** Clustering ran but no cluster had enough word-timing support. */
+    | 'no-reliable-speakers'
+    /** The pass could not run, or its result could not be used. */
+    | 'not-attempted';
+  clusterCount: number;
+  /** Clusters with real word-timing support, before the label cap applies. */
+  reliableClusterCount: number;
+  labeledSpeakerCount: number;
+}
+
 export interface TranscriptSegment {
   startMs: number;
   endMs: number;
@@ -87,6 +108,8 @@ export interface TranscriptRecord {
   language: string | null;
   engine: TranscriptEngineMetadata;
   speakerAnalysis: TranscriptSpeakerAnalysis | null;
+  /** Absent on records written before the speaker pass reported itself. */
+  speakerDiagnostics?: TranscriptSpeakerDiagnostics | null;
   text: string;
   segments: TranscriptSegment[];
   localAiMeetingSummary?: StoredLocalAiMeetingSummary | null;
@@ -397,6 +420,42 @@ const parseSpeakerAnalysis = (
   };
 };
 
+const SPEAKER_DIAGNOSTIC_OUTCOMES: ReadonlySet<string> = new Set([
+  'labeled',
+  'over-fragmented',
+  'no-reliable-speakers',
+  'not-attempted',
+]);
+
+const isDiagnosticCount = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= 0;
+
+/**
+ * Diagnostics are advisory, so an unreadable one is dropped rather than
+ * failing the whole record: a transcript must never become unopenable because
+ * of a field that only explains how its speaker labels were reached.
+ */
+const parseSpeakerDiagnostics = (
+  value: unknown,
+): TranscriptSpeakerDiagnostics | null => {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.outcome !== 'string' ||
+    !SPEAKER_DIAGNOSTIC_OUTCOMES.has(value.outcome) ||
+    !isDiagnosticCount(value.clusterCount) ||
+    !isDiagnosticCount(value.reliableClusterCount) ||
+    !isDiagnosticCount(value.labeledSpeakerCount)
+  ) {
+    return null;
+  }
+  return {
+    outcome: value.outcome as TranscriptSpeakerDiagnostics['outcome'],
+    clusterCount: value.clusterCount,
+    reliableClusterCount: value.reliableClusterCount,
+    labeledSpeakerCount: value.labeledSpeakerCount,
+  };
+};
+
 const parseSegments = (
   value: unknown,
   schemaVersion:
@@ -682,6 +741,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     sourceSchemaVersion === LEGACY_TRANSCRIPT_SCHEMA_VERSION
       ? null
       : parseSpeakerAnalysis(value.speakerAnalysis);
+  const speakerDiagnostics = parseSpeakerDiagnostics(value.speakerDiagnostics);
   const speakerIds = new Set(
     speakerAnalysis?.speakers.map((speaker) => speaker.id) ?? [],
   );
@@ -723,6 +783,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     language,
     engine: parseEngine(value.engine),
     speakerAnalysis,
+    ...(speakerDiagnostics ? { speakerDiagnostics } : {}),
     text,
     segments,
     ...(localAiMeetingSummary ? { localAiMeetingSummary } : {}),

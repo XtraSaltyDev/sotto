@@ -170,6 +170,9 @@ export const toTranscriptDetail = (record: TranscriptRecord): TranscriptDetail =
           })),
         }
       : null,
+    ...(presented.speakerDiagnostics
+      ? { speakerDiagnostics: { ...presented.speakerDiagnostics } }
+      : {}),
     engine: { ...presented.engine },
   };
 };

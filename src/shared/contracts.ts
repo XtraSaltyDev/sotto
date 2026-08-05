@@ -247,6 +247,20 @@ export interface TranscriptDetail extends TranscriptSummary {
     };
     speakers: TranscriptSpeaker[];
   } | null;
+  /**
+   * Why this transcript has the speaker labels it has — including why it has
+   * none. Absent on records saved before the speaker pass reported itself.
+   */
+  speakerDiagnostics?: {
+    outcome:
+      | 'labeled'
+      | 'over-fragmented'
+      | 'no-reliable-speakers'
+      | 'not-attempted';
+    clusterCount: number;
+    reliableClusterCount: number;
+    labeledSpeakerCount: number;
+  } | null;
   recordingId?: string;
   engine: {
     name: string;

@@ -433,6 +433,9 @@ export class LocalTranscriptionService {
           version: WHISPER_VERSION,
         },
         speakerAnalysis: aligned.speakerAnalysis,
+        ...(aligned.diagnostics
+          ? { speakerDiagnostics: aligned.diagnostics }
+          : {}),
         text: normalized.text,
         segments: aligned.segments,
         localAiMeetingSummary: null,

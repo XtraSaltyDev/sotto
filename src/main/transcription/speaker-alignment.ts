@@ -5,6 +5,7 @@ import {
   type TranscriptSegment,
   type TranscriptSpeaker,
   type TranscriptSpeakerAnalysis,
+  type TranscriptSpeakerDiagnostics,
 } from './transcript-types';
 import {
   SPEAKER_DIARIZATION_ENGINE,
@@ -18,6 +19,7 @@ import type {
 export interface SpeakerAlignmentResult {
   speakerAnalysis: TranscriptSpeakerAnalysis | null;
   segments: TranscriptSegment[];
+  diagnostics: TranscriptSpeakerDiagnostics | null;
 }
 
 type SpeakerIdFactory = () => string;
@@ -44,6 +46,16 @@ const MIN_DIRECT_SUPPORT_MS = 200;
 const MIN_DIRECT_MARGIN_MS = 100;
 const MIN_DIRECT_DOMINANCE_RATIO = 1.5;
 export const MAX_RELIABLE_AUTOMATIC_SPEAKERS = 12;
+/**
+ * More raw voice clusters than this, and automatic clustering has not settled
+ * on a set of people. On its own that proves little — the support filter
+ * exists precisely to discard fragments — so it withholds labels only when
+ * enough of those clusters also survive the filter to overflow the label cap.
+ * A caller-supplied expected count constrains clustering to at most twelve,
+ * so this only ever describes the automatic path.
+ */
+export const MAX_PLAUSIBLE_AUTOMATIC_CLUSTERS =
+  MAX_RELIABLE_AUTOMATIC_SPEAKERS * 2;
 const MIN_RELIABLE_CLUSTER_SUPPORT_MS = 200;
 const MAX_RELIABLE_CLUSTER_SUPPORT_MS = 5_000;
 const RELIABLE_CLUSTER_SUPPORT_RATIO = 0.0025;
@@ -166,7 +178,12 @@ const createSpeakerMap = (
   diarization: readonly SpeakerDiarizationSegment[],
   words: readonly WhisperWord[],
   createId: SpeakerIdFactory,
-): { speakers: TranscriptSpeaker[]; ids: Map<number, string> } => {
+): {
+  speakers: TranscriptSpeaker[];
+  ids: Map<number, string>;
+  /** Clusters with real word-timing support, counted before the cap applies. */
+  reliableClusterCount: number;
+} => {
   const supportByCluster = new Map<number, number>();
   let totalSupportMs = 0;
   for (const word of words) {
@@ -187,10 +204,14 @@ const createSpeakerMap = (
       Math.round(totalSupportMs * RELIABLE_CLUSTER_SUPPORT_RATIO),
     ),
   );
-  let supported = [...supportByCluster.entries()]
+  const reliable = [...supportByCluster.entries()]
     .filter(([, supportMs]) => supportMs >= minimumSupportMs)
-    .sort((left, right) => right[1] - left[1] || left[0] - right[0])
-    .slice(0, Math.min(MAX_RELIABLE_AUTOMATIC_SPEAKERS, MAX_TRANSCRIPT_SPEAKERS));
+    .sort((left, right) => right[1] - left[1] || left[0] - right[0]);
+  const reliableClusterCount = reliable.length;
+  let supported = reliable.slice(
+    0,
+    Math.min(MAX_RELIABLE_AUTOMATIC_SPEAKERS, MAX_TRANSCRIPT_SPEAKERS),
+  );
   if (supported.length === 0 && diarization.length > 0) {
     const diarizationSupport = new Map<number, number>();
     for (const span of diarization) {
@@ -213,7 +234,7 @@ const createSpeakerMap = (
     ids.set(cluster, id);
     return { id, label: `Speaker ${index + 1}` };
   });
-  return { speakers, ids };
+  return { speakers, ids, reliableClusterCount };
 };
 
 type AssignedWord = WhisperWord & ClusterChoice;
@@ -526,8 +547,18 @@ export const alignTranscriptSpeakers = (
     if (segmentWords) segmentWords.push(word);
     else wordsBySegment.set(word.segmentIndex, [word]);
   }
-  const unlabeled = (): SpeakerAlignmentResult => ({
+  const clusterCount = new Set(diarization.map((span) => span.cluster)).size;
+  const unlabeled = (
+    outcome: TranscriptSpeakerDiagnostics['outcome'],
+    reliableClusterCount = 0,
+  ): SpeakerAlignmentResult => ({
     speakerAnalysis: null,
+    diagnostics: {
+      outcome,
+      clusterCount,
+      reliableClusterCount,
+      labeledSpeakerCount: 0,
+    },
     segments: segments.map((segment, index) => {
       const segmentWords = wordsBySegment.get(index) ?? [];
       const reconstructed = normalizeText(segmentWords.map((word) => word.text).join(''));
@@ -540,16 +571,33 @@ export const alignTranscriptSpeakers = (
   });
 
   if (!Number.isSafeInteger(maximumSegments) || maximumSegments < segments.length) {
-    return unlabeled();
+    return unlabeled('not-attempted');
   }
 
   if (diarization.length === 0) {
-    return unlabeled();
+    return unlabeled('not-attempted');
   }
 
-  const { speakers, ids } = createSpeakerMap(diarization, words, createId);
+  const { speakers, ids, reliableClusterCount } = createSpeakerMap(
+    diarization,
+    words,
+    createId,
+  );
   if (speakers.length === 0) {
-    return unlabeled();
+    return unlabeled('no-reliable-speakers', reliableClusterCount);
+  }
+
+  // Two things have to be true before the labels are withheld: clustering
+  // produced more voices than a meeting can hold, and the cap actually hid
+  // some of them. Fragments that the support filter already removed are not
+  // evidence of anything — dropping them is the filter working. Surviving
+  // fragments are, because the twelve shown would then be an arbitrary slice
+  // of one conversation rather than its participants.
+  if (
+    clusterCount > MAX_PLAUSIBLE_AUTOMATIC_CLUSTERS &&
+    reliableClusterCount > MAX_RELIABLE_AUTOMATIC_SPEAKERS
+  ) {
+    return unlabeled('over-fragmented', reliableClusterCount);
   }
 
   const alignedSegments: AlignedTranscriptSegment[] = [];
@@ -564,7 +612,7 @@ export const alignTranscriptSpeakers = (
     if (alignedSegments.length + aligned.length > maximumSegments) {
       // Speaker labels must never turn a valid Whisper transcript into a
       // record that the bounded repository rejects.
-      return unlabeled();
+      return unlabeled('not-attempted');
     }
     alignedSegments.push(...aligned);
   }
@@ -573,6 +621,12 @@ export const alignTranscriptSpeakers = (
     speakerAnalysis: {
       engine: { ...SPEAKER_DIARIZATION_ENGINE },
       speakers,
+    },
+    diagnostics: {
+      outcome: 'labeled',
+      clusterCount,
+      reliableClusterCount,
+      labeledSpeakerCount: speakers.length,
     },
     segments: finalizeSpeakerAssignments(alignedSegments),
   };

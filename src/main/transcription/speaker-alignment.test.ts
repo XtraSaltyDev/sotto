@@ -52,6 +52,136 @@ describe('alignTranscriptSpeakers', () => {
     ]);
   });
 
+  it('reports the cluster population alongside the labels it kept', () => {
+    const words = Array.from({ length: 24 }, (_, index) => ({
+      startMs: index * 500,
+      endMs: index * 500 + 400,
+      text: ` word${index}`,
+      segmentIndex: 0,
+    }));
+    let nextId = 0;
+
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 12_000, text: words.map((word) => word.text).join('').trim() }],
+      words,
+      words.map((word, index) => ({
+        startMs: word.startMs,
+        endMs: word.endMs,
+        cluster: index % 4,
+      })),
+      () => IDS[nextId++],
+    );
+
+    expect(result.diagnostics).toEqual({
+      outcome: 'labeled',
+      clusterCount: 4,
+      reliableClusterCount: 4,
+      labeledSpeakerCount: 4,
+    });
+  });
+
+  it('withholds labels when surviving clusters overflow the label cap', () => {
+    // Every cluster carries real word-level support, so the support filter
+    // cannot dismiss them: this is one conversation split many ways, which is
+    // what the production 45-of-156 failure looked like.
+    const words = Array.from({ length: 120 }, (_, index) => ({
+      startMs: index * 500,
+      endMs: index * 500 + 400,
+      text: ` word${index}`,
+      segmentIndex: 0,
+    }));
+    const diarization = words.map((word, index) => ({
+      startMs: word.startMs,
+      endMs: word.endMs,
+      cluster: index % 40,
+    }));
+
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 60_000, text: words.map((word) => word.text).join('').trim() }],
+      words,
+      diarization,
+      () => IDS[0],
+    );
+
+    expect(result.speakerAnalysis).toBeNull();
+    expect(result.diagnostics).toMatchObject({
+      outcome: 'over-fragmented',
+      clusterCount: 40,
+    });
+    expect(result.diagnostics!.reliableClusterCount).toBeGreaterThan(12);
+    // The transcript itself must survive untouched.
+    expect(result.segments.length).toBeGreaterThan(0);
+    expect(result.segments.every((segment) => segment.speakerId === null)).toBe(true);
+  });
+
+  it('keeps labels for a large meeting whose clustering did settle', () => {
+    // Twenty supported clusters overflow the twelve-label cap, but twenty is a
+    // plausible number of people. Truncating is the honest answer here;
+    // withholding every label would punish a real all-hands.
+    const words = Array.from({ length: 60 }, (_, index) => ({
+      startMs: index * 500,
+      endMs: index * 500 + 400,
+      text: ` word${index}`,
+      segmentIndex: 0,
+    }));
+    let nextId = 0;
+
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 30_000, text: words.map((word) => word.text).join('').trim() }],
+      words,
+      words.map((word, index) => ({
+        startMs: word.startMs,
+        endMs: word.endMs,
+        cluster: index % 20,
+      })),
+      () => `${nextId++}`.padStart(8, '0') + '-1111-4111-8111-111111111111',
+    );
+
+    expect(result.diagnostics).toMatchObject({
+      outcome: 'labeled',
+      clusterCount: 20,
+      reliableClusterCount: 20,
+      labeledSpeakerCount: 12,
+    });
+    expect(result.speakerAnalysis?.speakers).toHaveLength(12);
+  });
+
+  it('keeps labels when many clusters exist but few survive the support filter', () => {
+    // Same raw cluster count as the case above; here the fragments carry no
+    // word support, so discarding them is the filter working as designed.
+    const words = Array.from({ length: 24 }, (_, index) => ({
+      startMs: index * 500,
+      endMs: index * 500 + 400,
+      text: ` word${index}`,
+      segmentIndex: 0,
+    }));
+    const dominant = words.map((word, index) => ({
+      startMs: word.startMs,
+      endMs: word.endMs,
+      cluster: index % 4,
+    }));
+    const fragments = Array.from({ length: 100 }, (_, index) => ({
+      startMs: index * 115,
+      endMs: index * 115 + 50,
+      cluster: index + 10,
+    }));
+    let nextId = 0;
+
+    const result = alignTranscriptSpeakers(
+      [{ startMs: 0, endMs: 12_000, text: words.map((word) => word.text).join('').trim() }],
+      words,
+      [...dominant, ...fragments],
+      () => IDS[nextId++],
+    );
+
+    expect(result.speakerAnalysis?.speakers).toHaveLength(4);
+    expect(result.diagnostics).toMatchObject({
+      outcome: 'labeled',
+      labeledSpeakerCount: 4,
+    });
+    expect(result.diagnostics!.clusterCount).toBeGreaterThan(24);
+  });
+
   it('creates labels by first appearance and splits text on word-level speaker changes', () => {
     let nextId = 0;
     const result = alignTranscriptSpeakers(

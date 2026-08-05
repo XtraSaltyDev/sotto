@@ -175,6 +175,44 @@ describe('TranscriptRepository', () => {
     expect(await readdir(rootPath)).toEqual([`${record.id}.json`]);
   });
 
+  it('round-trips why the speaker pass reached its result', async () => {
+    const record: TranscriptRecord = {
+      ...createRecord(),
+      speakerAnalysis: null,
+      speakerDiagnostics: {
+        outcome: 'over-fragmented',
+        clusterCount: 156,
+        reliableClusterCount: 45,
+        labeledSpeakerCount: 0,
+      },
+    };
+
+    await repository.save(record);
+
+    await expect(repository.get(record.id)).resolves.toMatchObject({
+      speakerAnalysis: null,
+      speakerDiagnostics: {
+        outcome: 'over-fragmented',
+        clusterCount: 156,
+        reliableClusterCount: 45,
+      },
+    });
+  });
+
+  it('opens a transcript whose diagnostics are unreadable', async () => {
+    const record = createRecord();
+    await repository.save(record);
+    const file = path.join(rootPath, `${record.id}.json`);
+    const stored = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    // Diagnostics only explain the labels; a bad one must not cost the transcript.
+    stored.speakerDiagnostics = { outcome: 'invented', clusterCount: -1 };
+    await writeFile(file, JSON.stringify(stored));
+
+    const reopened = await repository.get(record.id);
+    expect(reopened?.text).toBe(record.text);
+    expect(reopened?.speakerDiagnostics).toBeUndefined();
+  });
+
   it('reads schema-v1 records as canonical v4 without rewriting them', async () => {
     const legacyRecord = createLegacyRecord();
     const filePath = path.join(rootPath, `${legacyRecord.id}.json`);

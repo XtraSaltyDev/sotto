@@ -18,6 +18,10 @@ import type {
 } from '../shared/contracts';
 import { clearSavedSpeakerDraft } from './speaker-drafts';
 import {
+  speakerDiagnosticsNotice,
+  SPEAKER_RETRY_HINT,
+} from './speaker-diagnostics-notice';
+import {
   activeSegmentIndexAt,
   isPunctuationOnlyToken,
   PLAYBACK_JUMP_SECONDS,
@@ -545,6 +549,7 @@ export const TranscriptView = ({
   const [detailMode, setDetailMode] = useState<MeetingDetailMode>('summary');
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const playbackAvailable = transcript?.playback.state === 'available';
+  const speakerNotice = transcript ? speakerDiagnosticsNotice(transcript) : null;
   const activeSegmentIndex = transcript
     ? activeSegmentIndexAt(transcript.segments, currentTimeMs)
     : -1;
@@ -884,6 +889,18 @@ export const TranscriptView = ({
             speakers={transcript.speakerAnalysis.speakers}
           />
           </details>
+        ) : null}
+        {speakerNotice ? (
+          <section
+            className="transcript-secondary speaker-notice"
+            aria-labelledby="speaker-notice-title"
+          >
+            <h2 id="speaker-notice-title">{speakerNotice.headline}</h2>
+            <p>{speakerNotice.detail}</p>
+            {speakerNotice.suggestsExpectedSpeakers ? (
+              <p className="speaker-notice__hint">{SPEAKER_RETRY_HINT}</p>
+            ) : null}
+          </section>
         ) : null}
         <section className="transcript-find" aria-labelledby="transcript-find-title">
           <div>
