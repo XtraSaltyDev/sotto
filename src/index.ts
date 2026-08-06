@@ -42,6 +42,10 @@ import {
   shouldRestoreActivityWindow,
 } from './main/activity-window-state';
 import {
+  activityWindowAlwaysOnTopLevel,
+  activityWindowBounds,
+} from './main/activity-window-position';
+import {
   DEFAULT_SOTTO_UPDATE_MANIFEST_URL,
   UpdateService,
   updatePlatformKey,
@@ -69,7 +73,10 @@ let removeIpcHandlers: (() => void) | null = null;
 let shutdownStarted = false;
 let readyToQuit = false;
 let activityMode: ActivityMode | null = null;
+let activityDisplayId: number | null = null;
+let removeActivityDisplayListeners: (() => void) | null = null;
 const DICTATION_ACCELERATOR = 'CommandOrControl+Shift+D';
+const ACTIVITY_WINDOW_SIZE = { height: 116, width: 520 } as const;
 
 if (started) app.quit();
 
@@ -224,37 +231,55 @@ const createWindow = (showWhenReady = true): BrowserWindow => {
 };
 
 const positionActivityWindow = (window: BrowserWindow): void => {
-  const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  const [width, height] = window.getSize();
-  const margin = 20;
-  window.setPosition(
-    Math.max(workArea.x + margin, workArea.x + workArea.width - width - margin),
-    workArea.y + margin,
+  const display =
+    screen.getAllDisplays().find((candidate) => candidate.id === activityDisplayId) ??
+    screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  activityDisplayId = display.id;
+  window.setBounds(
+    activityWindowBounds(display, ACTIVITY_WINDOW_SIZE, process.platform),
+    false,
   );
-  if (height > workArea.height - margin * 2) {
-    window.setSize(width, Math.max(100, workArea.height - margin * 2));
-  }
+};
+
+const enforceActivityWindowLevel = (window: BrowserWindow): void => {
+  if (window.isDestroyed() || activityMode === null) return;
+  window.setAlwaysOnTop(
+    true,
+    activityWindowAlwaysOnTopLevel(process.platform),
+  );
+  window.moveTop();
 };
 
 const showActivityWindow = (): void => {
   const window = activityWindow;
   if (!window || window.isDestroyed() || activityMode === null) return;
   positionActivityWindow(window);
-  if (!window.webContents.isLoadingMainFrame()) window.showInactive();
+  enforceActivityWindowLevel(window);
+  if (!window.webContents.isLoadingMainFrame()) {
+    window.showInactive();
+    enforceActivityWindowLevel(window);
+  }
 };
 
 const createActivityWindow = (): BrowserWindow => {
   const window = new BrowserWindow({
     title: 'Sotto activity',
-    backgroundColor: '#fffefb',
+    acceptFirstMouse: true,
+    alwaysOnTop: true,
+    backgroundColor: '#00000000',
     frame: false,
-    height: 244,
+    fullscreenable: false,
+    hasShadow: false,
+    height: ACTIVITY_WINDOW_SIZE.height,
+    hiddenInMissionControl: true,
+    maximizable: false,
     minimizable: false,
     movable: true,
     resizable: false,
     show: false,
     skipTaskbar: true,
-    width: 420,
+    transparent: true,
+    width: ACTIVITY_WINDOW_SIZE.width,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -266,7 +291,10 @@ const createActivityWindow = (): BrowserWindow => {
   });
 
   activityWindow = window;
-  window.setAlwaysOnTop(true, 'floating');
+  if (process.platform === 'darwin') {
+    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
+  enforceActivityWindowLevel(window);
   window.setMenuBarVisibility(false);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => {
@@ -274,6 +302,13 @@ const createActivityWindow = (): BrowserWindow => {
   });
   window.on('close', (event) => {
     if (activityMode !== null && !readyToQuit) event.preventDefault();
+  });
+  window.on('show', () => enforceActivityWindowLevel(window));
+  window.on('blur', () => enforceActivityWindowLevel(window));
+  window.on('always-on-top-changed', (_event, isAlwaysOnTop) => {
+    if (!isAlwaysOnTop && activityMode !== null) {
+      queueMicrotask(() => enforceActivityWindowLevel(window));
+    }
   });
   window.once('ready-to-show', showActivityWindow);
   window.once('closed', () => {
@@ -284,6 +319,13 @@ const createActivityWindow = (): BrowserWindow => {
 };
 
 const collapseForActivity = (mode: ActivityMode): void => {
+  if (activityMode === null) {
+    const display =
+      mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()
+        ? screen.getDisplayMatching(mainWindow.getBounds())
+        : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    activityDisplayId = display.id;
+  }
   activityMode = mode;
 
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
@@ -294,6 +336,7 @@ const collapseForActivity = (mode: ActivityMode): void => {
 
 const restoreMainWindow = (): void => {
   activityMode = null;
+  activityDisplayId = null;
   if (activityWindow && !activityWindow.isDestroyed()) activityWindow.hide();
 
   const window = mainWindow ?? (controller ? createWindow(false) : null);
@@ -326,6 +369,19 @@ const requestDictationToggle = (): void => {
 };
 
 const initialize = async (): Promise<void> => {
+  const repositionActivityWindow = (): void => {
+    if (activityMode !== null && activityWindow && !activityWindow.isDestroyed()) {
+      showActivityWindow();
+    }
+  };
+  screen.on('display-added', repositionActivityWindow);
+  screen.on('display-removed', repositionActivityWindow);
+  screen.on('display-metrics-changed', repositionActivityWindow);
+  removeActivityDisplayListeners = () => {
+    screen.off('display-added', repositionActivityWindow);
+    screen.off('display-removed', repositionActivityWindow);
+    screen.off('display-metrics-changed', repositionActivityWindow);
+  };
   configureDesktopAudioCapture();
   session.defaultSession.setPermissionRequestHandler(
     (webContents, permission, callback) => {
@@ -667,6 +723,9 @@ const shutdown = async (): Promise<void> => {
   if (shutdownStarted) return;
   shutdownStarted = true;
   activityMode = null;
+  activityDisplayId = null;
+  removeActivityDisplayListeners?.();
+  removeActivityDisplayListeners = null;
   if (activityWindow && !activityWindow.isDestroyed()) {
     activityWindow.destroy();
   }

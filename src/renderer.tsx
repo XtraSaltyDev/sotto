@@ -4,6 +4,10 @@ import { createRoot } from 'react-dom/client';
 import { App } from './renderer/App';
 import './index.css';
 
+if (new URLSearchParams(window.location.search).get('window') === 'activity') {
+  document.documentElement.classList.add('activity-window');
+}
+
 const root = document.getElementById('root');
 
 if (!root) {
