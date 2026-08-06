@@ -122,6 +122,17 @@ const api: SottoDesktopApi = Object.freeze({
       speakerId,
       label,
     ),
+  mergeTranscriptSpeakers: (
+    transcriptId: string,
+    sourceSpeakerId: string,
+    targetSpeakerId: string,
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.mergeTranscriptSpeakers,
+      transcriptId,
+      sourceSpeakerId,
+      targetSpeakerId,
+    ),
   deleteTranscript: (transcriptId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.deleteTranscript, transcriptId),
   deletePlayback: (transcriptId: string) =>

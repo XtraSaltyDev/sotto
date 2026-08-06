@@ -8,21 +8,27 @@ import {
 import { DEFAULT_TRANSCRIPTION_MODEL } from '../../shared/default-transcription-model';
 
 export interface AppSettings {
-  schemaVersion: 1;
+  schemaVersion: 2;
   /** ggml model id such as 'large-v3-turbo'; null selects the bundled default. */
   transcriptionModelId: string | null;
   /** Language code from SUPPORTED_TRANSCRIPTION_LANGUAGES, or 'auto'. */
   transcriptionLanguage: string;
+  /** Terms are fed to the local speech engine as an initial prompt. */
+  customVocabulary: string[];
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   transcriptionModelId: null,
   transcriptionLanguage: 'en',
+  customVocabulary: [],
 };
 
 const MAX_SETTINGS_BYTES = 64 * 1024;
 const MODEL_FILE_PATTERN = /^ggml-([a-z0-9][a-z0-9.-]{0,60})\.bin$/u;
+export const MAX_CUSTOM_VOCABULARY_TERMS = 100;
+export const MAX_CUSTOM_VOCABULARY_TERM_CHARACTERS = 80;
+export const MAX_CUSTOM_VOCABULARY_PROMPT_CHARACTERS = 4_000;
 
 export interface TranscriptionModelChoice extends TranscriptionModelSummary {
   path: string;
@@ -34,8 +40,47 @@ export const isSupportedTranscriptionLanguage = (value: string): boolean =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+export const normalizeCustomVocabulary = (value: unknown): string[] => {
+  if (!Array.isArray(value) || value.length > MAX_CUSTOM_VOCABULARY_TERMS) {
+    throw new TypeError(
+      `Custom vocabulary must contain at most ${MAX_CUSTOM_VOCABULARY_TERMS} terms.`,
+    );
+  }
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, candidate] of value.entries()) {
+    if (typeof candidate !== 'string') {
+      throw new TypeError(`Custom vocabulary term ${index + 1} must be text.`);
+    }
+    const term = candidate.replace(/\s+/gu, ' ').trim();
+    if (
+      term.length === 0 ||
+      term.length > MAX_CUSTOM_VOCABULARY_TERM_CHARACTERS ||
+      /[\0\r\n]/u.test(term)
+    ) {
+      throw new TypeError(
+        `Custom vocabulary terms must be 1–${MAX_CUSTOM_VOCABULARY_TERM_CHARACTERS} characters.`,
+      );
+    }
+    const key = term.toLocaleLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      terms.push(term);
+    }
+  }
+  if (terms.join(', ').length > MAX_CUSTOM_VOCABULARY_PROMPT_CHARACTERS) {
+    throw new TypeError(
+      `Custom vocabulary must fit within ${MAX_CUSTOM_VOCABULARY_PROMPT_CHARACTERS} characters.`,
+    );
+  }
+  return terms;
+};
+
 const parseSettings = (value: unknown): AppSettings => {
-  if (!isRecord(value) || value.schemaVersion !== 1) {
+  if (
+    !isRecord(value) ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2)
+  ) {
     return { ...DEFAULT_APP_SETTINGS };
   }
   const transcriptionModelId =
@@ -48,7 +93,13 @@ const parseSettings = (value: unknown): AppSettings => {
     isSupportedTranscriptionLanguage(value.transcriptionLanguage)
       ? value.transcriptionLanguage
       : DEFAULT_APP_SETTINGS.transcriptionLanguage;
-  return { schemaVersion: 1, transcriptionModelId, transcriptionLanguage };
+  let customVocabulary: string[] = [];
+  try {
+    customVocabulary = normalizeCustomVocabulary(value.customVocabulary ?? []);
+  } catch {
+    customVocabulary = [];
+  }
+  return { schemaVersion: 2, transcriptionModelId, transcriptionLanguage, customVocabulary };
 };
 
 /**
@@ -82,7 +133,7 @@ export class AppSettingsStore {
   }
 
   async update(partial: Partial<Omit<AppSettings, 'schemaVersion'>>): Promise<AppSettings> {
-    const next = parseSettings({ ...this.settings, ...partial, schemaVersion: 1 });
+    const next = parseSettings({ ...this.settings, ...partial, schemaVersion: 2 });
     await mkdir(path.dirname(this.filePath), { recursive: true });
     const temporaryPath = `${this.filePath}.tmp`;
     const file = await open(temporaryPath, 'w', 0o600);

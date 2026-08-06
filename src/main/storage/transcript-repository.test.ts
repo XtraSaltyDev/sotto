@@ -190,6 +190,31 @@ describe('TranscriptRepository', () => {
     ]);
   });
 
+  it('merges one speaker cluster into another without changing timing or words', async () => {
+    const record = createSpeakerRecord();
+    record.segments[1].words = [
+      { startMs: 1_500, endMs: 1_700, text: 'This' },
+    ];
+    await repository.save(record);
+
+    await expect(
+      repository.mergeSpeakers(record.id, SECOND_SPEAKER_ID, FIRST_SPEAKER_ID),
+    ).resolves.toMatchObject({
+      outcome: 'merged',
+      reassignedCount: 1,
+      speaker: { id: FIRST_SPEAKER_ID, label: 'Speaker 1' },
+    });
+
+    const reopened = await repository.get(record.id);
+    expect(reopened?.speakerAnalysis?.speakers).toEqual([
+      { id: FIRST_SPEAKER_ID, label: 'Speaker 1' },
+    ]);
+    expect(reopened?.segments[1]).toEqual({
+      ...record.segments[1],
+      speakerId: FIRST_SPEAKER_ID,
+    });
+  });
+
   it('clears speakers in bulk when assigning to nobody', async () => {
     const record = createSpeakerRecord();
     await repository.save(record);

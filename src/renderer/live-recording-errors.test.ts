@@ -51,6 +51,7 @@ describe('live recording error guidance', () => {
     // Per-copy approval is the part users cannot guess: a rebuilt or freshly
     // installed Sotto is a different app to macOS.
     expect(message).toMatch(/per copy/iu);
+    expect(message).toMatch(/System Audio Recording Only/iu);
     expect(message).toMatch(/another app is holding the audio device/iu);
   });
 

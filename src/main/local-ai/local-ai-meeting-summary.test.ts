@@ -134,6 +134,9 @@ describe('generateLocalAiMeetingSummary', () => {
           text: 'Sarah will send the draft Friday.',
           startMs: 12_000,
           speakerId: SECOND_SPEAKER_ID,
+          sourceSegmentIndex: 1,
+          owner: 'Sarah',
+          dueDate: 'Friday',
         }],
       },
     });

@@ -30,6 +30,7 @@ import { registerDesktopIpc } from './main/ipc/register-desktop-ipc';
 import {
   configureMacDesktopAudioFallback,
   MACOS_SCREEN_RECORDING_SETTINGS_URLS,
+  macOSUsesCoreAudioTap,
   resolveLiveRecordingCapability,
 } from './main/recording/desktop-audio-capture';
 import { requestMacScreenRecordingAccess } from './main/recording/macos-screen-recording-access';
@@ -54,6 +55,7 @@ import {
 import {
   AppSettingsStore,
   listTranscriptionModels,
+  normalizeCustomVocabulary,
   resolveTranscriptionOptions,
 } from './main/settings/app-settings';
 
@@ -89,9 +91,19 @@ if (!hasInstanceLock) app.quit();
 app.enableSandbox();
 
 // Electron 39+ defaults to Core Audio Tap for macOS desktop loopback audio.
-// Apply the documented Screen & System Audio Recording fallback after other
-// Electron startup switches are configured, but before app.whenReady().
-configureMacDesktopAudioFallback(process.platform, app.commandLine);
+// Keep the older Screen & System Audio Recording path only on macOS versions
+// before Core Audio Tap was introduced.
+const startupSystemVersion =
+  process.platform === 'darwin'
+    ? (
+        process as NodeJS.Process & { getSystemVersion?: () => string }
+      ).getSystemVersion?.() ?? '0'
+    : '0';
+configureMacDesktopAudioFallback(
+  process.platform,
+  startupSystemVersion,
+  app.commandLine,
+);
 
 const isAllowedNavigation = (url: string): boolean => {
   try {
@@ -125,10 +137,13 @@ const liveRecordingCapability = (): LiveRecordingCapability => {
 const enumerateDesktopCaptureSources = () =>
   desktopCapturer.getSources({
     fetchWindowIcons: false,
-    // A non-zero thumbnail makes macOS request Screen & System Audio
-    // Recording access before Chromium tries to open the display stream.
-    // One pixel is sufficient and avoids retaining a useful screen image.
-    thumbnailSize: { height: 1, width: 1 },
+    // Sotto only needs the source identifier. The legacy path uses a one-pixel
+    // thumbnail to trigger Screen & System Audio access; Core Audio Tap does
+    // not need that extra screen-rendering work on macOS 14.2 and later.
+    thumbnailSize:
+      process.platform === 'darwin' && !macOSUsesCoreAudioTap(startupSystemVersion)
+        ? { height: 1, width: 1 }
+        : { height: 0, width: 0 },
     types: ['screen'],
   });
 
@@ -355,7 +370,11 @@ const initialize = async (): Promise<void> => {
         ? runtimeStatus.runtime.modelPath
         : path.join(bundledModelsDirectory, DEFAULT_TRANSCRIPTION_MODEL.fileName),
     );
-    return { modelPath: resolved.modelPath, language: resolved.language };
+    return {
+      modelPath: resolved.modelPath,
+      language: resolved.language,
+      customVocabulary: [...settingsStore.get().customVocabulary],
+    };
   };
 
   controller = new AppController(
@@ -466,16 +485,25 @@ const initialize = async (): Promise<void> => {
   };
 
   const repairRecordingPermissions = async (): Promise<
-    'native-requested' | 'settings-opened'
+    'native-requested' | 'native-prompted'
   > => {
+    // Keep Apple's approval prompt in front of the app that requested it.
+    // Do not open System Settings from the same action: on macOS the native
+    // request can return before the user dismisses its prompt, which would
+    // leave Settings covering the prompt and make the repair ambiguous.
+    app.focus({ steal: true });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
     const granted = await requestMacScreenRecordingAccess({
       appPath: app.getAppPath(),
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
     });
     if (!granted) {
-      await openRecordingSettings();
-      return 'settings-opened';
+      return 'native-prompted';
     }
 
     setTimeout(() => {
@@ -529,6 +557,7 @@ const initialize = async (): Promise<void> => {
         return {
           transcriptionModelId: resolvedModel?.id ?? DEFAULT_TRANSCRIPTION_MODEL.id,
           transcriptionLanguage: settings.transcriptionLanguage,
+          customVocabulary: [...settings.customVocabulary],
           availableModels: models.map((model) => ({
             id: model.id,
             multilingual: model.multilingual,
@@ -550,6 +579,19 @@ const initialize = async (): Promise<void> => {
             return {
               outcome: 'rejected' as const,
               reason: 'Choose a model that is available on this computer.',
+            };
+          }
+        }
+        if (input.customVocabulary !== undefined) {
+          // The settings store applies the same normalization when it writes;
+          // validate here so the renderer gets a useful rejection instead of
+          // silently losing a malformed term list.
+          try {
+            normalizeCustomVocabulary(input.customVocabulary);
+          } catch (error) {
+            return {
+              outcome: 'rejected' as const,
+              reason: error instanceof Error ? error.message : 'Enter valid vocabulary.',
             };
           }
         }

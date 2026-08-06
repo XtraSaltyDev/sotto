@@ -100,6 +100,16 @@ const isRecordFile = (entry: Dirent): boolean => {
   return isTranscriptId(entry.name.slice(0, -'.json'.length));
 };
 
+export type MergeSpeakerResult =
+  | {
+      outcome: 'merged';
+      record: TranscriptRecord;
+      speaker: TranscriptSpeaker;
+      reassignedCount: number;
+    }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
 export class TranscriptRepository {
   private mutationChain: Promise<void> = Promise.resolve();
 
@@ -469,6 +479,62 @@ export class TranscriptRepository {
       });
 
       return { outcome: 'renamed', record, speaker };
+    });
+  }
+
+  /**
+   * Safely folds one transcript-local speaker cluster into another. The target
+   * id remains canonical, so segment timing and word timing are untouched and
+   * the operation cannot invent a person identity.
+   */
+  async mergeSpeakers(
+    transcriptId: TranscriptId,
+    sourceSpeakerId: TranscriptSpeakerId,
+    targetSpeakerId: TranscriptSpeakerId,
+  ): Promise<MergeSpeakerResult> {
+    if (!isTranscriptId(transcriptId)) {
+      throw new TranscriptValidationError('Transcript id must be a UUID.');
+    }
+    if (!isTranscriptSpeakerId(sourceSpeakerId) || !isTranscriptSpeakerId(targetSpeakerId)) {
+      throw new TranscriptValidationError('Speaker ids must be UUIDs.');
+    }
+
+    const normalizedTranscriptId = transcriptId.toLowerCase();
+    const normalizedSourceId = sourceSpeakerId.toLowerCase();
+    const normalizedTargetId = targetSpeakerId.toLowerCase();
+    if (normalizedSourceId === normalizedTargetId) {
+      throw new TranscriptValidationError('Choose two different speakers to merge.');
+    }
+
+    return this.serializeMutation(async () => {
+      const current = await this.get(normalizedTranscriptId);
+      const speakerAnalysis = current?.speakerAnalysis;
+      const speakers = speakerAnalysis?.speakers;
+      const source = speakers?.find((speaker) => speaker.id === normalizedSourceId);
+      const target = speakers?.find((speaker) => speaker.id === normalizedTargetId);
+      if (!current || !speakerAnalysis || !speakers || !source || !target) {
+        return { outcome: 'not-found' };
+      }
+
+      const reassignedCount = current.segments.reduce(
+        (count, segment) => count + (segment.speakerId === normalizedSourceId ? 1 : 0),
+        0,
+      );
+      const segments = current.segments.map((segment) =>
+        segment.speakerId === normalizedSourceId
+          ? { ...segment, speakerId: normalizedTargetId }
+          : segment,
+      );
+      const record = await this.save({
+        ...current,
+        speakerAnalysis: {
+          ...speakerAnalysis,
+          speakers: speakers.filter((speaker) => speaker.id !== normalizedSourceId),
+        },
+        segments,
+        localAiMeetingSummary: null,
+      });
+      return { outcome: 'merged', record, speaker: target, reassignedCount };
     });
   }
 

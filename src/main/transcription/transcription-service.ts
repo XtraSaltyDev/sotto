@@ -103,8 +103,8 @@ export interface LocalTranscriptionServiceOptions {
    * English when absent.
    */
   transcriptionOptions?: () =>
-    | Promise<{ modelPath: string; language: string }>
-    | { modelPath: string; language: string };
+    | Promise<{ modelPath: string; language: string; customVocabulary?: string[] }>
+    | { modelPath: string; language: string; customVocabulary?: string[] };
 }
 
 const snapshot = (job: TranscriptionJobSnapshot): TranscriptionJobSnapshot => ({
@@ -499,7 +499,7 @@ export class LocalTranscriptionService {
     outputPrefix: string,
     outputJsonPath: string,
     signal: AbortSignal,
-    transcription: { modelPath: string; language: string },
+    transcription: { modelPath: string; language: string; customVocabulary?: string[] },
   ): Promise<void> {
     const platform = this.options.platform ?? process.platform;
     const threadArgs =
@@ -527,6 +527,13 @@ export class LocalTranscriptionService {
       '--print-progress',
       '--no-prints',
     ];
+    const vocabulary = transcription.customVocabulary?.join(', ');
+    if (vocabulary) {
+      // whisper.cpp treats --prompt as a local initial vocabulary hint. It is
+      // only an input to the on-device speech process and is never attached
+      // to transcript exports or Local AI requests.
+      baseArgs.push('--prompt', vocabulary);
+    }
 
     const invoke = async (extraArgs: string[] = []) => {
       const progressParser = createWhisperProgressParser((progress) => {

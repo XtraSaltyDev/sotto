@@ -1,5 +1,5 @@
 export const MACOS_RECORDING_PERMISSION_GUIDANCE =
-  'Sotto cannot access system audio. In System Settings → Privacy & Security → Screen & System Audio Recording, add Sotto and turn it on, then quit and reopen Sotto. No recording was started.';
+  'Sotto cannot access system audio. In System Settings → Privacy & Security, make sure this exact copy of Sotto is enabled under System Audio Recording Only on macOS 14.2 or newer, or Screen & System Audio Recording on older macOS. Then quit and reopen Sotto. No recording was started.';
 
 export const WINDOWS_RECORDING_CAPTURE_GUIDANCE =
   'Sotto could not start Windows system-audio capture. Make sure an audio output device is active and allow any Windows capture prompt, then try again. No recording was started.';
@@ -16,7 +16,7 @@ export const GENERIC_RECORDING_PERMISSION_GUIDANCE =
  * audio source") says neither.
  */
 export const MACOS_RECORDING_SOURCE_GUIDANCE =
-  'Sotto could not start system-audio capture. macOS approves this per copy of an app, so a rebuilt or newly installed Sotto needs approving again: open System Settings → Privacy & Security → Screen & System Audio Recording, make sure this copy of Sotto is listed and turned on, then quit and reopen it. If another app is holding the audio device, quit that app and try again. No recording was started.';
+  'Sotto could not start system-audio capture. macOS approves this per copy of an app, so a rebuilt or newly installed Sotto needs approving again: open System Settings → Privacy & Security and make sure this copy of Sotto is listed and turned on under System Audio Recording Only on macOS 14.2 or newer, or Screen & System Audio Recording on older macOS. Then quit and reopen it. If another app is holding the audio device, quit that app and try again. No recording was started.';
 
 export interface RecordingFailurePresentation {
   kind: 'error' | 'recovery';

@@ -730,6 +730,10 @@ const MainApp = ({
         desktopStream = await desktopCapture;
         captureRef.current.claimDesktopStream(desktopStream);
         desktopStreamClaimed = true;
+        // getDisplayMedia requires a video constraint, but Sotto records only
+        // the returned system-audio track. Stop the unused screen track as
+        // soon as the stream opens so no screen frames remain active.
+        desktopStream.getVideoTracks().forEach((track) => track.stop());
         if (desktopStream.getAudioTracks().length === 0) {
           throw new Error(
             'Sotto did not receive Teams audio. Allow screen and system-audio capture, then try again.',
@@ -827,7 +831,7 @@ const MainApp = ({
         );
       });
 
-      desktopStream?.getTracks().forEach((track) => {
+      desktopStream?.getAudioTracks().forEach((track) => {
         track.addEventListener('ended', () => {
           if (mediaRecorderRef.current?.state === 'recording') {
             void handleStopLiveRecording();
@@ -915,8 +919,10 @@ const MainApp = ({
       if (result.outcome === 'failed') {
         showError(result.reason);
         setIsRepairingPermissions(false);
-      } else if (result.outcome === 'settings-opened') {
-        showError('macOS did not show its approval prompt. Your existing entry was left untouched; System Settings is open as a fallback.');
+      } else if (result.outcome === 'prompted') {
+        showInfo(
+          'macOS should now be showing the Screen & System Audio Recording approval prompt. Approve it, then quit and reopen Sotto. If no prompt appears, dismiss it first, then use Open System Settings.',
+        );
         setIsRepairingPermissions(false);
       } else {
         showInfo('Access was approved. Sotto is reopening…');
@@ -1188,6 +1194,30 @@ const MainApp = ({
             },
           }
         : current,
+    );
+    return null;
+  };
+
+  const handleMergeSpeaker = async (
+    sourceSpeakerId: string,
+    targetSpeakerId: string,
+  ): Promise<string | null> => {
+    if (!window.sotto || !selectedId) return 'Sotto could not merge those speakers.';
+    if (!confirmLocalAiSummaryDiscard()) return null;
+    if (!window.confirm('Move every segment from the first speaker to the selected speaker? This keeps timing and removes the duplicate label.')) {
+      return null;
+    }
+    const result = await window.sotto.mergeTranscriptSpeakers(
+      selectedId,
+      sourceSpeakerId,
+      targetSpeakerId,
+    );
+    if (result.outcome === 'rejected') return result.reason;
+    if (result.outcome === 'not-found') return 'Those speakers are no longer available.';
+    const detail = await window.sotto.getTranscript(selectedId);
+    if (detail) setTranscript(detail);
+    showInfo(
+      `Merged the duplicate speaker label and reassigned ${result.reassignedCount.toLocaleString()} ${result.reassignedCount === 1 ? 'segment' : 'segments'}.`,
     );
     return null;
   };
@@ -1555,6 +1585,7 @@ const MainApp = ({
           }}
           onCancelLocalAiSummary={handleCancelLocalAiSummary}
           onGenerateLocalAiSummary={() => void handleRequestLocalAiSummary()}
+          onMergeSpeaker={handleMergeSpeaker}
           onOpenLocalAi={() => setCurrentPage('local-ai')}
           onRenameSpeaker={handleRenameSpeaker}
           onUpdateMetadata={handleUpdateMetadata}
