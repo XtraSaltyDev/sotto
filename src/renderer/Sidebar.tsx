@@ -59,17 +59,35 @@ export const Sidebar = ({
     </nav>
     {updateNotice}
     <div className="sidebar__footer">
-      <button
-        aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        aria-pressed={theme === 'dark'}
-        className="theme-toggle"
-        onClick={onToggleTheme}
-        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        type="button"
-      >
-        {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-        <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-      </button>
+      <div className="theme-picker" aria-label="Appearance">
+        <span className="theme-picker__label">Appearance</span>
+        <div className="theme-picker__options" role="group" aria-label="Choose appearance">
+          <button
+            aria-pressed={theme === 'light'}
+            className={`theme-picker__option${theme === 'light' ? ' theme-picker__option--active' : ''}`}
+            onClick={() => {
+              if (theme !== 'light') onToggleTheme();
+            }}
+            title="Use light mode"
+            type="button"
+          >
+            <SunIcon />
+            <span>Light</span>
+          </button>
+          <button
+            aria-pressed={theme === 'dark'}
+            className={`theme-picker__option${theme === 'dark' ? ' theme-picker__option--active' : ''}`}
+            onClick={() => {
+              if (theme !== 'dark') onToggleTheme();
+            }}
+            title="Use dark mode"
+            type="button"
+          >
+            <MoonIcon />
+            <span>Dark</span>
+          </button>
+        </div>
+      </div>
       <div className="privacy-note"><LockIcon /><span>Media and transcripts stay on this device.</span></div>
     </div>
   </aside>

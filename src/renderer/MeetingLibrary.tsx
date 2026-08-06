@@ -21,7 +21,16 @@ import {
   displayedMeetingLibraryTranscripts,
   mergeMeetingLibraryItems,
 } from './meeting-library';
-import { AudioFileIcon, DocumentIcon, InboxIcon } from './icons';
+import {
+  AudioFileIcon,
+  ChevronDownIcon,
+  CheckCircleIcon,
+  DocumentIcon,
+  InboxIcon,
+  MoreHorizontalIcon,
+  SearchIcon,
+  WaveformIcon,
+} from './icons';
 import {
   closeOutputMenu,
   formatDate,
@@ -236,75 +245,87 @@ export const MeetingLibrary = ({
         <div className="library-tools" role="search">
           <div className="library-search">
             <label htmlFor="library-search">Search transcripts</label>
-            <input
-              autoComplete="off"
-              id="library-search"
-              maxLength={MAX_TRANSCRIPT_LIBRARY_QUERY_CHARACTERS}
-              onChange={(event) =>
-                onViewStateChange((current) => ({
-                  ...current,
-                  query: event.target.value,
-                }))
-              }
-              placeholder="Titles, words, speakers, summaries, or tags"
-              ref={searchInputRef}
-              type="search"
-              value={query}
-            />
+            <div className="library-search__control">
+              <SearchIcon />
+              <input
+                autoComplete="off"
+                id="library-search"
+                maxLength={MAX_TRANSCRIPT_LIBRARY_QUERY_CHARACTERS}
+                onChange={(event) =>
+                  onViewStateChange((current) => ({
+                    ...current,
+                    query: event.target.value,
+                  }))
+                }
+                placeholder="Titles, words, speakers, summaries, or tags"
+                ref={searchInputRef}
+                type="search"
+                value={query}
+              />
+            </div>
           </div>
           <label>
             Date
-            <select
-              onChange={(event) =>
-                onViewStateChange((current) => ({
-                  ...current,
-                  dateRange: event.target.value as TranscriptLibraryDateRange,
-                }))
-              }
-              value={dateRange}
-            >
-              <option value="all">Any time</option>
-              <option value="today">Today</option>
-              <option value="7-days">Last 7 days</option>
-              <option value="30-days">Last 30 days</option>
-              <option value="this-year">This year</option>
-            </select>
+            <span className="library-select">
+              <select
+                onChange={(event) =>
+                  onViewStateChange((current) => ({
+                    ...current,
+                    dateRange: event.target.value as TranscriptLibraryDateRange,
+                  }))
+                }
+                value={dateRange}
+              >
+                <option value="all">Any time</option>
+                <option value="today">Today</option>
+                <option value="7-days">Last 7 days</option>
+                <option value="30-days">Last 30 days</option>
+                <option value="this-year">This year</option>
+              </select>
+              <ChevronDownIcon />
+            </span>
           </label>
           <label>
             Speaker
-            <select
-              disabled={result.availableSpeakers.length === 0}
-              onChange={(event) =>
-                onViewStateChange((current) => ({
-                  ...current,
-                  speaker: event.target.value,
-                }))
-              }
-              value={speaker}
-            >
-              <option value="">Any speaker</option>
-              {result.availableSpeakers.map((label) => (
-                <option key={label} value={label}>{label}</option>
-              ))}
-            </select>
+            <span className="library-select">
+              <select
+                disabled={result.availableSpeakers.length === 0}
+                onChange={(event) =>
+                  onViewStateChange((current) => ({
+                    ...current,
+                    speaker: event.target.value,
+                  }))
+                }
+                value={speaker}
+              >
+                <option value="">Any speaker</option>
+                {result.availableSpeakers.map((label) => (
+                  <option key={label} value={label}>{label}</option>
+                ))}
+              </select>
+              <ChevronDownIcon />
+            </span>
           </label>
           <label>
             Tag
-            <select
-              disabled={result.availableTags.length === 0}
-              onChange={(event) =>
-                onViewStateChange((current) => ({
-                  ...current,
-                  tag: event.target.value,
-                }))
-              }
-              value={tag}
-            >
-              <option value="">Any tag</option>
-              {result.availableTags.map((label) => (
-                <option key={label} value={label}>{label}</option>
-              ))}
-            </select>
+            <span className="library-select">
+              <select
+                disabled={result.availableTags.length === 0}
+                onChange={(event) =>
+                  onViewStateChange((current) => ({
+                    ...current,
+                    tag: event.target.value,
+                  }))
+                }
+                value={tag}
+              >
+                <option value="">Any tag</option>
+                {result.availableTags.map((label) => (
+                  <option key={label} value={label}>{label}</option>
+                ))}
+              </select>
+              <ChevronDownIcon />
+            </span>
           </label>
           <button
             className="library-clear"
@@ -397,11 +418,23 @@ export const MeetingLibrary = ({
                   </div>
                 )}
                 <div className="meeting-row__meta">
-                  <span>{formatDate(date)}</span>
-                  <span>{detail}</span>
+                  <div className="meeting-row__meta-heading">
+                    <span>{formatDate(date)}</span>
+                    {detail ? <span className="meeting-row__duration">{detail}</span> : null}
+                  </div>
                   <span className="meeting-row__capabilities">
-                    {transcript ? <span>Transcript ready</span> : null}
-                    {recording ? <span>Audio retained</span> : null}
+                    {transcript ? (
+                      <span className="meeting-row__capability meeting-row__capability--ready">
+                        <CheckCircleIcon />
+                        <span>Transcript ready</span>
+                      </span>
+                    ) : null}
+                    {recording ? (
+                      <span className="meeting-row__capability">
+                        <WaveformIcon />
+                        <span>Audio retained</span>
+                      </span>
+                    ) : null}
                   </span>
                   {recording && recording.transcriptionState !== 'completed' ? (
                     <span className={`status-pill status-pill--${recording.transcriptionState}`}>
@@ -410,7 +443,10 @@ export const MeetingLibrary = ({
                   ) : null}
                 </div>
                 <details className="meeting-row__menu output-menu">
-                  <summary aria-label={`More actions for ${title}`}>More</summary>
+                  <summary aria-label={`More actions for ${title}`}>
+                    <MoreHorizontalIcon />
+                    <span className="visually-hidden">More</span>
+                  </summary>
                   <div className="output-menu__panel meeting-row__menu-panel">
                     <div className="output-menu__group">
                       {transcript ? (

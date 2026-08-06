@@ -64,3 +64,22 @@ describe('Meeting Library deletion actions', () => {
     expect(renderLibrary([linkedRecording], [])).not.toContain('Delete all');
   });
 });
+
+describe('Meeting Library controls and status styling', () => {
+  it('renders custom select shells for each transcript filter', () => {
+    const markup = renderLibrary([linkedRecording], [transcript]);
+
+    expect(markup.match(/class="library-select"/g)).toHaveLength(3);
+  });
+
+  it('distinguishes transcript readiness from retained audio', () => {
+    const markup = renderLibrary([linkedRecording], [transcript]);
+
+    expect(markup).toMatch(
+      /meeting-row__capability meeting-row__capability--ready[\s\S]*Transcript ready/,
+    );
+    expect(markup).toMatch(
+      /meeting-row__capability"[\s\S]*Audio retained/,
+    );
+  });
+});

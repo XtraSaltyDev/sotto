@@ -26,6 +26,40 @@ export const DocumentIcon = (props: IconProps) => (
   </svg>
 );
 
+export const SearchIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <circle cx="10.75" cy="10.75" r="6.25" />
+    <path d="m15.5 15.5 4.25 4.25" />
+  </svg>
+);
+
+export const ChevronDownIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <path d="m7 9.5 5 5 5-5" />
+  </svg>
+);
+
+export const CheckCircleIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="m8.5 12 2.25 2.25L15.75 9.5" />
+  </svg>
+);
+
+export const WaveformIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <path d="M4 12h1M7 9v6M10 6v12M13 8v8M16 5v14M19 10v4M21 12h-1" />
+  </svg>
+);
+
+export const MoreHorizontalIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 export const ModelIcon = (props: IconProps) => (
   <svg {...iconDefaults} {...props}>
     <rect x="4" y="5" width="16" height="14" rx="3" />
@@ -43,6 +77,13 @@ export const AudioFileIcon = (props: IconProps) => (
 export const FolderIcon = (props: IconProps) => (
   <svg {...iconDefaults} {...props}>
     <path d="M3 6.75h7l2 2h9v9.75a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" />
+  </svg>
+);
+
+export const KeyboardIcon = (props: IconProps) => (
+  <svg {...iconDefaults} {...props}>
+    <rect x="2.5" y="5.5" width="19" height="13" rx="2" />
+    <path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7 14h10" />
   </svg>
 );
 

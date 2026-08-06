@@ -1820,7 +1820,7 @@ const MainApp = ({
           updateNotice={updateNotice}
         />
         {updatePopup}
-        <SettingsPage />
+        <SettingsPage onToggleTheme={onToggleTheme} theme={theme} />
       </div>
     );
   }
