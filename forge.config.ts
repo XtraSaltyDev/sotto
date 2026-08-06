@@ -43,6 +43,25 @@ export const createWindowsSquirrelOptions = () => ({
   setupIcon: './resources/Sotto.ico',
 });
 
+export const createMacDmgOptions = (configuredIdentity?: string) => {
+  const identity = configuredIdentity?.trim();
+  return {
+    format: 'ULFO' as const,
+    icon: './resources/Sotto.icns',
+    iconSize: 128,
+    ...(identity
+      ? {
+          additionalDMGOptions: {
+            'code-sign': {
+              'signing-identity': identity,
+              identifier: SOTTO_APP_BUNDLE_ID,
+            },
+          },
+        }
+      : {}),
+  };
+};
+
 const resolveExternalUpdateResource = (
   configuredFile: string | undefined,
   environmentName: string,
@@ -466,13 +485,7 @@ const config: ForgeConfig = {
     // The DMG is the primary macOS download: users open it and drag Sotto
     // into Applications. Keep the ZIP as an alternate/update artifact.
     new MakerDMG(
-      {
-        format: 'ULFO',
-        icon: './resources/Sotto.icns',
-        // 128 px keeps both the app and Applications shortcut legible in the
-        // standard 658x498 DMG window without crowding the layout.
-        iconSize: 128,
-      },
+      createMacDmgOptions(macSigningIdentity),
       ['darwin'],
     ),
   ],

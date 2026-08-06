@@ -14,7 +14,7 @@
     "build:screen-permission-helper": "bash scripts/build-macos-screen-permission-helper.sh",
     "package": "npm run build:screen-permission-helper && electron-forge package",
     "make": "npm run build:screen-permission-helper && electron-forge make",
-    "make:mac:release": "npm run build:screen-permission-helper && SOTTO_MAC_RELEASE=1 electron-forge make --platform=darwin --arch=arm64",
+    "make:mac:release": "npm run build:screen-permission-helper && SOTTO_MAC_RELEASE=1 electron-forge make --platform=darwin --arch=arm64 && bash scripts/notarize-mac-dmg.sh",
     "make:windows": "electron-forge make --platform=win32 --arch=x64 --targets=@electron-forge/maker-squirrel",
     "make:windows:zip": "electron-forge make --platform=win32 --arch=x64 --targets=@electron-forge/maker-zip",
     "verify:package:mac": "node scripts/verify-packaged-app.mjs darwin-arm64",

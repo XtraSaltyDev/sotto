@@ -194,7 +194,7 @@ const parseAuthenticatedManifest = (
     value.schemaVersion !== 2 ||
     value.app !== 'sotto' ||
     value.channel !== 'internal' ||
-    value.releaseKind !== 'internal-ad-hoc' ||
+    !['internal-ad-hoc', 'internal-developer-id'].includes(value.releaseKind) ||
     typeof value.version !== 'string' ||
     !VERSION_PATTERN.test(value.version) ||
     value.bundleId !== 'com.sotto.desktop' ||
@@ -257,7 +257,7 @@ const parseAuthenticatedManifest = (
     schemaVersion: 2,
     app: 'sotto',
     channel: 'internal',
-    releaseKind: 'internal-ad-hoc',
+    releaseKind: value.releaseKind,
     version: value.version,
     bundleId: 'com.sotto.desktop',
     commit: value.commit,

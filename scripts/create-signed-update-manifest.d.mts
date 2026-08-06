@@ -15,5 +15,6 @@ export function createSignedUpdateManifest(options: {
   commit: string;
   buildNumber: number;
   publishedAt: string;
+  releaseKind?: 'internal-ad-hoc' | 'internal-developer-id';
   artifacts: Partial<Record<ReleaseArtifactTarget, PublisherArtifact>>;
 }): Promise<Record<string, unknown>>;

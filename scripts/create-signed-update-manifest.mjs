@@ -61,6 +61,7 @@ export const createSignedUpdateManifest = async ({
   commit,
   buildNumber,
   publishedAt,
+  releaseKind = 'internal-developer-id',
   artifacts,
 }) => {
   const configuration = parseUpdateConfiguration(
@@ -124,7 +125,7 @@ export const createSignedUpdateManifest = async ({
     schemaVersion: 2,
     app: 'sotto',
     channel: 'internal',
-    releaseKind: 'internal-ad-hoc',
+    releaseKind,
     version,
     bundleId: 'com.sotto.desktop',
     commit,

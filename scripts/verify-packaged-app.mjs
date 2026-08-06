@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash, X509Certificate } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { access, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -260,6 +260,47 @@ if (target === 'darwin-arm64') {
   ) {
     throw new Error(
       'The packaged macOS bundle identity does not match the build receipt.',
+    );
+  }
+
+  execFileSync(
+    '/usr/bin/codesign',
+    ['--verify', '--deep', '--strict', '--verbose=2', appPath],
+    { stdio: 'inherit' },
+  );
+  if (process.env.SOTTO_REQUIRE_APPLE_DISTRIBUTION === '1') {
+    const identity = process.env.SOTTO_MAC_SIGNING_IDENTITY?.trim();
+    const expectedTeamId = /\(([A-Z0-9]{10})\)$/u.exec(identity ?? '')?.[1];
+    if (!identity?.startsWith('Developer ID Application:') || !expectedTeamId) {
+      throw new Error(
+        'Apple distribution verification requires SOTTO_MAC_SIGNING_IDENTITY with its Team ID.',
+      );
+    }
+    const signatureResult = spawnSync(
+      '/usr/bin/codesign',
+      ['--display', '--verbose=4', appPath],
+      { encoding: 'utf8' },
+    );
+    if (signatureResult.status !== 0) {
+      throw new Error(signatureResult.stderr || 'Could not inspect code signature.');
+    }
+    const signature = `${signatureResult.stdout}${signatureResult.stderr}`;
+    if (
+      !signature.includes(`Authority=${identity}`) ||
+      !signature.includes(`TeamIdentifier=${expectedTeamId}`) ||
+      !/flags=0x[0-9a-f]*10000\(runtime\)/iu.test(signature)
+    ) {
+      throw new Error(
+        'The macOS app is not signed by the expected Developer ID team with Hardened Runtime.',
+      );
+    }
+    execFileSync('/usr/bin/xcrun', ['stapler', 'validate', appPath], {
+      stdio: 'inherit',
+    });
+    execFileSync(
+      '/usr/sbin/spctl',
+      ['--assess', '--type', 'execute', '--verbose=4', appPath],
+      { stdio: 'inherit' },
     );
   }
 }

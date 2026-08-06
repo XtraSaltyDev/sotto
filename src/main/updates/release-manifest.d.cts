@@ -17,7 +17,7 @@ export interface ParsedReleaseManifest {
   schemaVersion: 2;
   app: 'sotto';
   channel: 'internal';
-  releaseKind: 'internal-ad-hoc';
+  releaseKind: 'internal-ad-hoc' | 'internal-developer-id';
   version: string;
   bundleId: 'com.sotto.desktop';
   commit: string;

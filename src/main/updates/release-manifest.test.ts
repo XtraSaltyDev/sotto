@@ -8,11 +8,13 @@ import {
   verifyReleaseManifest,
 } from './release-manifest.cjs';
 
-const releaseFixture = () => ({
+const releaseFixture = (
+  releaseKind: 'internal-ad-hoc' | 'internal-developer-id' = 'internal-ad-hoc',
+) => ({
   schemaVersion: 2,
   app: 'sotto',
   channel: 'internal',
-  releaseKind: 'internal-ad-hoc',
+  releaseKind,
   version: '0.2.0',
   bundleId: 'com.sotto.desktop',
   commit: '0123456789abcdef0123456789abcdef01234567',
@@ -38,6 +40,25 @@ describe('canonicalizeJson', () => {
 });
 
 describe('signed release manifests', () => {
+  it('accepts the Developer ID release kind used after the bootstrap', () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const signed = signReleaseManifest(
+      releaseFixture('internal-developer-id'),
+      'test-2026',
+      privateKey,
+    );
+
+    expect(
+      verifyReleaseManifest(
+        signed,
+        {
+          'test-2026': publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        },
+        'https://updates.example.test/internal/sotto/latest.json',
+      ),
+    ).toMatchObject({ releaseKind: 'internal-developer-id' });
+  });
+
   it('verifies a valid Ed25519 manifest and returns authenticated fields', () => {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
     const signed = signReleaseManifest(releaseFixture(), 'test-2026', privateKey);

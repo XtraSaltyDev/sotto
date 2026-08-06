@@ -20,6 +20,7 @@ import {
   createElectronFuseConfig,
   createFlipElectronFusesAfterCopyHook,
   createMacNotarizeOptions,
+  createMacDmgOptions,
   createMacSignOptions,
   createPackageBuildReceipt,
   createWritePackageBuildReceiptHook,
@@ -140,6 +141,23 @@ describe('package build receipt', () => {
 });
 
 describe('macOS package signing', () => {
+  it('signs the release DMG with the same Developer ID identity', () => {
+    expect(createMacDmgOptions()).not.toHaveProperty('additionalDMGOptions');
+    expect(
+      createMacDmgOptions(
+        '  Developer ID Application: Example Company (ABCDE12345)  ',
+      ),
+    ).toMatchObject({
+      additionalDMGOptions: {
+        'code-sign': {
+          'signing-identity':
+            'Developer ID Application: Example Company (ABCDE12345)',
+          identifier: 'com.sotto.desktop',
+        },
+      },
+    });
+  });
+
   it('keeps ad-hoc local packages launchable without library validation', () => {
     const options = createMacSignOptions();
 

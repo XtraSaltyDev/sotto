@@ -141,7 +141,6 @@ const setup = (
     openRecordingSettings: vi.fn(async () => undefined),
     requestRecordingPermissions,
     revealDownloadedUpdate: vi.fn(),
-    relaunchForUpdate: vi.fn(),
     appSettings: {
       get: vi.fn(async () => ({}) as never),
       update: vi.fn(async () => ({ outcome: 'updated' as const })),
@@ -564,7 +563,6 @@ describe('registerDesktopIpc teardown', () => {
       openRecordingSettings: vi.fn(async () => undefined),
       requestRecordingPermissions: vi.fn(async () => 'native-requested' as const),
       revealDownloadedUpdate: vi.fn(),
-      relaunchForUpdate: vi.fn(),
       appSettings: {
         get: vi.fn(async () => ({}) as never),
         update: vi.fn(async () => ({ outcome: 'updated' as const })),

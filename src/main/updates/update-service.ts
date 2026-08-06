@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createWriteStream } from 'node:fs';
@@ -6,7 +5,6 @@ import http from 'node:http';
 import https from 'node:https';
 import { mkdir, readdir, rename, rm, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import { rootCertificates } from 'node:tls';
 
@@ -20,11 +18,7 @@ import type {
 import {
   verifyReleaseManifest,
 } from './release-manifest.cjs';
-import {
-  readMacAppBundleMetadata,
-  validateExtractedMacApp,
-} from './mac-app-bundle';
-import type { ReadMacAppBundleMetadata } from './mac-app-bundle';
+import type { MacUpdateInstaller } from './mac-update-installer';
 import type {
   ParsedReleaseManifest,
   ReleaseManifestArtifact,
@@ -49,8 +43,8 @@ export type UpdatePlatformKey = 'darwin-arm64' | 'win32-x64';
 
 /**
  * 'darwin-arm64' and 'win32-x64' are user-facing installers saved to the
- * Downloads folder. 'darwin-arm64-archive' is the ZIP build the in-place
- * installer stages and swaps; clients that predate it ignore the key.
+ * Downloads folder. 'darwin-arm64-archive' is the ZIP handed to Squirrel.Mac;
+ * clients that predate it ignore the key.
  */
 export interface UpdateServiceOptions {
   manifestUrl: string | null;
@@ -58,7 +52,7 @@ export interface UpdateServiceOptions {
   currentVersion: string;
   platformKey: UpdatePlatformKey | null;
   downloadsDirectory: string;
-  /** Private scratch directory for staged in-place updates. */
+  /** Private scratch directory for verified updater artifacts. */
   stagingDirectory: string;
   /** The installed .app bundle to replace, or null when not replaceable. */
   installedAppPath: string | null;
@@ -68,22 +62,11 @@ export interface UpdateServiceOptions {
   /** Test hook; production artifact downloads use native Node HTTP streams. */
   downloadFetcher?: typeof fetch;
   onProgress?: (progress: AppUpdateProgress) => void;
-  extractArchive?: (archivePath: string, directory: string) => Promise<void>;
-  readMacAppBundleMetadata?: ReadMacAppBundleMetadata;
+  /** Electron's Squirrel.Mac bridge. Required for automatic macOS installs. */
+  macUpdateInstaller?: MacUpdateInstaller;
   /** Explicit test-fixture escape hatch; production never enables HTTP. */
   allowInsecureUpdateUrlsForTests?: boolean;
 }
-
-const execFileAsync = promisify(execFile);
-
-const dittoExtract = async (
-  archivePath: string,
-  directory: string,
-): Promise<void> => {
-  // ditto preserves the bundle's extended attributes and symlinks, which
-  // unzip implementations frequently mangle for .app bundles.
-  await execFileAsync('/usr/bin/ditto', ['-xk', archivePath, directory]);
-};
 
 const requestArtifactStream = (
   url: string,
@@ -197,17 +180,9 @@ export class UpdateService {
 
   private readonly downloadFetcher: typeof fetch | null;
 
-  private readonly extractArchive: (
-    archivePath: string,
-    directory: string,
-  ) => Promise<void>;
-
-  private readonly readMacAppBundleMetadata: ReadMacAppBundleMetadata;
-
   private stagedUpdate: {
     version: string;
-    bundleId: string;
-    appPath: string;
+    stageDirectory: string;
   } | null = null;
 
   private activeDownloadController: AbortController | null = null;
@@ -219,9 +194,6 @@ export class UpdateService {
   constructor(private readonly options: UpdateServiceOptions) {
     this.fetcher = options.fetcher ?? fetch;
     this.downloadFetcher = options.downloadFetcher ?? options.fetcher ?? null;
-    this.extractArchive = options.extractArchive ?? dittoExtract;
-    this.readMacAppBundleMetadata =
-      options.readMacAppBundleMetadata ?? readMacAppBundleMetadata;
   }
 
   cancelDownload(): void {
@@ -234,7 +206,11 @@ export class UpdateService {
   ): ReleaseManifestArtifact | undefined {
     const platformKey = this.options.platformKey;
     if (!platformKey) return undefined;
-    if (platformKey === 'darwin-arm64' && this.options.installedAppPath) {
+    if (
+      platformKey === 'darwin-arm64' &&
+      this.options.installedAppPath &&
+      this.options.macUpdateInstaller
+    ) {
       return (
         manifest.artifacts['darwin-arm64-archive'] ??
         manifest.artifacts[platformKey]
@@ -299,13 +275,15 @@ export class UpdateService {
       }
 
       const archive =
-        platformKey === 'darwin-arm64' && this.options.installedAppPath
+        platformKey === 'darwin-arm64' &&
+        this.options.installedAppPath &&
+        this.options.macUpdateInstaller
           ? manifest.artifacts['darwin-arm64-archive']
           : undefined;
       if (archive) {
         return await this.stageInPlaceUpdate(
           manifest.version,
-          manifest.bundleId,
+          manifest.publishedAt,
           archive,
         );
       }
@@ -340,68 +318,24 @@ export class UpdateService {
     }
   }
 
-  /**
-   * Swap the staged bundle into the installed location. The caller relaunches
-   * the app afterwards; the swap itself is safe while the app is running
-   * because macOS keeps the old bundle's mapped files alive.
-   */
   async installUpdate(): Promise<InstallAppUpdateResult> {
     const staged = this.stagedUpdate;
-    const installedAppPath = this.options.installedAppPath;
-    if (!staged || !installedAppPath) {
+    const macUpdateInstaller = this.options.macUpdateInstaller;
+    if (!staged || !macUpdateInstaller) {
       return {
         outcome: 'failed',
         reason: 'No downloaded update is ready to install.',
       };
     }
     try {
-      await validateExtractedMacApp(
-        path.dirname(staged.appPath),
-        staged.bundleId,
-        staged.version,
-        this.readMacAppBundleMetadata,
-      );
+      macUpdateInstaller.installUpdate(staged.version);
     } catch (error) {
       return {
         outcome: 'failed',
         reason:
           error instanceof Error
             ? error.message
-            : 'Sotto could not validate the downloaded app.',
-      };
-    }
-    let retiredPath = path.join(
-      this.options.stagingDirectory,
-      `retired-${this.options.currentVersion}.app`,
-    );
-    try {
-      await rm(retiredPath, RM_RETRY_OPTIONS);
-    } catch {
-      // A stubborn previous rollback bundle must not block this install;
-      // retire the current copy under a unique name instead.
-      retiredPath = path.join(
-        this.options.stagingDirectory,
-        `retired-${this.options.currentVersion}-${Date.now()}.app`,
-      );
-    }
-    try {
-      await rename(installedAppPath, retiredPath);
-    } catch (error) {
-      return {
-        outcome: 'failed',
-        reason:
-          error instanceof Error && 'code' in error && error.code === 'EPERM'
-            ? 'Sotto does not have permission to replace its installed copy.'
-            : 'Sotto could not move its installed copy aside.',
-      };
-    }
-    try {
-      await rename(staged.appPath, installedAppPath);
-    } catch {
-      await rename(retiredPath, installedAppPath).catch(() => undefined);
-      return {
-        outcome: 'failed',
-        reason: 'Sotto could not move the new version into place.',
+            : 'Sotto could not start the macOS update installer.',
       };
     }
     this.stagedUpdate = null;
@@ -410,15 +344,15 @@ export class UpdateService {
 
   private async stageInPlaceUpdate(
     version: string,
-    bundleId: string,
+    publishedAt: string,
     artifact: ReleaseManifestArtifact,
   ): Promise<DownloadAppUpdateResult> {
+    const macUpdateInstaller = this.options.macUpdateInstaller;
+    if (!macUpdateInstaller) {
+      throw new TypeError('The macOS update installer is not available.');
+    }
     const staging = this.options.stagingDirectory;
     await mkdir(staging, { recursive: true });
-    // Stage into a per-version directory so a new update never depends on
-    // deleting earlier leftovers. A retired rollback bundle that resists
-    // deletion (ENOTEMPTY under load has been observed on APFS) must not
-    // block updating; stale artifacts are swept separately, best effort.
     let stageDirectory = path.join(staging, `stage-${version}`);
     try {
       await rm(stageDirectory, RM_RETRY_OPTIONS);
@@ -429,29 +363,23 @@ export class UpdateService {
     const archivePath = path.join(stageDirectory, `Sotto-${version}.zip`);
     await this.downloadVerified(artifact, archivePath, version);
     this.options.onProgress?.({ phase: 'preparing', version });
-    const extractedDirectory = path.join(stageDirectory, 'extracted');
-    await mkdir(extractedDirectory, { recursive: true });
-    let appPath: string;
     try {
-      await this.extractArchive(archivePath, extractedDirectory);
-      await unlink(archivePath).catch(() => undefined);
-      appPath = await validateExtractedMacApp(
-        extractedDirectory,
-        bundleId,
+      await macUpdateInstaller.prepareUpdate({
         version,
-        this.readMacAppBundleMetadata,
-      );
+        publishedAt,
+        archivePath,
+      });
     } catch (error) {
       await rm(stageDirectory, RM_RETRY_OPTIONS).catch(() => undefined);
       throw error;
     }
-    this.stagedUpdate = { version, bundleId, appPath };
+    this.stagedUpdate = { version, stageDirectory };
     return { outcome: 'staged', version };
   }
 
   /**
-   * Best-effort removal of artifacts from finished updates: retired
-   * rollback bundles, staged directories, and legacy layout leftovers.
+   * Best-effort removal of finished Squirrel staging and legacy custom-updater
+   * leftovers. Failures never block a later update.
    * Failures are logged and never surfaced — the next update does not
    * depend on this sweep succeeding.
    */
@@ -463,10 +391,7 @@ export class UpdateService {
       return;
     }
     const activeStageDirectory = this.stagedUpdate
-      ? path.relative(
-          this.options.stagingDirectory,
-          this.stagedUpdate.appPath,
-        ).split(path.sep)[0]
+      ? path.basename(this.stagedUpdate.stageDirectory)
       : null;
     for (const entry of entries) {
       if (entry === activeStageDirectory) continue;

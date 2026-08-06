@@ -138,10 +138,12 @@ out/make/Sotto-<version>-arm64.dmg
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
 available as an alternate artifact and for static-file update workflows.
 
-Internal update-enabled packages follow the signed-manifest and key-rotation
-procedure in [docs/internal-distribution.md](docs/internal-distribution.md).
-That procedure supports company-controlled ad-hoc distribution; it is not a
-claim of Apple notarization or public-release readiness.
+Internal update-enabled packages follow the signed-manifest, Developer ID, and
+key-rotation procedure in [docs/internal-distribution.md](docs/internal-distribution.md).
+Published macOS packages are signed, notarized, stapled, and Gatekeeper-checked;
+ad-hoc packages are development-only.
+The complete platform contract is in
+[docs/macos-installation-and-updates.md](docs/macos-installation-and-updates.md).
 
 Local packages use an ad-hoc signature without Hardened Runtime. That is
 intentional: on macOS 26, a hardened process cannot load Electron components
@@ -164,13 +166,14 @@ Create the named Keychain profile once with `xcrun notarytool
 store-credentials`. Release packaging stops if either setting is missing, if
 the signing identity is not a Developer ID Application identity, or if signing
 fails. Forge notarizes and staples the signed app before placing it in the DMG
-and ZIP. Keep both the Apple Developer team and `com.sotto.desktop` bundle ID
+and ZIP. The release command also signs, notarizes, and staples the finished
+DMG. Keep both the Apple Developer team and `com.sotto.desktop` bundle ID
 unchanged for every release.
 
-That guarded Forge flow notarizes and staples the application before creating
-the DMG. If distribution policy also requires the downloadable DMG container
-itself to carry a notarization ticket, submit and staple the finished DMG as a
-separate release step.
+Use `scripts/release.sh <version>` for a published release. It requires the
+Apple settings, runs the guarded macOS build, checks the app and DMG with
+Gatekeeper, builds Windows, verifies both packages, and only then publishes the
+signed manifest.
 
 The first Developer-ID-signed release cannot inherit permission that was
 granted to an older ad-hoc build because the old grant names that build's exact
@@ -623,13 +626,11 @@ do not share a Developer ID Team ID. Live capture is qualified for the Electron
 desktop-capture path on macOS 13+; macOS 12 remains import-only because Chromium
 cannot capture desktop audio there without a virtual audio device.
 
-The distribution path now requires an owned Apple Developer ID identity,
+The distribution path requires an owned Apple Developer ID identity,
 hardened runtime signing for the app and sidecars, and a named notarization
 Keychain profile. `npm run make:mac:release` fails closed when that release
 configuration is incomplete; the ordinary local packaging commands remain
-ad-hoc for development. This machine does not currently have a valid Developer
-ID identity installed, so a signed/notarized artifact and real permission-
-preserving upgrade have not yet been qualified. The DMG is the primary macOS
+ad-hoc for development. The DMG is the primary macOS
 delivery format; the ZIP remains available for alternate and update workflows.
 Intel (`darwin-x64`) has no built or qualified runtime. Packaging now rejects
 that target, Windows arm64, and Linux instead of producing an unusable app with

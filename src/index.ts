@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import {
   app,
+  autoUpdater,
   BrowserWindow,
   desktopCapturer,
   globalShortcut,
@@ -52,10 +53,7 @@ import {
 } from './main/updates/update-service';
 import { loadUpdateConfiguration } from './main/updates/update-config.cjs';
 import { createTrustedUpdateFetcher } from './main/updates/update-tls';
-import {
-  consumePendingPermissionRepair,
-  markPendingPermissionRepair,
-} from './main/updates/post-update-permissions';
+import { SquirrelMacUpdateInstaller } from './main/updates/mac-update-installer';
 import {
   AppSettingsStore,
   listTranscriptionModels,
@@ -509,6 +507,10 @@ const initialize = async (): Promise<void> => {
     downloadsDirectory: app.getPath('downloads'),
     stagingDirectory: path.join(app.getPath('userData'), 'updates'),
     installedAppPath,
+    macUpdateInstaller:
+      installedAppPath && process.platform === 'darwin'
+        ? new SquirrelMacUpdateInstaller(autoUpdater)
+        : undefined,
     tlsCa: updateCa,
     fetcher: updateCa ? createTrustedUpdateFetcher(updateCa) : undefined,
     onProgress: (progress) => {
@@ -580,24 +582,6 @@ const initialize = async (): Promise<void> => {
     onControllerStateChanged: handleControllerStateChanged,
     openRecordingSettings,
     revealDownloadedUpdate: (filePath) => shell.showItemInFolder(filePath),
-    relaunchForUpdate: () => {
-      // The swapped-in bundle is a new ad-hoc-signed app to macOS, so the
-      // next launch must re-request recording access on its own.
-      void markPendingPermissionRepair(app.getPath('userData')).catch(
-        (error: unknown) => {
-          console.warn(
-            '[sotto] Could not record the pending permission repair.',
-            error,
-          );
-        },
-      );
-      // Give the renderer a beat to receive the install result before the
-      // process exits and the swapped-in version starts.
-      setTimeout(() => {
-        app.relaunch();
-        app.quit();
-      }, 400);
-    },
     requestRecordingPermissions: repairRecordingPermissions,
     appSettings: {
       get: async () => {
@@ -692,31 +676,6 @@ const initialize = async (): Promise<void> => {
     );
   }
 
-  // First launch after an in-place update: run the recording-permission
-  // repair without waiting for a click. The marker is consumed before the
-  // repair so the attempt cannot loop across the relaunch the repair
-  // itself performs; the OS approval prompt stays the only user step.
-  if (process.platform === 'darwin') {
-    void consumePendingPermissionRepair(app.getPath('userData'))
-      .then((pending) => {
-        if (!pending) return;
-        if (liveRecordingCapability().state !== 'permission-required') return;
-        setTimeout(() => {
-          repairRecordingPermissions().catch((error: unknown) => {
-            console.warn(
-              '[sotto] Automatic post-update permission repair failed.',
-              error,
-            );
-          });
-        }, 1_500);
-      })
-      .catch((error: unknown) => {
-        console.warn(
-          '[sotto] Could not check for a pending permission repair.',
-          error,
-        );
-      });
-  }
 };
 
 const shutdown = async (): Promise<void> => {

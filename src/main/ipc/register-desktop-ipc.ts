@@ -111,7 +111,6 @@ export interface DesktopIpcOptions {
     'native-requested' | 'native-prompted'
   >;
   revealDownloadedUpdate: (filePath: string) => void;
-  relaunchForUpdate: () => void;
   appSettings: {
     get: () => Promise<AppSettingsSummary>;
     update: (
@@ -297,7 +296,6 @@ export const registerDesktopIpc = ({
   openRecordingSettings,
   requestRecordingPermissions,
   revealDownloadedUpdate,
-  relaunchForUpdate,
   appSettings,
 }: DesktopIpcOptions): (() => void) => {
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
@@ -454,11 +452,7 @@ export const registerDesktopIpc = ({
     IPC_CHANNELS.installAppUpdate,
     async (event): Promise<InstallAppUpdateResult> => {
       trust(event);
-      const result = await updateService.installUpdate();
-      if (result.outcome === 'installed') {
-        relaunchForUpdate();
-      }
-      return result;
+      return updateService.installUpdate();
     },
   );
 

@@ -14,6 +14,7 @@ import {
   updatePlatformKey,
 } from './update-service';
 import type { AppUpdateProgress } from '../../shared/contracts';
+import type { MacUpdateInstaller } from './mac-update-installer';
 import { signReleaseManifest } from './release-manifest.cjs';
 import { createTrustedUpdateFetcher } from './update-tls';
 
@@ -83,6 +84,7 @@ const serviceWith = (
   currentVersion = '0.1.9',
   options: {
     installedAppPath?: string | null;
+    macUpdateInstaller?: MacUpdateInstaller;
     onProgress?: (progress: AppUpdateProgress) => void;
   } = {},
 ): UpdateService =>
@@ -94,6 +96,7 @@ const serviceWith = (
     downloadsDirectory: downloads,
     stagingDirectory: path.join(downloads, 'staging'),
     installedAppPath: options.installedAppPath ?? null,
+    macUpdateInstaller: options.macUpdateInstaller,
     fetcher,
     allowInsecureUpdateUrlsForTests: true,
     onProgress: options.onProgress,
@@ -387,7 +390,7 @@ subjectAltName=IP:127.0.0.1
     });
   });
 
-  it('reports the in-place archive size for a replaceable macOS app', async () => {
+  it('reports the Squirrel archive size for an updatable macOS app', async () => {
     const installer = Buffer.from('dmg-installer');
     const archive = Buffer.from('zip-archive');
     const manifest = manifestFor('0.2.0', installer);
@@ -403,7 +406,13 @@ subjectAltName=IP:127.0.0.1
       fetcher as typeof fetch,
       await downloadsDirectory(),
       '0.1.9',
-      { installedAppPath: '/Applications/Sotto.app' },
+      {
+        installedAppPath: '/Applications/Sotto.app',
+        macUpdateInstaller: {
+          prepareUpdate: async () => undefined,
+          installUpdate: vi.fn(),
+        },
+      },
     );
 
     await expect(service.checkForUpdates()).resolves.toEqual({
@@ -582,7 +591,7 @@ subjectAltName=IP:127.0.0.1
     await expect(readdir(downloads)).resolves.toEqual([]);
   });
 
-  it('stages an in-place update and swaps the installed bundle on install', async () => {
+  it('hands a verified archive to Squirrel.Mac and installs through the framework', async () => {
     const archive = Buffer.from('zip-archive-bytes');
     const progress: AppUpdateProgress[] = [];
     const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
@@ -600,11 +609,8 @@ subjectAltName=IP:127.0.0.1
     );
     const root = await downloadsDirectory();
     const installedAppPath = path.join(root, 'Applications', 'Sotto.app');
-    await mkdir(path.join(installedAppPath, 'Contents'), { recursive: true });
-    await writeFile(
-      path.join(installedAppPath, 'Contents', 'marker'),
-      'old-version',
-    );
+    const prepareUpdate = vi.fn(async () => undefined);
+    const installUpdate = vi.fn();
     const service = new UpdateService({
       manifestUrl: MANIFEST_URL,
       trustedManifestKeys: testTrustedKeys,
@@ -616,15 +622,7 @@ subjectAltName=IP:127.0.0.1
       fetcher: fetcher as typeof fetch,
       allowInsecureUpdateUrlsForTests: true,
       onProgress: (event) => progress.push(event),
-      extractArchive: async (_archivePath, directory) => {
-        const bundle = path.join(directory, 'Sotto.app', 'Contents');
-        await mkdir(bundle, { recursive: true });
-        await writeFile(path.join(bundle, 'marker'), 'new-version');
-      },
-      readMacAppBundleMetadata: async () => ({
-        bundleId: 'com.sotto.desktop',
-        version: '0.2.0',
-      }),
+      macUpdateInstaller: { prepareUpdate, installUpdate },
     });
 
     await expect(service.downloadUpdate()).resolves.toEqual({
@@ -644,22 +642,25 @@ subjectAltName=IP:127.0.0.1
       outcome: 'installed',
       version: '0.2.0',
     });
-    await expect(
-      readFile(path.join(installedAppPath, 'Contents', 'marker'), 'utf8'),
-    ).resolves.toBe('new-version');
+    expect(prepareUpdate).toHaveBeenCalledOnce();
+    expect(prepareUpdate).toHaveBeenCalledWith({
+      version: '0.2.0',
+      publishedAt: '2026-07-31T12:00:00.000Z',
+      archivePath: path.join(root, 'staging', 'stage-0.2.0', 'Sotto-0.2.0.zip'),
+    });
     await expect(
       readFile(
-        path.join(root, 'staging', 'retired-0.1.9.app', 'Contents', 'marker'),
-        'utf8',
+        path.join(root, 'staging', 'stage-0.2.0', 'Sotto-0.2.0.zip'),
       ),
-    ).resolves.toBe('old-version');
+    ).resolves.toEqual(archive);
+    expect(installUpdate).toHaveBeenCalledWith('0.2.0');
     // A second install without a staged update is refused.
     await expect(service.installUpdate()).resolves.toMatchObject({
       outcome: 'failed',
     });
   });
 
-  it('revalidates staged bundle metadata immediately before replacement', async () => {
+  it('surfaces framework code-signature rejection without staging an update', async () => {
     const archive = Buffer.from('zip-archive-bytes');
     const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
     manifest.artifacts['darwin-arm64-archive'] = {
@@ -676,12 +677,6 @@ subjectAltName=IP:127.0.0.1
     );
     const root = await downloadsDirectory();
     const installedAppPath = path.join(root, 'Applications', 'Sotto.app');
-    await mkdir(path.join(installedAppPath, 'Contents'), { recursive: true });
-    await writeFile(
-      path.join(installedAppPath, 'Contents', 'marker'),
-      'old-version',
-    );
-    let metadata = { bundleId: 'com.sotto.desktop', version: '0.2.0' };
     const service = new UpdateService({
       manifestUrl: MANIFEST_URL,
       trustedManifestKeys: testTrustedKeys,
@@ -692,28 +687,24 @@ subjectAltName=IP:127.0.0.1
       installedAppPath,
       fetcher: fetcher as typeof fetch,
       allowInsecureUpdateUrlsForTests: true,
-      extractArchive: async (_archivePath, directory) => {
-        await mkdir(path.join(directory, 'Sotto.app'), { recursive: true });
+      macUpdateInstaller: {
+        prepareUpdate: async () => {
+          throw new Error('code signature did not pass validation');
+        },
+        installUpdate: vi.fn(),
       },
-      readMacAppBundleMetadata: async () => metadata,
     });
 
     await expect(service.downloadUpdate()).resolves.toEqual({
-      outcome: 'staged',
-      version: '0.2.0',
-    });
-    metadata = { bundleId: 'com.sotto.desktop', version: '9.9.9' };
-
-    await expect(service.installUpdate()).resolves.toEqual({
       outcome: 'failed',
-      reason: 'The downloaded app version does not match the offered version.',
+      reason: 'code signature did not pass validation',
     });
-    await expect(
-      readFile(path.join(installedAppPath, 'Contents', 'marker'), 'utf8'),
-    ).resolves.toBe('old-version');
+    await expect(service.installUpdate()).resolves.toMatchObject({
+      outcome: 'failed',
+    });
   });
 
-  it('stages a new update even when old rollback bundles remain', async () => {
+  it('stages a new framework update even when old custom-updater bundles remain', async () => {
     const archive = Buffer.from('zip-archive-bytes');
     const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
     manifest.artifacts['darwin-arm64-archive'] = {
@@ -745,13 +736,10 @@ subjectAltName=IP:127.0.0.1
       installedAppPath,
       fetcher: fetcher as typeof fetch,
       allowInsecureUpdateUrlsForTests: true,
-      extractArchive: async (_archivePath, directory) => {
-        await mkdir(path.join(directory, 'Sotto.app'), { recursive: true });
+      macUpdateInstaller: {
+        prepareUpdate: async () => undefined,
+        installUpdate: vi.fn(),
       },
-      readMacAppBundleMetadata: async () => ({
-        bundleId: 'com.sotto.desktop',
-        version: '0.2.0',
-      }),
     });
 
     await expect(service.downloadUpdate()).resolves.toEqual({
@@ -796,9 +784,10 @@ subjectAltName=IP:127.0.0.1
     });
   });
 
-  it('fails a staged update whose archive holds no app bundle', async () => {
+  it('falls back to the DMG when the framework installer is unavailable', async () => {
     const archive = Buffer.from('zip-archive-bytes');
-    const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
+    const dmg = Buffer.from('dmg');
+    const manifest = manifestFor('0.2.0', dmg);
     manifest.artifacts['darwin-arm64-archive'] = {
       target: 'darwin-arm64-archive',
       file: 'Sotto-darwin-arm64.zip',
@@ -809,7 +798,9 @@ subjectAltName=IP:127.0.0.1
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('latest.json')
         ? Response.json(signedManifest(manifest))
-        : new Response(archive),
+        : new Response(
+            String(input).endsWith('Sotto-arm64.dmg') ? dmg : archive,
+          ),
     );
     const root = await downloadsDirectory();
     const service = new UpdateService({
@@ -822,63 +813,11 @@ subjectAltName=IP:127.0.0.1
       installedAppPath: path.join(root, 'Sotto.app'),
       fetcher: fetcher as typeof fetch,
       allowInsecureUpdateUrlsForTests: true,
-      extractArchive: async () => undefined,
     });
 
-    await expect(service.downloadUpdate()).resolves.toEqual({
-      outcome: 'failed',
-      reason: 'The downloaded update must contain exactly Sotto.app.',
-    });
-  });
-
-  it.each([
-    [
-      { bundleId: 'com.attacker.fake', version: '0.2.0' },
-      'The downloaded update has an unexpected bundle identifier.',
-    ],
-    [
-      { bundleId: 'com.sotto.desktop', version: '9.9.9' },
-      'The downloaded app version does not match the offered version.',
-    ],
-  ])('rejects mismatched bundle metadata before staging', async (metadata, reason) => {
-    const archive = Buffer.from('zip-archive-bytes');
-    const manifest = manifestFor('0.2.0', Buffer.from('dmg'));
-    manifest.artifacts['darwin-arm64-archive'] = {
-      target: 'darwin-arm64-archive',
-      file: 'Sotto-darwin-arm64.zip',
-      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
-      sha256: createHash('sha256').update(archive).digest('hex'),
-      size: archive.byteLength,
-    };
-    const fetcher = vi.fn(async (input: string | URL | Request) =>
-      String(input).endsWith('latest.json')
-        ? Response.json(signedManifest(manifest))
-        : new Response(archive),
-    );
-    const root = await downloadsDirectory();
-    const service = new UpdateService({
-      manifestUrl: MANIFEST_URL,
-      trustedManifestKeys: testTrustedKeys,
-      currentVersion: '0.1.9',
-      platformKey: 'darwin-arm64',
-      downloadsDirectory: path.join(root, 'downloads'),
-      stagingDirectory: path.join(root, 'staging'),
-      installedAppPath: path.join(root, 'Sotto.app'),
-      fetcher: fetcher as typeof fetch,
-      allowInsecureUpdateUrlsForTests: true,
-      extractArchive: async (_archivePath, directory) => {
-        await mkdir(path.join(directory, 'Sotto.app'), { recursive: true });
-      },
-      readMacAppBundleMetadata: async () => metadata,
-    });
-
-    await expect(service.downloadUpdate()).resolves.toEqual({
-      outcome: 'failed',
-      reason,
-    });
-    await expect(service.installUpdate()).resolves.toEqual({
-      outcome: 'failed',
-      reason: 'No downloaded update is ready to install.',
+    await expect(service.downloadUpdate()).resolves.toMatchObject({
+      outcome: 'downloaded',
+      fileName: 'Sotto-0.2.0-arm64.dmg',
     });
   });
 
