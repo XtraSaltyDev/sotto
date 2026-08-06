@@ -257,6 +257,12 @@ textarea:focus-visible {
   animation: recording-pulse 1.35s ease-in-out infinite;
 }
 
+.activity-overlay__indicator--paused {
+  background: var(--warning-ring);
+  box-shadow: 0 0 0 4px rgb(241 189 118 / 18%);
+  animation: none;
+}
+
 .activity-overlay__details {
   min-width: 0;
   padding-left: 38px;
@@ -281,6 +287,14 @@ textarea:focus-visible {
 .activity-overlay__footer {
   align-items: flex-end;
   padding-left: 38px;
+}
+
+.activity-overlay__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
 }
 
 .activity-overlay__footer p {
@@ -1760,6 +1774,12 @@ textarea:focus-visible {
   animation: recording-pulse 1.35s ease-in-out infinite;
 }
 
+.recording-card__dot--paused {
+  background: var(--warning-ring);
+  box-shadow: 0 0 0 4px rgb(241 189 118 / 18%);
+  animation: none;
+}
+
 .recording-card__timer {
   margin: 13px 0 2px;
   color: var(--accent-dark);
@@ -1773,6 +1793,68 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.recording-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.transcript-markers {
+  margin-bottom: 16px;
+  padding: 13px 15px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.transcript-markers__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transcript-markers__heading h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.transcript-markers__heading span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.transcript-markers__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.transcript-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  background: var(--background-deep);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.transcript-marker span {
+  color: var(--accent-dark);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.transcript-marker:disabled {
+  cursor: default;
+  opacity: 0.65;
 }
 
 .job-card__heading {

@@ -28,6 +28,7 @@ import type {
   TranscriptExportFormat,
   TranscriptionJobSnapshot,
   LocalAiMeetingSummary,
+  LiveRecordingMarker,
   DeleteMeetingResult,
 } from '../shared/contracts';
 import type { SelectedMedia } from './media/media-import';
@@ -178,6 +179,7 @@ export const toTranscriptDetail = (record: TranscriptRecord): TranscriptDetail =
     ...(presented.speakerDiagnostics
       ? { speakerDiagnostics: { ...presented.speakerDiagnostics } }
       : {}),
+    markers: (presented.markers ?? []).map((marker) => ({ ...marker })),
     engine: { ...presented.engine },
   };
 };
@@ -229,6 +231,14 @@ export const formatTranscriptForExport = (
     addSummaryItems('Decisions', meetingSummary.decisions);
     addSummaryItems('Action items', meetingSummary.actionItems);
     lines.push('TRANSCRIPT', '');
+  }
+
+  if (presented.markers?.length) {
+    lines.push('BOOKMARKS');
+    for (const marker of presented.markers) {
+      lines.push(`- [${formatTimestamp(marker.offsetMs)}] ${marker.label}`);
+    }
+    lines.push('', 'TRANSCRIPT', '');
   }
 
   if (presented.segments.length === 0) {
@@ -492,6 +502,18 @@ export class AppController {
     chunk: Uint8Array,
   ): Promise<AppendLiveRecordingChunkResult> {
     return this.recordingService.append(recordingId, chunk);
+  }
+
+  setLiveRecordingPaused(recordingId: string, paused: boolean): Promise<boolean> {
+    return this.recordingService.setPaused(recordingId, paused);
+  }
+
+  addLiveRecordingMarker(
+    recordingId: string,
+    offsetMs: number,
+    label?: string,
+  ): Promise<LiveRecordingMarker | null> {
+    return this.recordingService.addMarker(recordingId, offsetMs, label);
   }
 
   async finishLiveRecording(

@@ -107,6 +107,36 @@ describe('LiveRecordingService', () => {
     await expect(service.cancel(recording.id)).resolves.toBe(true);
   });
 
+  it('pauses and resumes one durable stream and persists bookmarks with it', async () => {
+    const { service } = await makeService();
+    const recording = await service.start();
+
+    await expect(service.setPaused(recording.id, true)).resolves.toBe(true);
+    expect(service.getActive()).toMatchObject({
+      id: recording.id,
+      paused: true,
+      markers: [],
+    });
+    await expect(service.addMarker(recording.id, 4_250)).resolves.toEqual({
+      offsetMs: 4_250,
+      label: 'Bookmark',
+    });
+    await expect(service.setPaused(recording.id, false)).resolves.toBe(true);
+
+    const payload = new TextEncoder().encode('paused recording remains one stream');
+    await expect(service.append(recording.id, payload)).resolves.toMatchObject({
+      outcome: 'accepted',
+    });
+    await service.finish(recording.id);
+
+    await expect(service.getSavedRecording(recording.id)).resolves.toMatchObject({
+      markers: [{ offsetMs: 4_250, label: 'Bookmark' }],
+    });
+    await expect(service.getRecordingMedia(recording.id)).resolves.toMatchObject({
+      markers: [{ offsetMs: 4_250, label: 'Bookmark' }],
+    });
+  });
+
   it('atomically finalizes a private durable WebM and retains it after restart', async () => {
     const { changes, root, service } = await makeService();
     const { media, payload, recording } = await finalize(service);

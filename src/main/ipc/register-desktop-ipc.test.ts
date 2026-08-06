@@ -68,6 +68,8 @@ const createController = () => ({
   retranscribeTranscript: vi.fn(async () => ({ outcome: 'not-found' })),
   appendLiveRecordingChunk: vi.fn(async () => ({ outcome: 'appended' })),
   updateLiveRecordingHealth: vi.fn(),
+  setLiveRecordingPaused: vi.fn(async () => true),
+  addLiveRecordingMarker: vi.fn(async () => null),
   finishLiveRecording: vi.fn(async () => ({})),
   cancelLiveRecording: vi.fn(async () => false),
   retryRecording: vi.fn(async () => null),
@@ -300,7 +302,6 @@ describe('registerDesktopIpc live capture health', () => {
     expect(controller.updateLiveRecordingHealth).toHaveBeenCalledWith(null);
   });
 });
-
 describe('registerDesktopIpc argument validation', () => {
   it('refuses transcript identifiers that are not UUIDs', async () => {
     const { controller, mainWindow } = setup();

@@ -493,6 +493,18 @@ describe('LocalTranscriptionService durable recording behavior', () => {
     ]);
   });
 
+  it('carries live recording bookmarks into the saved transcript', async () => {
+    const context = await setup(makeRunner(() => false));
+    context.media.markers = [{ offsetMs: 2_500, label: 'Decision' }];
+    const terminal = context.nextTerminal();
+    await context.service.start(context.media);
+    await expect(terminal).resolves.toMatchObject({ stage: 'completed' });
+
+    await expect(context.repository.get(RECORDING_ID)).resolves.toMatchObject({
+      markers: [{ offsetMs: 2_500, label: 'Decision' }],
+    });
+  });
+
   it('rejects an invalid expected speaker count before starting work', async () => {
     const context = await setup(makeRunner(() => false));
 

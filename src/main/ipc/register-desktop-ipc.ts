@@ -12,6 +12,8 @@ import {
 
 import {
   IPC_CHANNELS,
+  MAX_LIVE_RECORDING_MARKER_LABEL_CHARACTERS,
+  MAX_LIVE_RECORDING_MARKER_OFFSET_MS,
   isExpectedSpeakerCount,
   type ActivityAction,
   type ActivityMode,
@@ -130,7 +132,11 @@ const isActivityMode = (value: unknown): value is ActivityMode =>
   value === 'transcribing';
 
 const isActivityAction = (value: unknown): value is ActivityAction =>
-  value === 'stop-recording' || value === 'cancel-transcription';
+  value === 'stop-recording' ||
+  value === 'pause-recording' ||
+  value === 'resume-recording' ||
+  value === 'add-marker' ||
+  value === 'cancel-transcription';
 
 const notifyDictationFallback = (reason: string): void => {
   if (!Notification.isSupported()) return;
@@ -687,6 +693,77 @@ export const registerDesktopIpc = ({
           outcome: 'rejected',
           reason: 'Sotto could not save the live recording chunk.',
           code: 'recording-failed',
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.setLiveRecordingPaused,
+    async (event, recordingId: unknown, rawPaused: unknown) => {
+      trust(event);
+      if (!isTranscriptId(recordingId) || typeof rawPaused !== 'boolean') {
+        return { outcome: 'not-found' as const };
+      }
+      try {
+        return (await controller.setLiveRecordingPaused(recordingId, rawPaused))
+          ? { outcome: 'updated' as const, paused: rawPaused }
+          : { outcome: 'not-found' as const };
+      } catch (error) {
+        if (error instanceof LiveRecordingError) {
+          return { outcome: 'rejected' as const, reason: error.message, code: error.code };
+        }
+        return {
+          outcome: 'rejected' as const,
+          reason: 'Sotto could not update the live recording state.',
+          code: 'recording-failed' as const,
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.addLiveRecordingMarker,
+    async (
+      event,
+      recordingId: unknown,
+      rawOffsetMs: unknown,
+      rawLabel: unknown,
+    ) => {
+      trust(event);
+      const label = rawLabel === undefined ? 'Bookmark' : rawLabel;
+      if (
+        !isTranscriptId(recordingId) ||
+        !Number.isSafeInteger(rawOffsetMs) ||
+        (rawOffsetMs as number) < 0 ||
+        (rawOffsetMs as number) > MAX_LIVE_RECORDING_MARKER_OFFSET_MS ||
+        typeof label !== 'string' ||
+        label.trim().length === 0 ||
+        label.length > MAX_LIVE_RECORDING_MARKER_LABEL_CHARACTERS
+      ) {
+        return {
+          outcome: 'rejected' as const,
+          reason: 'That bookmark is not valid.',
+          code: 'recording-failed' as const,
+        };
+      }
+      try {
+        const marker = await controller.addLiveRecordingMarker(
+          recordingId,
+          rawOffsetMs as number,
+          label,
+        );
+        return marker
+          ? { outcome: 'added' as const, marker }
+          : { outcome: 'not-found' as const };
+      } catch (error) {
+        if (error instanceof LiveRecordingError) {
+          return { outcome: 'rejected' as const, reason: error.message, code: error.code };
+        }
+        return {
+          outcome: 'rejected' as const,
+          reason: 'Sotto could not save that bookmark.',
+          code: 'recording-failed' as const,
         };
       }
     },
@@ -1317,6 +1394,8 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.startLiveRecording,
       IPC_CHANNELS.updateLiveRecordingHealth,
       IPC_CHANNELS.appendLiveRecordingChunk,
+      IPC_CHANNELS.setLiveRecordingPaused,
+      IPC_CHANNELS.addLiveRecordingMarker,
       IPC_CHANNELS.finishLiveRecording,
       IPC_CHANNELS.cancelLiveRecording,
       IPC_CHANNELS.retryRecording,

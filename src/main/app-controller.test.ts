@@ -344,6 +344,15 @@ describe('transcript presentation', () => {
     expect(formatTranscriptForExport(analyzed)).toContain(
       '[1:01:00] Unclear: Second item.',
     );
+
+    const marked = {
+      ...record,
+      markers: [{ offsetMs: 12_500, label: 'Decision' }],
+    } satisfies TranscriptRecord;
+    expect(toTranscriptDetail(marked).markers).toEqual([
+      { offsetMs: 12_500, label: 'Decision' },
+    ]);
+    expect(formatTranscriptForExport(marked)).toContain('[0:12] Decision');
   });
 
   it('maps, renames, and exports transcript-local speaker labels', async () => {

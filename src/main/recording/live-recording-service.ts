@@ -6,6 +6,7 @@ import path from 'node:path';
 import type {
   AppendLiveRecordingChunkResult,
   LiveRecordingErrorCode,
+  LiveRecordingMarker,
   LiveRecordingSnapshot,
   RecordingKind,
   SavedRecordingSummary,
@@ -68,6 +69,11 @@ interface ActiveRecording {
   pendingReject: ((error: unknown) => void) | null;
   streamError: Error | null;
   bytesWritten: number;
+  paused: boolean;
+  pausedAt: string | null;
+  pausedDurationMs: number;
+  markers: LiveRecordingMarker[];
+  markerQueue: Promise<void>;
   failed: boolean;
 }
 
@@ -84,6 +90,10 @@ const snapshot = (recording: ActiveRecording): LiveRecordingSnapshot => ({
   sourceName: recording.sourceName,
   startedAt: recording.startedAt,
   bytesWritten: recording.bytesWritten,
+  paused: recording.paused,
+  pausedAt: recording.pausedAt,
+  pausedDurationMs: recording.pausedDurationMs,
+  markers: recording.markers.map((marker) => ({ ...marker })),
 });
 
 const sourceNameFor = (startedAt: string, kind: RecordingKind): string => {
@@ -250,6 +260,7 @@ export class LiveRecordingService {
       name: metadata.sourceName,
       sourceType: 'recording',
       recordingId: metadata.id,
+      markers: metadata.markers?.map((marker) => ({ ...marker })) ?? [],
       cleanupAfterTranscription: false,
     };
   }
@@ -313,6 +324,11 @@ export class LiveRecordingService {
           pendingReject: null,
           streamError: null,
           bytesWritten: 0,
+          paused: false,
+          pausedAt: null,
+          pausedDurationMs: 0,
+          markers: [],
+          markerQueue: Promise.resolve(),
           failed: false,
         };
         stream.on('error', (error: Error) => {
@@ -389,6 +405,49 @@ export class LiveRecordingService {
     }
   }
 
+  async setPaused(recordingId: string, paused: boolean): Promise<boolean> {
+    const recording = this.assertActive(recordingId, false);
+    if (!recording || this.operation) return false;
+    if (recording.paused === paused) return true;
+
+    const now = new Date();
+    if (paused) {
+      recording.pausedAt = now.toISOString();
+    } else if (recording.pausedAt !== null) {
+      recording.pausedDurationMs += Math.max(
+        0,
+        now.getTime() - Date.parse(recording.pausedAt),
+      );
+      recording.pausedAt = null;
+    }
+    recording.paused = paused;
+    this.publish();
+    return true;
+  }
+
+  async addMarker(
+    recordingId: string,
+    offsetMs: number,
+    label = 'Bookmark',
+  ): Promise<LiveRecordingMarker | null> {
+    const recording = this.assertActive(recordingId, false);
+    if (!recording || this.operation) return null;
+    let added: LiveRecordingMarker | null = null;
+    const operation = recording.markerQueue.then(async () => {
+      const current = await this.repository.get(recording.id);
+      if (!current) return;
+      const marker = { offsetMs, label };
+      const markers = [...(current.markers ?? []), marker];
+      await this.repository.updateMarkers(recording.id, markers);
+      recording.markers = markers;
+      added = { ...marker };
+      this.publish();
+    });
+    recording.markerQueue = operation.catch(() => undefined);
+    await operation;
+    return added;
+  }
+
   async finish(recordingId: string): Promise<SelectedMedia> {
     const recording = this.assertActive(recordingId);
     if (this.operation) {
@@ -405,7 +464,7 @@ export class LiveRecordingService {
 
     let encoderClosed = false;
     try {
-      await recording.writeQueue;
+      await Promise.all([recording.writeQueue, recording.markerQueue]);
       if (recording.streamError) throw recording.streamError;
       await this.endStream(recording);
       encoderClosed = true;
@@ -421,6 +480,7 @@ export class LiveRecordingService {
         name: recording.sourceName,
         sourceType: 'recording',
         recordingId: recording.id,
+        markers: recording.markers.map((marker) => ({ ...marker })),
         cleanupAfterTranscription: false,
       };
     } catch (error) {

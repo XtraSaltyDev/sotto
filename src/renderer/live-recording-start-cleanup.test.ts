@@ -26,6 +26,10 @@ const acceptedRecording = (): StartLiveRecordingResult => ({
     kind: 'meeting',
     sourceName: 'Live meeting.webm',
     startedAt: '2026-07-29T11:00:00.000Z',
+    paused: false,
+    pausedAt: null,
+    pausedDurationMs: 0,
+    markers: [],
   },
 });
 

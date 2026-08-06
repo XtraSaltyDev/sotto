@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { LiveRecordingMarker } from '../../shared/contracts';
 
 export const SUPPORTED_AUDIO_EXTENSIONS = [
   '.aac',
@@ -32,6 +33,7 @@ export interface SelectedMedia {
   sourceType?: 'imported-file' | 'recording';
   /** Links a durable live recording to its job and transcript without exposing a path. */
   recordingId?: string;
+  markers?: LiveRecordingMarker[];
   /**
    * Re-transcription target: reuses an existing transcript's identity so
    * the regenerated content replaces it in place, without any recording

@@ -419,6 +419,7 @@ export class LocalTranscriptionService {
         createdAt: existingRecord?.createdAt ?? job.startedAt,
         completedAt,
         ...(media.recordingId ? { recordingId: media.recordingId } : {}),
+        ...(media.markers?.length ? { markers: media.markers.map((marker) => ({ ...marker })) } : {}),
         source: {
           type: media.sourceType ?? 'imported-file',
           name: media.name,
