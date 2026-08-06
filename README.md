@@ -188,14 +188,18 @@ For an ad-hoc local build, open the DMG and drag `Sotto.app` to
 permission after an upgrade, click **Request access for this Sotto**. Because an
 ad-hoc identity changes
 when the app is rebuilt, repeat this approval after replacing Sotto with a newer
-build. If macOS does not show the native prompt, Sotto opens System Settings as
-a fallback without removing the existing entry. Under **Privacy & Security →
-Screen & System Audio Recording**, turn Sotto on. Do not remove the entry: on
-current macOS Tahoe releases, removing it can prevent Apple's native request
-from returning until the Mac is restarted. Choose **Quit & Reopen** when macOS
-asks.
+build. If macOS does not show the native prompt, dismiss any prompt first and
+use **Open System Settings** as the separate repair step. Under **Privacy &
+Security**, turn on the exact Sotto copy. Current macOS uses **System Audio
+Recording Only** for Electron's Core Audio Tap path; older macOS uses **Screen &
+System Audio Recording**. Do not remove an existing entry: on current macOS
+releases, removing it can prevent Apple's native request from returning until
+the Mac is restarted. Choose **Quit & Reopen** when macOS asks.
 If macOS has never asked for access, Sotto instead enables **Set up live
-recording** so a user click can start the system permission request.
+recording** so a user click can start the system permission request. That
+action keeps System Settings closed while the native prompt is pending; if no
+prompt appears, dismiss any prompt first and use **Open System Settings** as the
+separate repair step.
 
 Click **Import Recording**, choose a local audio/video file, and leave the
 source file in place until the job completes. The source is read-only. When the

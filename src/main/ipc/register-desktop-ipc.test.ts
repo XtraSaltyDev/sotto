@@ -67,6 +67,7 @@ const createController = () => ({
   subscribe: vi.fn(() => vi.fn()),
   retranscribeTranscript: vi.fn(async () => ({ outcome: 'not-found' })),
   appendLiveRecordingChunk: vi.fn(async () => ({ outcome: 'appended' })),
+  updateLiveRecordingHealth: vi.fn(),
   finishLiveRecording: vi.fn(async () => ({})),
   cancelLiveRecording: vi.fn(async () => false),
   retryRecording: vi.fn(async () => null),
@@ -91,7 +92,10 @@ type Harness = {
   controller: ReturnType<typeof createController>;
   dispose: () => void;
   mainWindow: FakeWindow;
+  requestRecordingPermissions: ReturnType<typeof vi.fn>;
 };
+
+type PermissionRepairOutcome = 'native-requested' | 'native-prompted';
 
 const eventFrom = (window: FakeWindow) => ({
   sender: window.webContents,
@@ -99,7 +103,11 @@ const eventFrom = (window: FakeWindow) => ({
 });
 
 const setup = (
-  overrides: { mainWindow?: FakeWindow | null; annotationEnabled?: boolean } = {},
+  overrides: {
+    mainWindow?: FakeWindow | null;
+    annotationEnabled?: boolean;
+    requestRecordingPermissionsOutcome?: PermissionRepairOutcome;
+  } = {},
 ): Harness => {
   const mainWindow = overrides.mainWindow === undefined
     ? createWindow()
@@ -107,6 +115,9 @@ const setup = (
   const activityWindow = createWindow();
   const controller = createController();
   controller.isAnnotationEnabled = overrides.annotationEnabled === true;
+  const requestRecordingPermissions = vi.fn(async () =>
+    overrides.requestRecordingPermissionsOutcome ?? 'native-requested',
+  );
   const dispose = registerDesktopIpc({
     controller: controller as never,
     localAiService: {
@@ -125,7 +136,7 @@ const setup = (
     collapseForActivity: vi.fn(),
     restoreMainWindow: vi.fn(),
     openRecordingSettings: vi.fn(async () => undefined),
-    requestRecordingPermissions: vi.fn(async () => 'native-requested' as const),
+    requestRecordingPermissions,
     revealDownloadedUpdate: vi.fn(),
     relaunchForUpdate: vi.fn(),
     appSettings: {
@@ -135,7 +146,13 @@ const setup = (
       revealModels: vi.fn(async () => undefined),
     },
   });
-  return { activityWindow, controller, dispose, mainWindow: mainWindow as FakeWindow };
+  return {
+    activityWindow,
+    controller,
+    dispose,
+    mainWindow: mainWindow as FakeWindow,
+    requestRecordingPermissions,
+  };
 };
 
 const invoke = (channel: string, event: unknown, ...args: unknown[]): unknown => {
@@ -227,6 +244,60 @@ describe('registerDesktopIpc sender trust', () => {
       ),
     ).rejects.toThrow('untrusted');
     expect(controller.getTranscript).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerDesktopIpc recording permission repair', () => {
+  it('keeps a pending native prompt separate from explicit settings', async () => {
+    const { mainWindow, requestRecordingPermissions } = setup({
+      requestRecordingPermissionsOutcome: 'native-prompted',
+    });
+
+    await expect(
+      invoke(
+        IPC_CHANNELS.requestRecordingPermissions,
+        eventFrom(mainWindow),
+      ),
+    ).resolves.toEqual({ outcome: 'prompted' });
+    expect(requestRecordingPermissions).toHaveBeenCalledOnce();
+  });
+});
+
+describe('registerDesktopIpc live capture health', () => {
+  it('forwards only valid health updates from the trusted main renderer', async () => {
+    const { controller, mainWindow } = setup();
+    const health = {
+      recordingId: TRANSCRIPT_ID,
+      kind: 'meeting',
+      desktop: { permission: 'granted', track: 'ready', signal: 'detected' },
+      microphone: { permission: 'granted', track: 'ready', signal: 'silent' },
+    } as const;
+
+    await invoke(
+      IPC_CHANNELS.updateLiveRecordingHealth,
+      eventFrom(mainWindow),
+      health,
+    );
+    await invoke(
+      IPC_CHANNELS.updateLiveRecordingHealth,
+      eventFrom(mainWindow),
+      { ...health, microphone: { ...health.microphone, signal: 'bogus' } },
+    );
+
+    expect(controller.updateLiveRecordingHealth).toHaveBeenCalledOnce();
+    expect(controller.updateLiveRecordingHealth).toHaveBeenCalledWith(health);
+  });
+
+  it('forwards a clear update while the trusted renderer is stopping capture', async () => {
+    const { controller, mainWindow } = setup();
+
+    await invoke(
+      IPC_CHANNELS.updateLiveRecordingHealth,
+      eventFrom(mainWindow),
+      null,
+    );
+
+    expect(controller.updateLiveRecordingHealth).toHaveBeenCalledWith(null);
   });
 });
 

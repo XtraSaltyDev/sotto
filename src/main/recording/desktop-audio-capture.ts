@@ -20,11 +20,27 @@ type CommandLineSwitchTarget = {
   getSwitchValue: (name: string) => string;
 };
 
+export const macOSUsesCoreAudioTap = (systemVersion: string): boolean => {
+  const [majorPart, minorPart] = systemVersion.split('.');
+  const majorVersion = Number.parseInt(majorPart ?? '', 10);
+  const minorVersion = Number.parseInt(minorPart ?? '0', 10);
+  return (
+    Number.isFinite(majorVersion) &&
+    (majorVersion > 14 || (majorVersion === 14 && minorVersion >= 2))
+  );
+};
+
 export const configureMacDesktopAudioFallback = (
   platform: NodeJS.Platform,
+  systemVersion: string,
   commandLine: CommandLineSwitchTarget,
 ): void => {
   if (platform !== 'darwin') return;
+
+  // Electron 39+ uses Core Audio Tap by default. It is the supported path on
+  // macOS 14.2 and later; the older ScreenCaptureKit loopback path is retained
+  // only for macOS versions released before Core Audio Tap was available.
+  if (macOSUsesCoreAudioTap(systemVersion)) return;
 
   const disabledFeatures = new Set(
     commandLine

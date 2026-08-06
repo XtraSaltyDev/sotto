@@ -3,11 +3,13 @@ import { useEffect, useState } from 'react';
 import type {
   ActivityAction,
   AppState,
+  CapturePermissionState,
   LiveRecordingSnapshot,
   TranscriptionJobSnapshot,
 } from '../shared/contracts';
 import { CancelIcon, MicrophoneIcon, SpinnerIcon } from './icons';
 import { formatDuration, isRunningJob } from './app-format';
+import { CaptureConfidencePanel } from './CaptureConfidencePanel';
 
 const recordingTitle = (recording: LiveRecordingSnapshot): string =>
   recording.kind === 'dictation' ? 'Dictating' : 'Recording meeting';
@@ -63,6 +65,12 @@ export const ActivityOverlay = () => {
     ? formatDuration(Math.max(0, now - new Date(recording.startedAt).getTime()))
     : null;
   const progress = job ? Math.round(Math.min(1, Math.max(0, job.progress)) * 100) : 0;
+  const systemPermission: CapturePermissionState =
+    appState?.recording.capability.state === 'ready'
+      ? 'granted'
+      : appState?.recording.capability.state === 'permission-required'
+        ? 'denied'
+        : 'unknown';
 
   const requestAction = (nextAction: ActivityAction): void => {
     if (!window.sotto || pendingAction) return;
@@ -97,6 +105,18 @@ export const ActivityOverlay = () => {
           </span>
         ) : null}
       </div>
+
+      {recording ? (
+        <CaptureConfidencePanel
+          compact
+          kind={recording.kind}
+          health={appState?.recording.captureHealth ?? null}
+          microphonePermission={
+            appState?.recording.captureHealth?.microphone.permission ?? 'unknown'
+          }
+          systemPermission={systemPermission}
+        />
+      ) : null}
 
       <div className="activity-overlay__footer">
         <p>{error ?? (recording?.kind === 'dictation'

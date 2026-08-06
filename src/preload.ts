@@ -9,6 +9,7 @@ import {
   type CheckForAppUpdateResult,
   type ConnectLocalAiInput,
   type ExpectedSpeakerCount,
+  type LiveCaptureHealth,
   type RecordingKind,
   type SottoDesktopApi,
   type TranscriptCopyKind,
@@ -29,6 +30,8 @@ const api: SottoDesktopApi = Object.freeze({
       recordingId,
       chunk,
     ),
+  updateLiveRecordingHealth: (health: LiveCaptureHealth | null) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateLiveRecordingHealth, health),
   finishLiveRecording: (
     recordingId: string,
     expectedSpeakerCount: ExpectedSpeakerCount = null,

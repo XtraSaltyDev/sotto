@@ -11,6 +11,7 @@ import type {
   GenerateLocalAiMeetingSummaryResult,
   PreviewLocalAiMeetingSummaryResult,
   LiveRecordingCapability,
+  LiveCaptureHealth,
   LiveRecordingSnapshot,
   RecordingKind,
   SavedRecordingSummary,
@@ -287,6 +288,7 @@ export class AppController {
   private finalizingRecordingId: string | null = null;
   private recordings: SavedRecordingSummary[] = [];
   private recordingStorageMessage: string | null = null;
+  private liveCaptureHealth: LiveCaptureHealth | null = null;
   private recordingUpdateChain: Promise<void> = Promise.resolve();
   private transcriptionStartPending = false;
   private transcriptReloadChain: Promise<void> = Promise.resolve();
@@ -393,6 +395,13 @@ export class AppController {
         capability: { ...this.recordingCapability },
         active: this.activeRecording ? { ...this.activeRecording } : null,
         storageMessage: this.recordingStorageMessage,
+        captureHealth: this.liveCaptureHealth
+          ? {
+              ...this.liveCaptureHealth,
+              desktop: { ...this.liveCaptureHealth.desktop },
+              microphone: { ...this.liveCaptureHealth.microphone },
+            }
+          : null,
       },
       activeJob: this.activeJob ? { ...this.activeJob } : null,
       annotationEnabled: this.annotationEnabled,
@@ -1346,6 +1355,24 @@ export class AppController {
   private handleRecordingChanged(recording: LiveRecordingSnapshot | null): void {
     if (!recording && this.finalizingRecordingId !== null) return;
     this.activeRecording = recording ? { ...recording } : null;
+    if (!recording || this.liveCaptureHealth?.recordingId !== recording.id) {
+      this.liveCaptureHealth = null;
+    }
+    this.emit();
+  }
+
+  updateLiveRecordingHealth(health: LiveCaptureHealth | null): void {
+    if (health === null) {
+      this.liveCaptureHealth = null;
+      this.emit();
+      return;
+    }
+    if (this.activeRecording?.id !== health.recordingId) return;
+    this.liveCaptureHealth = {
+      ...health,
+      desktop: { ...health.desktop },
+      microphone: { ...health.microphone },
+    };
     this.emit();
   }
 

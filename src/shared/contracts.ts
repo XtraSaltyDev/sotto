@@ -11,6 +11,7 @@ export const IPC_CHANNELS = {
   exportRecording: 'sotto:recording:export',
   openRecordingSettings: 'sotto:recording:settings',
   requestRecordingPermissions: 'sotto:recording:permissions:request',
+  updateLiveRecordingHealth: 'sotto:recording:health:update',
   cancelTranscription: 'sotto:transcription:cancel',
   searchTranscriptLibrary: 'sotto:transcript:library:search',
   getTranscript: 'sotto:transcript:get',
@@ -96,6 +97,75 @@ export interface LiveRecordingCapability {
   message: string;
 }
 
+export type CapturePermissionState = 'unknown' | 'granted' | 'denied' | 'not-used';
+export type CaptureTrackState =
+  | 'unknown'
+  | 'ready'
+  | 'missing'
+  | 'ended'
+  | 'not-used';
+export type CaptureSignalState =
+  | 'unknown'
+  | 'detected'
+  | 'silent'
+  | 'not-used';
+
+export interface LiveCaptureSourceHealth {
+  permission: CapturePermissionState;
+  track: CaptureTrackState;
+  signal: CaptureSignalState;
+}
+
+export interface LiveCaptureHealth {
+  recordingId: string;
+  kind: RecordingKind;
+  desktop: LiveCaptureSourceHealth;
+  microphone: LiveCaptureSourceHealth;
+}
+
+const isCapturePermissionState = (
+  value: unknown,
+): value is CapturePermissionState =>
+  value === 'unknown' ||
+  value === 'granted' ||
+  value === 'denied' ||
+  value === 'not-used';
+
+const isCaptureTrackState = (value: unknown): value is CaptureTrackState =>
+  value === 'unknown' ||
+  value === 'ready' ||
+  value === 'missing' ||
+  value === 'ended' ||
+  value === 'not-used';
+
+const isCaptureSignalState = (value: unknown): value is CaptureSignalState =>
+  value === 'unknown' ||
+  value === 'detected' ||
+  value === 'silent' ||
+  value === 'not-used';
+
+export const isLiveCaptureHealth = (
+  value: unknown,
+): value is LiveCaptureHealth => {
+  if (typeof value !== 'object' || value === null) return false;
+  const health = value as Record<string, unknown>;
+  const isSourceHealth = (source: unknown): source is LiveCaptureSourceHealth => {
+    if (typeof source !== 'object' || source === null) return false;
+    const status = source as Record<string, unknown>;
+    return (
+      isCapturePermissionState(status.permission) &&
+      isCaptureTrackState(status.track) &&
+      isCaptureSignalState(status.signal)
+    );
+  };
+  return (
+    typeof health.recordingId === 'string' &&
+    (health.kind === 'meeting' || health.kind === 'dictation') &&
+    isSourceHealth(health.desktop) &&
+    isSourceHealth(health.microphone)
+  );
+};
+
 export interface LiveRecordingSnapshot {
   id: string;
   kind: RecordingKind;
@@ -129,6 +199,7 @@ export interface LiveRecordingStatus {
   capability: LiveRecordingCapability;
   active: LiveRecordingSnapshot | null;
   storageMessage: string | null;
+  captureHealth?: LiveCaptureHealth | null;
 }
 
 export type RecordingTranscriptionState =
@@ -525,7 +596,7 @@ export type OpenRecordingSettingsResult =
 
 export type RequestRecordingPermissionsResult =
   | { outcome: 'requested' }
-  | { outcome: 'settings-opened' }
+  | { outcome: 'prompted' }
   | { outcome: 'failed'; reason: string };
 
 export type CancelTranscriptionResult =
@@ -640,6 +711,7 @@ export interface SottoDesktopApi {
     recordingId: string,
     chunk: ArrayBuffer,
   ): Promise<AppendLiveRecordingChunkResult>;
+  updateLiveRecordingHealth(health: LiveCaptureHealth | null): Promise<void>;
   finishLiveRecording(
     recordingId: string,
     expectedSpeakerCount?: ExpectedSpeakerCount,

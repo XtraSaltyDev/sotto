@@ -44,6 +44,8 @@ import {
   type InsertDictationTextResult,
   type InstallAppUpdateResult,
   type LocalAiConnectionSummary,
+  isLiveCaptureHealth,
+  type LiveCaptureHealth,
   type OpenRecordingSettingsResult,
   type RecordingKind,
   type RetranscribeTranscriptResult,
@@ -102,7 +104,7 @@ export interface DesktopIpcOptions {
   onControllerStateChanged?: (state: AppState) => void;
   openRecordingSettings: () => Promise<void>;
   requestRecordingPermissions: () => Promise<
-    'native-requested' | 'settings-opened'
+    'native-requested' | 'native-prompted'
   >;
   revealDownloadedUpdate: (filePath: string) => void;
   relaunchForUpdate: () => void;
@@ -513,10 +515,7 @@ export const registerDesktopIpc = ({
       try {
         const outcome = await requestRecordingPermissions();
         return {
-          outcome:
-            outcome === 'native-requested'
-              ? 'requested'
-              : 'settings-opened',
+          outcome: outcome === 'native-requested' ? 'requested' : 'prompted',
         };
       } catch (error) {
         return {
@@ -643,6 +642,19 @@ export const registerDesktopIpc = ({
           code: 'recording-failed',
         };
       }
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.updateLiveRecordingHealth,
+    (event, rawHealth: unknown): void => {
+      trust(event);
+      if (rawHealth === null) {
+        controller.updateLiveRecordingHealth(null);
+        return;
+      }
+      if (!isLiveCaptureHealth(rawHealth)) return;
+      controller.updateLiveRecordingHealth(rawHealth as LiveCaptureHealth);
     },
   );
 
@@ -1303,6 +1315,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.installAppUpdate,
       IPC_CHANNELS.importMedia,
       IPC_CHANNELS.startLiveRecording,
+      IPC_CHANNELS.updateLiveRecordingHealth,
       IPC_CHANNELS.appendLiveRecordingChunk,
       IPC_CHANNELS.finishLiveRecording,
       IPC_CHANNELS.cancelLiveRecording,

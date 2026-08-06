@@ -11,6 +11,8 @@ import type {
   AppUpdateProgress,
   AppState,
   ExpectedSpeakerCount,
+  CapturePermissionState,
+  LiveCaptureHealth,
   LocalAiConnectionSummary,
   LocalAiSummaryPreview,
   RecordingKind,
@@ -46,6 +48,13 @@ import {
   recordingChannelLayout,
 } from '../shared/capture-channels';
 import { CaptureResources } from './capture-resources';
+import { CaptureConfidencePanel } from './CaptureConfidencePanel';
+import {
+  CAPTURE_SIGNAL_CHECK_DELAY_MS,
+  hasUsableSignal,
+  sameCaptureHealth,
+  sourceHealth,
+} from './capture-confidence';
 import { homeCapabilities } from './home-capabilities';
 import { LiveRecordingChunkQueue } from './live-recording-chunk-queue';
 import {
@@ -116,6 +125,11 @@ const MainApp = ({
   const [isStartingRecording, setIsStartingRecording] = useState(false);
   const [isStoppingRecording, setIsStoppingRecording] = useState(false);
   const [isRepairingPermissions, setIsRepairingPermissions] = useState(false);
+  const [microphonePermission, setMicrophonePermission] =
+    useState<CapturePermissionState>('unknown');
+  const [captureHealth, setCaptureHealth] = useState<LiveCaptureHealth | null>(
+    null,
+  );
   const [localAiConnection, setLocalAiConnection] =
     useState<LocalAiConnectionSummary | null>(null);
   // Scoped to a transcript, not a bare flag: a run started on one transcript
@@ -164,6 +178,12 @@ const MainApp = ({
   const returnFocusTranscriptIdRef = useRef<string | null>(null);
   const stoppingRecordingRef = useRef(false);
   const initializedNewTranscriptionRef = useRef(false);
+  const captureHealthRef = useRef<LiveCaptureHealth | null>(null);
+  const captureSignalTimerRef = useRef<number | null>(null);
+  const captureAnalyzersRef = useRef<
+    Partial<Record<'desktop' | 'microphone', AnalyserNode>>
+  >({});
+  const captureSignalStartedAtRef = useRef<number | null>(null);
 
   /**
    * Main owns whether a summary is running, so the cancel affordance survives
@@ -196,6 +216,36 @@ const MainApp = ({
     (text: string) => setNotice({ kind: 'info', text }),
     [],
   );
+
+  useEffect(() => {
+    let permissionStatus: PermissionStatus | null = null;
+    let cancelled = false;
+    if (!navigator.permissions?.query) return undefined;
+
+    void navigator.permissions
+      .query({ name: 'microphone' as PermissionName })
+      .then((status) => {
+        if (cancelled) return;
+        permissionStatus = status;
+        const update = () => {
+          setMicrophonePermission(
+            status.state === 'granted'
+              ? 'granted'
+              : status.state === 'denied'
+                ? 'denied'
+                : 'unknown',
+          );
+        };
+        update();
+        status.onchange = update;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      if (permissionStatus) permissionStatus.onchange = null;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!window.sotto) {
@@ -567,6 +617,14 @@ const MainApp = ({
     isNewTranscriptionOpen || captureMustStayOpen;
   const recordingCapabilityState = appState?.recording.capability.state;
   const needsRecordingSetup = recordingCapabilityState === 'setup-required';
+  const systemPermission: CapturePermissionState =
+    recordingCapabilityState === 'ready'
+      ? 'granted'
+      : recordingCapabilityState === 'permission-required'
+        ? 'denied'
+        : recordingCapabilityState === 'unsupported'
+          ? 'not-used'
+          : 'unknown';
   const recordingElapsed = activeRecording
     ? Math.max(0, recordingTick - new Date(activeRecording.startedAt).getTime())
     : 0;
@@ -584,9 +642,81 @@ const MainApp = ({
     appState?.activeJob ?? null,
   );
 
+  const stopCaptureSignalMonitor = () => {
+    if (captureSignalTimerRef.current !== null) {
+      window.clearInterval(captureSignalTimerRef.current);
+      captureSignalTimerRef.current = null;
+    }
+    captureAnalyzersRef.current = {};
+    captureSignalStartedAtRef.current = null;
+  };
+
+  const publishCaptureHealth = (next: LiveCaptureHealth | null) => {
+    captureHealthRef.current = next;
+    setCaptureHealth(next);
+    if (window.sotto) {
+      void window.sotto.updateLiveRecordingHealth(next).catch(() => undefined);
+    }
+  };
+
+  const updateCaptureHealth = (
+    update: (current: LiveCaptureHealth) => LiveCaptureHealth,
+  ) => {
+    const current = captureHealthRef.current;
+    if (!current) return;
+    const next = update(current);
+    if (
+      sameCaptureHealth(current.desktop, next.desktop) &&
+      sameCaptureHealth(current.microphone, next.microphone)
+    ) {
+      return;
+    }
+    publishCaptureHealth(next);
+  };
+
+  const startCaptureSignalMonitor = () => {
+    stopCaptureSignalMonitor();
+    captureSignalStartedAtRef.current = Date.now();
+    const sampleWithData = () => {
+      const current = captureHealthRef.current;
+      if (!current) return;
+      for (const source of ['desktop', 'microphone'] as const) {
+        const analyser = captureAnalyzersRef.current[source];
+        if (!analyser) continue;
+        const samples = new Float32Array(analyser.fftSize);
+        analyser.getFloatTimeDomainData(samples);
+        const sourceHealthValue = current[source];
+        if (sourceHealthValue.track !== 'ready') continue;
+        const elapsed =
+          Date.now() - (captureSignalStartedAtRef.current ?? Date.now());
+        const signal = hasUsableSignal(samples);
+        const nextSignal = signal
+          ? 'detected'
+          : elapsed >= CAPTURE_SIGNAL_CHECK_DELAY_MS
+            ? 'silent'
+            : 'unknown';
+        if (sourceHealthValue.signal !== nextSignal) {
+          updateCaptureHealth((latest) => ({
+            ...latest,
+            [source]: { ...latest[source], signal: nextSignal },
+          }));
+        }
+      }
+    };
+    // Run once immediately, then keep the UI honest without sampling audio
+    // more often than the user can act on it. No samples leave this renderer.
+    sampleWithData();
+    captureSignalTimerRef.current = window.setInterval(sampleWithData, 750);
+  };
+
   const cleanupCapture = async () => {
+    stopCaptureSignalMonitor();
     mediaRecorderRef.current = null;
-    await captureRef.current.release();
+    try {
+      await captureRef.current.release();
+    } finally {
+      publishCaptureHealth(null);
+    }
   };
 
   const handleStopLiveRecording = async () => {
@@ -721,6 +851,15 @@ const MainApp = ({
       recordingIdRef.current = recordingId;
       recordingExpectedSpeakerCountRef.current =
         kind === 'dictation' ? 1 : expectedSpeakerCount;
+      publishCaptureHealth({
+        recordingId,
+        kind,
+        desktop:
+          kind === 'meeting'
+            ? sourceHealth(systemPermission, 'unknown', 'unknown')
+            : sourceHealth('not-used', 'not-used', 'not-used'),
+        microphone: sourceHealth(microphonePermission, 'unknown', 'unknown'),
+      });
       if (kind === 'dictation') {
         pendingDictationInsertionRef.current = recordingId;
       }
@@ -730,11 +869,23 @@ const MainApp = ({
         desktopStream = await desktopCapture;
         captureRef.current.claimDesktopStream(desktopStream);
         desktopStreamClaimed = true;
+        // getDisplayMedia requires a video constraint, but Sotto records only
+        // the returned system-audio track. Stop the unused screen track as
+        // soon as the stream opens so no screen frames remain active.
+        desktopStream.getVideoTracks().forEach((track) => track.stop());
         if (desktopStream.getAudioTracks().length === 0) {
+          updateCaptureHealth((current) => ({
+            ...current,
+            desktop: sourceHealth(current.desktop.permission, 'missing', 'silent'),
+          }));
           throw new Error(
             'Sotto did not receive Teams audio. Allow screen and system-audio capture, then try again.',
           );
         }
+        updateCaptureHealth((current) => ({
+          ...current,
+          desktop: sourceHealth('granted', 'ready', 'unknown'),
+        }));
       }
 
       let microphoneStream: MediaStream | null = null;
@@ -744,7 +895,15 @@ const MainApp = ({
           video: false,
         });
         captureRef.current.claimMicrophoneStream(microphoneStream);
+        updateCaptureHealth((current) => ({
+          ...current,
+          microphone: sourceHealth('granted', 'ready', 'unknown'),
+        }));
       } catch {
+        updateCaptureHealth((current) => ({
+          ...current,
+          microphone: sourceHealth('denied', 'missing', 'silent'),
+        }));
         if (kind === 'dictation') {
           throw new Error(
             'Microphone access is required for dictation. Allow it in system settings, then try again.',
@@ -773,11 +932,27 @@ const MainApp = ({
       if (sink !== destination) sink.connect(destination);
       if (desktopStream?.getAudioTracks().length) {
         const source = context.createMediaStreamSource(desktopStream);
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 512;
+        const monitorGain = context.createGain();
+        monitorGain.gain.value = 0;
+        source.connect(analyser);
+        analyser.connect(monitorGain);
+        monitorGain.connect(destination);
+        captureAnalyzersRef.current.desktop = analyser;
         if (sink === destination) source.connect(destination);
         else source.connect(sink, 0, CAPTURE_CHANNELS.desktop);
       }
       if (microphoneStream?.getAudioTracks().length) {
         const source = context.createMediaStreamSource(microphoneStream);
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 512;
+        const monitorGain = context.createGain();
+        monitorGain.gain.value = 0;
+        source.connect(analyser);
+        analyser.connect(monitorGain);
+        monitorGain.connect(destination);
+        captureAnalyzersRef.current.microphone = analyser;
         if (sink === destination) source.connect(destination);
         else source.connect(sink, 0, CAPTURE_CHANNELS.microphone);
       }
@@ -827,15 +1002,32 @@ const MainApp = ({
         );
       });
 
-      desktopStream?.getTracks().forEach((track) => {
+      desktopStream?.getAudioTracks().forEach((track) => {
         track.addEventListener('ended', () => {
+          updateCaptureHealth((current) => ({
+            ...current,
+            desktop: sourceHealth(current.desktop.permission, 'ended', 'silent'),
+          }));
           if (mediaRecorderRef.current?.state === 'recording') {
             void handleStopLiveRecording();
           }
         });
       });
+      microphoneStream?.getAudioTracks().forEach((track) => {
+        track.addEventListener('ended', () => {
+          updateCaptureHealth((current) => ({
+            ...current,
+            microphone: sourceHealth(
+              current.microphone.permission,
+              'ended',
+              'silent',
+            ),
+          }));
+        });
+      });
       mediaRecorderRef.current = recorder;
       recorder.start(1_000);
+      startCaptureSignalMonitor();
       await window.sotto
         .collapseForActivity(
           kind === 'dictation' ? 'dictation' : 'meeting-recording',
@@ -915,8 +1107,10 @@ const MainApp = ({
       if (result.outcome === 'failed') {
         showError(result.reason);
         setIsRepairingPermissions(false);
-      } else if (result.outcome === 'settings-opened') {
-        showError('macOS did not show its approval prompt. Your existing entry was left untouched; System Settings is open as a fallback.');
+      } else if (result.outcome === 'prompted') {
+        showInfo(
+          'macOS should now be showing the Screen & System Audio Recording approval prompt. Approve it, then quit and reopen Sotto. If no prompt appears, dismiss it first, then use Open System Settings.',
+        );
         setIsRepairingPermissions(false);
       } else {
         showInfo('Access was approved. Sotto is reopening…');
@@ -1751,6 +1945,13 @@ const MainApp = ({
               </label>
             ) : null}
             </div>
+
+            <CaptureConfidencePanel
+              kind={activeRecording?.kind ?? 'meeting'}
+              health={captureHealth}
+              microphonePermission={microphonePermission}
+              systemPermission={systemPermission}
+            />
 
             <div className="capture-actions">
             <button className="button button--primary" disabled={!canImport} onClick={() => void handleImport()} type="button">

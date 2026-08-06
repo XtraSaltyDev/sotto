@@ -1596,6 +1596,113 @@ textarea:focus-visible {
   color: var(--accent);
 }
 
+.capture-confidence {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--background-deep);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--ink);
+}
+
+.capture-confidence__heading,
+.capture-confidence__source-heading,
+.capture-confidence__state {
+  display: flex;
+  align-items: center;
+}
+
+.capture-confidence__heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.capture-confidence__heading strong {
+  font-size: 11px;
+}
+
+.capture-confidence__heading > span,
+.capture-confidence__note,
+.capture-confidence__source p {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.capture-confidence__sources {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 9px;
+}
+
+.capture-confidence__source {
+  min-width: 0;
+  padding: 8px 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.capture-confidence__source-heading {
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.capture-confidence__state {
+  flex: 0 0 auto;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.capture-confidence__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.capture-confidence__state--neutral { color: var(--muted); }
+.capture-confidence__state--good { color: var(--success); }
+.capture-confidence__state--warning { color: var(--warning); }
+.capture-confidence__state--bad { color: var(--danger); }
+
+.capture-confidence__source p {
+  margin: 5px 0 0;
+}
+
+.capture-confidence__note {
+  margin: 9px 0 0;
+}
+
+.capture-confidence--compact {
+  margin: 0 0 0 38px;
+  padding: 9px 10px;
+  -webkit-app-region: no-drag;
+}
+
+.capture-confidence--compact .capture-confidence__sources {
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.capture-confidence--compact .capture-confidence__source {
+  padding: 6px 7px;
+}
+
+.capture-confidence--compact .capture-confidence__heading > span {
+  display: none;
+}
+
+.capture-confidence--compact .capture-confidence__source p {
+  font-size: 9px;
+}
+
 .job-card {
   width: min(100%, 390px);
   margin: -12px 0 18px;
