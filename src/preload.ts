@@ -29,6 +29,19 @@ const api: SottoDesktopApi = Object.freeze({
       recordingId,
       chunk,
     ),
+  setLiveRecordingPaused: (recordingId: string, paused: boolean) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setLiveRecordingPaused, recordingId, paused),
+  addLiveRecordingMarker: (
+    recordingId: string,
+    offsetMs: number,
+    label?: string,
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.addLiveRecordingMarker,
+      recordingId,
+      offsetMs,
+      label,
+    ),
   finishLiveRecording: (
     recordingId: string,
     expectedSpeakerCount: ExpectedSpeakerCount = null,

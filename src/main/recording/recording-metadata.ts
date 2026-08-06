@@ -1,9 +1,15 @@
 import path from 'node:path';
 
 import type {
+  LiveRecordingMarker,
   RecordingTranscriptionState,
   SavedRecordingSummary,
   TranscriptionErrorCode,
+} from '../../shared/contracts';
+import {
+  MAX_LIVE_RECORDING_MARKERS,
+  MAX_LIVE_RECORDING_MARKER_OFFSET_MS,
+  MAX_LIVE_RECORDING_MARKER_LABEL_CHARACTERS,
 } from '../../shared/contracts';
 import { MAX_MEDIA_FILE_BYTES } from '../media/media-import';
 import { isTranscriptId, MAX_SOURCE_NAME_CHARACTERS } from '../transcription/transcript-types';
@@ -32,6 +38,7 @@ export interface RecordingMetadata {
   sizeBytes: number;
   storageState: RecordingStorageState;
   transcription: RecordingTranscriptionMetadata;
+  markers?: LiveRecordingMarker[];
   // A future explicit consent decision can be added as a new optional,
   // validated field. This schema deliberately records no consent today.
 }
@@ -145,6 +152,36 @@ const readTranscription = (value: unknown): RecordingTranscriptionMetadata => {
   };
 };
 
+const readMarkers = (value: unknown): LiveRecordingMarker[] => {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_LIVE_RECORDING_MARKERS) {
+    return fail('markers must be an array with a supported number of entries.');
+  }
+
+  return value.map((candidate, index) => {
+    if (!isRecord(candidate)) return fail(`markers[${index}] must be an object.`);
+    if (
+      !Number.isSafeInteger(candidate.offsetMs) ||
+      (candidate.offsetMs as number) < 0 ||
+      (candidate.offsetMs as number) > MAX_LIVE_RECORDING_MARKER_OFFSET_MS
+    ) {
+      return fail(`markers[${index}].offsetMs is outside the supported range.`);
+    }
+    if (
+      typeof candidate.label !== 'string' ||
+      candidate.label.trim().length === 0 ||
+      candidate.label.length > MAX_LIVE_RECORDING_MARKER_LABEL_CHARACTERS ||
+      candidate.label.includes('\0')
+    ) {
+      return fail(`markers[${index}].label has an invalid length.`);
+    }
+    return {
+      offsetMs: candidate.offsetMs as number,
+      label: candidate.label.trim(),
+    };
+  });
+};
+
 export const parseRecordingMetadata = (value: unknown): RecordingMetadata => {
   if (!isRecord(value)) {
     return fail('Recording metadata must be an object.');
@@ -191,6 +228,7 @@ export const parseRecordingMetadata = (value: unknown): RecordingMetadata => {
     sizeBytes: value.sizeBytes as number,
     storageState: value.storageState,
     transcription: readTranscription(value.transcription),
+    markers: readMarkers(value.markers),
   };
 };
 
@@ -220,5 +258,6 @@ export const toSavedRecordingSummary = (
     ...(metadata.transcription.transcriptId
       ? { transcriptId: metadata.transcription.transcriptId }
       : {}),
+    ...(metadata.markers?.length ? { markers: [...metadata.markers] } : {}),
   };
 };

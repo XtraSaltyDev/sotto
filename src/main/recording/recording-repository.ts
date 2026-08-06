@@ -24,6 +24,7 @@ import {
   type RecordingMetadata,
   type RecordingTranscriptionMetadata,
 } from './recording-metadata';
+import type { LiveRecordingMarker } from '../../shared/contracts';
 
 export const PARTIAL_RECORDING_FILE_NAME = 'recording.partial.webm';
 export const FINALIZING_RECORDING_FILE_NAME = 'recording.finalizing.webm';
@@ -289,6 +290,15 @@ export class RecordingRepository {
     return this.save({ ...current, transcription });
   }
 
+  async updateMarkers(
+    id: string,
+    markers: readonly LiveRecordingMarker[],
+  ): Promise<RecordingMetadata | null> {
+    const current = await this.get(id);
+    if (!current) return null;
+    return this.save({ ...current, markers: [...markers] });
+  }
+
   async completeMetadata(
     id: string,
     sizeBytes: number,
@@ -349,6 +359,7 @@ export class RecordingRepository {
       completedAt,
       sizeBytes,
       storageState: 'complete',
+      ...(current?.markers?.length ? { markers: [...current.markers] } : {}),
       transcription: {
         state: 'ready',
         updatedAt: completedAt,

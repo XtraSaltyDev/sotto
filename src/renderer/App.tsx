@@ -80,6 +80,7 @@ import {
   initialAppTheme,
   isRunningJob,
   jobLabel,
+  recordingElapsedMs,
   recordingLabel,
   recordingMimeType,
   withTimeout,
@@ -115,6 +116,7 @@ const MainApp = ({
   const [isSelecting, setIsSelecting] = useState(false);
   const [isStartingRecording, setIsStartingRecording] = useState(false);
   const [isStoppingRecording, setIsStoppingRecording] = useState(false);
+  const [isUpdatingRecording, setIsUpdatingRecording] = useState(false);
   const [isRepairingPermissions, setIsRepairingPermissions] = useState(false);
   const [localAiConnection, setLocalAiConnection] =
     useState<LocalAiConnectionSummary | null>(null);
@@ -568,7 +570,7 @@ const MainApp = ({
   const recordingCapabilityState = appState?.recording.capability.state;
   const needsRecordingSetup = recordingCapabilityState === 'setup-required';
   const recordingElapsed = activeRecording
-    ? Math.max(0, recordingTick - new Date(activeRecording.startedAt).getTime())
+    ? recordingElapsedMs(activeRecording, recordingTick)
     : 0;
   const { canImport, canRecord, canDictate } = homeCapabilities(appState, {
     running,
@@ -676,6 +678,89 @@ const MainApp = ({
     }
   };
 
+  const handleToggleLiveRecordingPause = async () => {
+    const recorder = mediaRecorderRef.current;
+    const recording = appState?.recording.active;
+    const recordingId = recordingIdRef.current;
+    if (
+      !window.sotto ||
+      !recorder ||
+      !recording ||
+      !recordingId ||
+      isUpdatingRecording ||
+      isStoppingRecording
+    ) {
+      return;
+    }
+
+    const paused = !recording.paused;
+    if (paused && recorder.state !== 'recording') return;
+    if (!paused && recorder.state !== 'paused') return;
+    setIsUpdatingRecording(true);
+    try {
+      if (paused) recorder.pause();
+      else recorder.resume();
+      const result = await withTimeout(
+        window.sotto.setLiveRecordingPaused(recordingId, paused),
+        5_000,
+        'Sotto timed out while updating the recording state.',
+      );
+      if (result.outcome === 'updated') return;
+      if (paused && recorder.state === 'paused') recorder.resume();
+      if (!paused && recorder.state === 'recording') recorder.pause();
+      showError(
+        result.outcome === 'rejected'
+          ? result.reason
+          : 'That live recording is no longer active.',
+      );
+    } catch (error) {
+      if (paused && recorder.state === 'paused') recorder.resume();
+      if (!paused && recorder.state === 'recording') recorder.pause();
+      showError(
+        error instanceof Error
+          ? error.message
+          : 'Sotto could not update the live recording state.',
+      );
+    } finally {
+      setIsUpdatingRecording(false);
+    }
+  };
+
+  const handleAddLiveRecordingMarker = async () => {
+    const recording = appState?.recording.active;
+    const recordingId = recordingIdRef.current;
+    if (!window.sotto || !recording || !recordingId || isUpdatingRecording) return;
+
+    setIsUpdatingRecording(true);
+    try {
+      const result = await withTimeout(
+        window.sotto.addLiveRecordingMarker(
+          recordingId,
+          recordingElapsedMs(recording, Date.now()),
+        ),
+        5_000,
+        'Sotto timed out while saving the bookmark.',
+      );
+      if (result.outcome === 'added') {
+        showInfo(`Bookmark saved at ${formatDuration(result.marker.offsetMs)}.`);
+      } else {
+        showError(
+          result.outcome === 'rejected'
+            ? result.reason
+            : 'That live recording is no longer active.',
+        );
+      }
+    } catch (error) {
+      showError(
+        error instanceof Error
+          ? error.message
+          : 'Sotto could not save that bookmark.',
+      );
+    } finally {
+      setIsUpdatingRecording(false);
+    }
+  };
+
   const handleStartRecording = async (kind: RecordingKind) => {
     if (
       !window.sotto ||
@@ -730,6 +815,10 @@ const MainApp = ({
         desktopStream = await desktopCapture;
         captureRef.current.claimDesktopStream(desktopStream);
         desktopStreamClaimed = true;
+        // getDisplayMedia requires a video constraint, but Sotto records only
+        // the returned system-audio track. Stop the unused screen track as
+        // soon as the stream opens so no screen frames remain active.
+        desktopStream.getVideoTracks().forEach((track) => track.stop());
         if (desktopStream.getAudioTracks().length === 0) {
           throw new Error(
             'Sotto did not receive Teams audio. Allow screen and system-audio capture, then try again.',
@@ -806,11 +895,12 @@ const MainApp = ({
           };
         },
         onFailure: () => {
-          if (recorder.state === 'recording') recorder.stop();
+          if (recorder.state !== 'inactive') recorder.stop();
           queueMicrotask(() => void handleStopLiveRecording());
         },
       });
       chunkQueueRef.current = chunkQueue;
+      captureRef.current.claimRecorder(recorder);
       recorder.ondataavailable = (event) => {
         if (!event.data.size || !window.sotto) return;
         chunkQueue.enqueue(() => event.data.arrayBuffer());
@@ -827,9 +917,10 @@ const MainApp = ({
         );
       });
 
-      desktopStream?.getTracks().forEach((track) => {
+      desktopStream?.getAudioTracks().forEach((track) => {
         track.addEventListener('ended', () => {
-          if (mediaRecorderRef.current?.state === 'recording') {
+          const currentRecorder = mediaRecorderRef.current;
+          if (currentRecorder && currentRecorder.state !== 'inactive') {
             void handleStopLiveRecording();
           }
         });
@@ -915,8 +1006,10 @@ const MainApp = ({
       if (result.outcome === 'failed') {
         showError(result.reason);
         setIsRepairingPermissions(false);
-      } else if (result.outcome === 'settings-opened') {
-        showError('macOS did not show its approval prompt. Your existing entry was left untouched; System Settings is open as a fallback.');
+      } else if (result.outcome === 'prompted') {
+        showInfo(
+          'macOS should now be showing the Screen & System Audio Recording approval prompt. Approve it, then quit and reopen Sotto. If no prompt appears, dismiss it first, then use Open System Settings.',
+        );
         setIsRepairingPermissions(false);
       } else {
         showInfo('Access was approved. Sotto is reopening…');
@@ -965,6 +1058,10 @@ const MainApp = ({
     return window.sotto.onActivityAction((action) => {
       if (action === 'stop-recording') {
         void handleStopLiveRecording();
+      } else if (action === 'pause-recording' || action === 'resume-recording') {
+        void handleToggleLiveRecordingPause();
+      } else if (action === 'add-marker') {
+        void handleAddLiveRecordingMarker();
       } else {
         void handleCancel();
       }
@@ -1666,17 +1763,30 @@ const MainApp = ({
               <div className="recording-card" aria-live="polite">
                 <div className="recording-card__heading">
                   <span><strong>{recordingLabel(activeRecording)}</strong><small>{activeRecording.sourceName}</small></span>
-                  <span className="recording-card__dot" aria-label="Recording" />
+                  <span
+                    className={`recording-card__dot${activeRecording.paused ? ' recording-card__dot--paused' : ''}`}
+                    aria-label={activeRecording.paused ? 'Paused' : 'Recording'}
+                  />
                 </div>
                 <div className="recording-card__timer">{formatDuration(recordingElapsed)}</div>
                 <p>
-                  {activeRecording.kind === 'dictation'
+                  {activeRecording.paused
+                    ? `Recording paused. ${activeRecording.markers.length} bookmark${activeRecording.markers.length === 1 ? '' : 's'} saved.`
+                    : activeRecording.kind === 'dictation'
                     ? 'Microphone audio is kept on this device and transcribed when you stop.'
                     : 'Teams/system audio and microphone are kept on this device.'}
                 </p>
-                <button className="text-button" disabled={isStoppingRecording} onClick={() => void handleStopLiveRecording()} type="button">
-                  <CancelIcon /> {isStoppingRecording ? 'Stopping and preparing transcript…' : 'Stop recording'}
-                </button>
+                <div className="recording-card__actions">
+                  <button className="text-button" disabled={isStoppingRecording || isUpdatingRecording} onClick={() => void handleToggleLiveRecordingPause()} type="button">
+                    {activeRecording.paused ? 'Resume' : 'Pause'}
+                  </button>
+                  <button className="text-button" disabled={isStoppingRecording || isUpdatingRecording} onClick={() => void handleAddLiveRecordingMarker()} type="button">
+                    Mark moment
+                  </button>
+                  <button className="text-button" disabled={isStoppingRecording || isUpdatingRecording} onClick={() => void handleStopLiveRecording()} type="button">
+                    <CancelIcon /> {isStoppingRecording ? 'Stopping and preparing transcript…' : 'Stop recording'}
+                  </button>
+                </div>
               </div>
             ) : appState?.activeJob ? (
               <div className={`job-card job-card--${appState.activeJob.stage}`}>
@@ -1759,7 +1869,7 @@ const MainApp = ({
             </button>
             <button
               className={`button button--record${activeRecording?.kind === 'meeting' ? ' button--recording' : ''}`}
-              disabled={activeRecording?.kind === 'meeting' ? isStoppingRecording : !canRecord}
+              disabled={activeRecording?.kind === 'meeting' ? isStoppingRecording || isUpdatingRecording : !canRecord}
               onClick={() => void (activeRecording?.kind === 'meeting' ? handleStopLiveRecording() : handleStartRecording('meeting'))}
               type="button"
             >
@@ -1769,7 +1879,7 @@ const MainApp = ({
             </button>
             <button
               className={`button button--dictation${activeRecording?.kind === 'dictation' ? ' button--recording' : ''}`}
-              disabled={activeRecording?.kind === 'dictation' ? isStoppingRecording : !canDictate}
+              disabled={activeRecording?.kind === 'dictation' ? isStoppingRecording || isUpdatingRecording : !canDictate}
               onClick={() => void (activeRecording?.kind === 'dictation' ? handleStopLiveRecording() : handleStartRecording('dictation'))}
               type="button"
             >

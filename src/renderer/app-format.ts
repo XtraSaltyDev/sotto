@@ -77,6 +77,19 @@ export const recordingLabel = (recording: LiveRecordingSnapshot | null): string 
       ? 'Recording live meeting audio'
       : 'Record live meeting';
 
+export const recordingElapsedMs = (
+  recording: LiveRecordingSnapshot,
+  now = Date.now(),
+): number => {
+  const elapsedWhilePaused = recording.paused && recording.pausedAt
+    ? Math.max(0, now - Date.parse(recording.pausedAt))
+    : 0;
+  return Math.max(
+    0,
+    now - Date.parse(recording.startedAt) - recording.pausedDurationMs - elapsedWhilePaused,
+  );
+};
+
 export const dictationShortcutLabel = (): string =>
   /Mac|iPhone|iPad/iu.test(navigator.platform)
     ? '⌘⇧D · mic only'

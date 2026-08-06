@@ -3,6 +3,8 @@ export const IPC_CHANNELS = {
   importMedia: 'sotto:media:import',
   startLiveRecording: 'sotto:recording:start',
   appendLiveRecordingChunk: 'sotto:recording:chunk',
+  setLiveRecordingPaused: 'sotto:recording:pause',
+  addLiveRecordingMarker: 'sotto:recording:marker',
   finishLiveRecording: 'sotto:recording:finish',
   cancelLiveRecording: 'sotto:recording:cancel',
   retryRecording: 'sotto:recording:retry',
@@ -102,6 +104,19 @@ export interface LiveRecordingSnapshot {
   sourceName: string;
   startedAt: string;
   bytesWritten: number;
+  paused: boolean;
+  pausedAt: string | null;
+  pausedDurationMs: number;
+  markers: LiveRecordingMarker[];
+}
+
+export const MAX_LIVE_RECORDING_MARKERS = 2_000;
+export const MAX_LIVE_RECORDING_MARKER_OFFSET_MS = 7 * 24 * 60 * 60 * 1_000;
+export const MAX_LIVE_RECORDING_MARKER_LABEL_CHARACTERS = 200;
+
+export interface LiveRecordingMarker {
+  offsetMs: number;
+  label: string;
 }
 
 export type RecordingKind = 'meeting' | 'dictation';
@@ -111,7 +126,12 @@ export type ActivityMode =
   | 'dictation'
   | 'transcribing';
 
-export type ActivityAction = 'stop-recording' | 'cancel-transcription';
+export type ActivityAction =
+  | 'stop-recording'
+  | 'pause-recording'
+  | 'resume-recording'
+  | 'add-marker'
+  | 'cancel-transcription';
 
 export const MIN_EXPECTED_SPEAKER_COUNT = 1;
 export const MAX_EXPECTED_SPEAKER_COUNT = 12;
@@ -149,6 +169,7 @@ export interface SavedRecordingSummary {
   errorCode?: TranscriptionErrorCode;
   jobId?: string;
   transcriptId?: string;
+  markers?: LiveRecordingMarker[];
 }
 
 export interface TranscriptionJobSnapshot {
@@ -266,6 +287,7 @@ export interface TranscriptDetail extends TranscriptSummary {
     labeledSpeakerCount: number;
   } | null;
   recordingId?: string;
+  markers: LiveRecordingMarker[];
   engine: {
     name: string;
     version: string;
@@ -480,6 +502,16 @@ export type AppendLiveRecordingChunkResult =
   | { outcome: 'accepted'; bytesWritten: number }
   | { outcome: 'rejected'; reason: string; code: LiveRecordingErrorCode };
 
+export type SetLiveRecordingPausedResult =
+  | { outcome: 'updated'; paused: boolean }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string; code: LiveRecordingErrorCode };
+
+export type AddLiveRecordingMarkerResult =
+  | { outcome: 'added'; marker: LiveRecordingMarker }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string; code: LiveRecordingErrorCode };
+
 export type FinishLiveRecordingResult =
   | { outcome: 'started'; job: TranscriptionJobSnapshot }
   | {
@@ -525,7 +557,7 @@ export type OpenRecordingSettingsResult =
 
 export type RequestRecordingPermissionsResult =
   | { outcome: 'requested' }
-  | { outcome: 'settings-opened' }
+  | { outcome: 'prompted' }
   | { outcome: 'failed'; reason: string };
 
 export type CancelTranscriptionResult =
@@ -640,6 +672,15 @@ export interface SottoDesktopApi {
     recordingId: string,
     chunk: ArrayBuffer,
   ): Promise<AppendLiveRecordingChunkResult>;
+  setLiveRecordingPaused(
+    recordingId: string,
+    paused: boolean,
+  ): Promise<SetLiveRecordingPausedResult>;
+  addLiveRecordingMarker(
+    recordingId: string,
+    offsetMs: number,
+    label?: string,
+  ): Promise<AddLiveRecordingMarkerResult>;
   finishLiveRecording(
     recordingId: string,
     expectedSpeakerCount?: ExpectedSpeakerCount,

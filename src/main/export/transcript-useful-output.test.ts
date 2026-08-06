@@ -160,7 +160,10 @@ describe('subtitle exports', () => {
 
 describe('portable transcript JSON', () => {
   it('has a stable versioned shape with word timing, speakers, and the local summary', () => {
-    const portable = createPortableTranscript(record(), summary);
+    const portable = createPortableTranscript(
+      record({ markers: [{ offsetMs: 2_500, label: 'Decision' }] }),
+      summary,
+    );
     expect(portable).toMatchObject({
       format: 'sotto-portable-transcript',
       formatVersion: 1,
@@ -169,6 +172,7 @@ describe('portable transcript JSON', () => {
         source: { type: 'recording', name: 'planning.webm', mediaKind: 'audio' },
         speakers: [{ id: SPEAKER_ID, label: 'Morgan & Team' }],
         meetingSummary: summary,
+        markers: [{ offsetMs: 2_500, label: 'Decision' }],
       },
     });
     expect(portable.transcript.segments[0]).toMatchObject({

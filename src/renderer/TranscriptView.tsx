@@ -861,6 +861,28 @@ export const TranscriptView = ({
           id="meeting-transcript-panel"
           role="tabpanel"
         >
+        {transcript.markers.length ? (
+          <section className="transcript-markers" aria-labelledby="transcript-markers-title">
+            <div className="transcript-markers__heading">
+              <h2 id="transcript-markers-title">Bookmarks</h2>
+              <span>{transcript.markers.length} saved</span>
+            </div>
+            <div className="transcript-markers__list">
+              {transcript.markers.map((marker) => (
+                <button
+                  className="transcript-marker"
+                  disabled={!playbackAvailable}
+                  key={`${marker.offsetMs}-${marker.label}`}
+                  onClick={() => seekTo(marker.offsetMs)}
+                  type="button"
+                >
+                  <span>{formatDuration(marker.offsetMs)}</span>
+                  <strong>{marker.label}</strong>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
         <section className="playback" aria-labelledby="playback-title">
           <div className="playback__heading">
             <div>

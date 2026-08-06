@@ -50,6 +50,10 @@ describe('activity window state', () => {
       sourceName: 'Live meeting',
       startedAt: new Date(0).toISOString(),
       bytesWritten: 0,
+      paused: false,
+      pausedAt: null,
+      pausedDurationMs: 0,
+      markers: [],
     };
     expect(shouldRestoreActivityWindow('meeting-recording', state)).toBe(false);
   });

@@ -195,6 +195,7 @@ export const createPortableTranscript = (
       speakerId: segment.speakerId,
       words: segment.words.map((word) => ({ ...word })),
     })),
+    markers: (record.markers ?? []).map((marker) => ({ ...marker })),
     meetingSummary: portableSummary(summary),
   },
 });

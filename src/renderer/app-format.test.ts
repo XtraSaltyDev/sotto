@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { withTimeout } from './app-format';
+import { recordingElapsedMs, withTimeout } from './app-format';
 
 /**
  * withTimeout bounds every step that can stall: closing the encoder, flushing
@@ -67,5 +67,41 @@ describe('withTimeout', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(settled).toEqual(['first']);
+  });
+});
+
+describe('recordingElapsedMs', () => {
+  it('does not advance the meeting timer while recording is paused', () => {
+    const recording = {
+      id: '32ce6fee-8f3e-4f03-a266-46d6c00ef08c',
+      kind: 'meeting' as const,
+      sourceName: 'meeting.webm',
+      startedAt: '2026-08-06T12:00:00.000Z',
+      bytesWritten: 10,
+      paused: true,
+      pausedAt: '2026-08-06T12:00:05.000Z',
+      pausedDurationMs: 0,
+      markers: [],
+    };
+
+    expect(recordingElapsedMs(recording, Date.parse('2026-08-06T12:00:20.000Z')))
+      .toBe(5_000);
+  });
+
+  it('subtracts completed pauses after resume', () => {
+    const recording = {
+      id: '32ce6fee-8f3e-4f03-a266-46d6c00ef08c',
+      kind: 'meeting' as const,
+      sourceName: 'meeting.webm',
+      startedAt: '2026-08-06T12:00:00.000Z',
+      bytesWritten: 10,
+      paused: false,
+      pausedAt: null,
+      pausedDurationMs: 8_000,
+      markers: [],
+    };
+
+    expect(recordingElapsedMs(recording, Date.parse('2026-08-06T12:00:20.000Z')))
+      .toBe(12_000);
   });
 });

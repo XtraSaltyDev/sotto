@@ -1,16 +1,20 @@
 import { randomUUID } from 'node:crypto';
-
-import type {
-  LocalAiMeetingSummary,
-  MeetingSummary,
-  MeetingSummaryItem,
+import {
+  MAX_LIVE_RECORDING_MARKERS,
+  MAX_LIVE_RECORDING_MARKER_OFFSET_MS,
+  MAX_LIVE_RECORDING_MARKER_LABEL_CHARACTERS,
+  type LiveRecordingMarker,
+  type LocalAiMeetingSummary,
+  type MeetingSummary,
+  type MeetingSummaryItem,
 } from '../../shared/contracts';
 
 export const LEGACY_TRANSCRIPT_SCHEMA_VERSION = 1 as const;
 export const SPEAKER_TRANSCRIPT_SCHEMA_VERSION = 2 as const;
 export const WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION = 3 as const;
 export const METADATA_TRANSCRIPT_SCHEMA_VERSION = 4 as const;
-export const TRANSCRIPT_SCHEMA_VERSION = 5 as const;
+export const TRANSCRIPT_SCHEMA_VERSION = 6 as const;
+export const MARKERS_TRANSCRIPT_SCHEMA_VERSION = 6 as const;
 
 // These limits are deliberately generous enough for day-long recordings while
 // still bounding data that originated in an external process or a local file.
@@ -113,6 +117,7 @@ export interface TranscriptRecord {
   text: string;
   segments: TranscriptSegment[];
   localAiMeetingSummary?: StoredLocalAiMeetingSummary | null;
+  markers?: LiveRecordingMarker[];
 }
 
 export interface StoredLocalAiMeetingSummary extends LocalAiMeetingSummary {
@@ -463,6 +468,7 @@ const parseSegments = (
     | typeof SPEAKER_TRANSCRIPT_SCHEMA_VERSION
     | typeof WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION
     | typeof METADATA_TRANSCRIPT_SCHEMA_VERSION
+    | 5
     | typeof TRANSCRIPT_SCHEMA_VERSION,
   speakerIds: ReadonlySet<TranscriptSpeakerId>,
 ): TranscriptSegment[] => {
@@ -527,6 +533,7 @@ const parseSegments = (
     const rawWords =
       schemaVersion === WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION ||
       schemaVersion === METADATA_TRANSCRIPT_SCHEMA_VERSION ||
+      schemaVersion === 5 ||
       schemaVersion === TRANSCRIPT_SCHEMA_VERSION
         ? candidate.words
         : [];
@@ -677,6 +684,35 @@ const parseLocalAiMeetingSummary = (
   };
 };
 
+const parseMarkers = (value: unknown): LiveRecordingMarker[] => {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_LIVE_RECORDING_MARKERS) {
+    return fail('markers must be an array with a supported number of entries.');
+  }
+  return value.map((candidate, index) => {
+    if (!isRecord(candidate)) return fail(`markers[${index}] must be an object.`);
+    if (
+      !Number.isSafeInteger(candidate.offsetMs) ||
+      (candidate.offsetMs as number) < 0 ||
+      (candidate.offsetMs as number) > MAX_LIVE_RECORDING_MARKER_OFFSET_MS
+    ) {
+      return fail(`markers[${index}].offsetMs is outside the supported range.`);
+    }
+    if (
+      typeof candidate.label !== 'string' ||
+      candidate.label.trim().length === 0 ||
+      candidate.label.length > MAX_LIVE_RECORDING_MARKER_LABEL_CHARACTERS ||
+      candidate.label.includes('\0')
+    ) {
+      return fail(`markers[${index}].label has an invalid length.`);
+    }
+    return {
+      offsetMs: candidate.offsetMs as number,
+      label: candidate.label.trim(),
+    };
+  });
+};
+
 /**
  * Validates and returns a sanitized canonical record. Schema-v1 files are
  * migrated in memory without being rewritten merely because they were read.
@@ -693,6 +729,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     value.schemaVersion !== SPEAKER_TRANSCRIPT_SCHEMA_VERSION &&
     value.schemaVersion !== WORD_TIMING_TRANSCRIPT_SCHEMA_VERSION &&
     value.schemaVersion !== METADATA_TRANSCRIPT_SCHEMA_VERSION &&
+    value.schemaVersion !== 5 &&
     value.schemaVersion !== TRANSCRIPT_SCHEMA_VERSION
   ) {
     return fail(`Unsupported transcript schema version: ${String(value.schemaVersion)}.`);
@@ -706,7 +743,8 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
   const title = normalizeTranscriptTitle(value.title);
   const tags =
     sourceSchemaVersion === METADATA_TRANSCRIPT_SCHEMA_VERSION ||
-    sourceSchemaVersion === TRANSCRIPT_SCHEMA_VERSION
+    sourceSchemaVersion === TRANSCRIPT_SCHEMA_VERSION ||
+    sourceSchemaVersion === 5
       ? normalizeTranscriptTags(value.tags)
       : [];
 
@@ -752,6 +790,10 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
   );
   const createdAt = parseDateTime(value.createdAt, 'createdAt');
   const completedAt = parseDateTime(value.completedAt, 'completedAt');
+  const markers =
+    sourceSchemaVersion === MARKERS_TRANSCRIPT_SCHEMA_VERSION
+      ? parseMarkers(value.markers)
+      : [];
 
   if (segments.length > 0 && segments[segments.length - 1].endMs > durationMs) {
     return fail('durationMs cannot be shorter than the final segment.');
@@ -762,7 +804,8 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
   }
 
   const localAiMeetingSummary =
-    sourceSchemaVersion === TRANSCRIPT_SCHEMA_VERSION
+    sourceSchemaVersion === TRANSCRIPT_SCHEMA_VERSION ||
+    sourceSchemaVersion === 5
       ? parseLocalAiMeetingSummary(
           value.localAiMeetingSummary,
           durationMs,
@@ -786,6 +829,7 @@ export const parseTranscriptRecord = (value: unknown): TranscriptRecord => {
     ...(speakerDiagnostics ? { speakerDiagnostics } : {}),
     text,
     segments,
+    ...(markers.length ? { markers } : {}),
     ...(localAiMeetingSummary ? { localAiMeetingSummary } : {}),
   };
 };
