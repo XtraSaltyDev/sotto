@@ -202,6 +202,20 @@ export interface RawDiarizationSummary {
   clusters: RawClusterSupport[];
 }
 
+export interface DiarizationChurnSummary {
+  windowSizeMs: number;
+  segmentCount: number;
+  clusterSwitchCount: number;
+  clusterSwitchRate: number | null;
+  totalWindowCount: number;
+  activeWindowCount: number;
+  windowsWithTwoOrMoreClusters: number;
+  windowsWithThreeOrMoreClusters: number;
+  windowsWithThreeOrMoreClusterRate: number | null;
+  maximumDistinctClustersPerWindow: number;
+  meanDistinctClustersPerActiveWindow: number | null;
+}
+
 export interface BoundaryMetrics {
   matchingToleranceMs: number;
   referenceCount: number;
@@ -218,6 +232,7 @@ export interface BoundaryMetrics {
 }
 
 const BOUNDARY_MATCH_TOLERANCE_MS = 1_000;
+const DIARIZATION_CHURN_WINDOW_MS = 10_000;
 
 export interface SpeakerReferenceMetrics {
   speaker: string;
@@ -802,6 +817,87 @@ export const summarizeRawDiarization = (
     supportedClusterCount: supportedIds.size,
     minimumReliableSupportMs,
     clusters,
+  };
+};
+
+/**
+ * Describes raw cluster instability without calling clusters speakers.
+ * Consecutive-span switches show how often the diarizer changes identity;
+ * fixed ten-second windows show whether a short speaking span contains many
+ * competing cluster IDs. Both are aggregate diagnostics only.
+ */
+export const summarizeDiarizationChurn = (
+  diarization: readonly SpeakerDiarizationSegment[],
+  durationMs: number,
+): DiarizationChurnSummary => {
+  readSafeInteger(durationMs, 'durationMs', 0, Number.MAX_SAFE_INTEGER);
+  const ordered = diarization
+    .filter((segment) => segment.endMs > segment.startMs)
+    .sort(
+      (left, right) =>
+        left.startMs - right.startMs ||
+        left.endMs - right.endMs ||
+        left.cluster - right.cluster,
+    );
+  let clusterSwitchCount = 0;
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index - 1].cluster !== ordered[index].cluster) {
+      clusterSwitchCount += 1;
+    }
+  }
+
+  const totalWindowCount = durationMs === 0
+    ? 0
+    : Math.ceil(durationMs / DIARIZATION_CHURN_WINDOW_MS);
+  const clustersByWindow = new Map<number, Set<number>>();
+  for (const segment of ordered) {
+    if (totalWindowCount === 0) break;
+    const firstWindow = Math.max(
+      0,
+      Math.floor(segment.startMs / DIARIZATION_CHURN_WINDOW_MS),
+    );
+    const lastWindow = Math.min(
+      totalWindowCount - 1,
+      Math.floor((segment.endMs - 1) / DIARIZATION_CHURN_WINDOW_MS),
+    );
+    for (let window = firstWindow; window <= lastWindow; window += 1) {
+      const clusters = clustersByWindow.get(window) ?? new Set<number>();
+      clusters.add(segment.cluster);
+      clustersByWindow.set(window, clusters);
+    }
+  }
+  const distinctClusterCounts = [...clustersByWindow.values()].map(
+    (clusters) => clusters.size,
+  );
+  const activeWindowCount = distinctClusterCounts.length;
+  const windowsWithTwoOrMoreClusters = distinctClusterCounts.filter(
+    (count) => count >= 2,
+  ).length;
+  const windowsWithThreeOrMoreClusters = distinctClusterCounts.filter(
+    (count) => count >= 3,
+  ).length;
+
+  return {
+    windowSizeMs: DIARIZATION_CHURN_WINDOW_MS,
+    segmentCount: ordered.length,
+    clusterSwitchCount,
+    clusterSwitchRate: ordered.length > 1
+      ? clusterSwitchCount / (ordered.length - 1)
+      : null,
+    totalWindowCount,
+    activeWindowCount,
+    windowsWithTwoOrMoreClusters,
+    windowsWithThreeOrMoreClusters,
+    windowsWithThreeOrMoreClusterRate: activeWindowCount > 0
+      ? windowsWithThreeOrMoreClusters / activeWindowCount
+      : null,
+    maximumDistinctClustersPerWindow: distinctClusterCounts.length > 0
+      ? Math.max(...distinctClusterCounts)
+      : 0,
+    meanDistinctClustersPerActiveWindow: activeWindowCount > 0
+      ? distinctClusterCounts.reduce((sum, count) => sum + count, 0) /
+        activeWindowCount
+      : null,
   };
 };
 

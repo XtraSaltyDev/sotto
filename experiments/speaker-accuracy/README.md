@@ -21,6 +21,28 @@ node scripts/run-speaker-accuracy.cjs \
 
 Generated cache files and reports go to `.sotto-speaker-eval/`. The normalized WAV and full Whisper JSON are named from content/model fingerprints and are reused on later sweeps. The harness never changes or removes a Sotto recording or saved transcript.
 
+## Next-meeting diagnostic
+
+For the next meeting, use the development build so the speaker annotation controls are available:
+
+```sh
+npm start
+```
+
+After the meeting:
+
+1. Export the recording from Sotto's Meeting Library to a local `.webm` file.
+2. In the development transcript view, correct only the spans you can identify and export the anonymous speaker annotation.
+3. Copy `experiments/speaker-accuracy/next-meeting.config.example.json` to a local ignored file and replace its paths.
+4. Run the evaluation:
+
+```sh
+node scripts/run-speaker-accuracy.cjs \
+  --config .sotto-speaker-eval/inputs/next-meeting.config.json
+```
+
+Open the generated `report.md`. In addition to accuracy and boundary scores, the report includes raw cluster switches and fixed ten-second-window churn. Those diagnostics help distinguish rapid raw cluster fragmentation from a later transcript-alignment problem. Keep audio, annotations, Whisper JSON, and generated reports under `.sotto-speaker-eval/`; only aggregate, anonymous results belong in a checked-in report.
+
 ## Local input file
 
 Paths are resolved relative to the input JSON. Supply exactly one of `mediaPath` or `normalizedWavPath`:

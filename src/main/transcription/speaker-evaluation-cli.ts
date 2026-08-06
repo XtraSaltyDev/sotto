@@ -31,8 +31,10 @@ import {
   parseSpeakerAnnotation,
   scoreSpeakerAccuracy,
   shiftDiarizationSegments,
+  summarizeDiarizationChurn,
   summarizeRawDiarization,
   validateSpeakerEvaluationConfiguration,
+  type DiarizationChurnSummary,
   type RawDiarizationSummary,
   type SpeakerAccuracyMetrics,
   type SpeakerClusterSimilarityAnalysis,
@@ -120,6 +122,7 @@ interface ClusterSimilarityRun extends SpeakerClusterSimilarityAnalysis {
 interface ConfigurationResult {
   configuration: SpeakerEvaluationConfiguration;
   rawDiarization: RawDiarizationSummary;
+  churn: DiarizationChurnSummary;
   shiftedAlignmentInput: RawDiarizationSummary;
   alignedSpeakerCount: number;
   labeledWordCount: number;
@@ -960,6 +963,19 @@ ${consistencyRows.join('\n')}
 Only aggregate segment counts and similarity statistics are retained; voice vectors are discarded inside the isolated child process.
 `
     : '';
+  const churnRows = report.configurations.map((result) => {
+    const churn = result.churn;
+    return `| ${result.configuration.name} | ${churn.segmentCount} | ${churn.clusterSwitchCount} | ${formatPercent(churn.clusterSwitchRate)} | ${churn.activeWindowCount}/${churn.totalWindowCount} | ${churn.windowsWithTwoOrMoreClusters} | ${churn.windowsWithThreeOrMoreClusters} | ${formatPercent(churn.windowsWithThreeOrMoreClusterRate)} | ${churn.maximumDistinctClustersPerWindow} | ${churn.meanDistinctClustersPerActiveWindow?.toFixed(2) ?? 'n/a'} |`;
+  });
+  const churnSection = `
+## Raw diarization churn
+
+| Configuration | Raw spans | Cluster switches | Switch rate | Active 10s windows | 2+ cluster windows | 3+ cluster windows | 3+ rate | Max clusters/window | Mean clusters/active window |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+${churnRows.join('\n')}
+
+These are raw cluster diagnostics, not speaker-accuracy scores. A cluster switch is a change between consecutive diarization spans. Window counts include a cluster when its span overlaps a fixed ten-second window.
+`;
   const boundaryRows = report.configurations.flatMap((result) => {
     const boundary = result.accuracy?.boundaries;
     if (!boundary) return [];
@@ -1007,6 +1023,7 @@ Generated locally at ${report.generatedAt}. This report contains aggregate metri
 | Configuration | Recovery | Changed clusters | Changed words | Raw clusters | Supported labels | Correct words | Wrong words | Unclear words | Weighted loss | Balanced loss | Weakest speaker correct | Diarization ms | Recovery ms | RTF | Peak MiB | Comparison |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 ${rows.join('\n')}
+${churnSection}
 ${transcriptionSection}
 ${boundarySection}
 ${consistencySection}
@@ -1339,6 +1356,7 @@ export const runSpeakerEvaluationCli = async (args: readonly string[]): Promise<
     configurationResults.push({
       configuration,
       rawDiarization: rawSummary,
+      churn: summarizeDiarizationChurn(run.segments, durationMs),
       shiftedAlignmentInput: summarizeRawDiarization(alignmentInput, whisper.words),
       alignedSpeakerCount: new Set(
         recovered.segments.flatMap((segment) =>

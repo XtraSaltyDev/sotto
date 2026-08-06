@@ -12,6 +12,7 @@ import {
   parseSpeakerAnnotation,
   scoreSpeakerAccuracy,
   shiftDiarizationSegments,
+  summarizeDiarizationChurn,
   summarizeRawDiarization,
   validateSpeakerEvaluationConfiguration,
 } from './speaker-evaluation';
@@ -393,6 +394,48 @@ describe('speaker evaluation inputs and sweeps', () => {
       wordCount: 0,
       wordSupportMs: 0,
       supported: false,
+    });
+  });
+
+  it('reports deterministic raw cluster switches and ten-second window churn', () => {
+    const summary = summarizeDiarizationChurn([
+      { startMs: 0, endMs: 1_000, cluster: 0 },
+      { startMs: 1_000, endMs: 2_000, cluster: 1 },
+      { startMs: 2_000, endMs: 3_000, cluster: 0 },
+      { startMs: 9_000, endMs: 11_000, cluster: 2 },
+      { startMs: 11_000, endMs: 12_000, cluster: 2 },
+      { startMs: 20_000, endMs: 21_000, cluster: 3 },
+      { startMs: 23_000, endMs: 24_000, cluster: 3 },
+    ], 25_000);
+
+    expect(summary).toEqual({
+      windowSizeMs: 10_000,
+      segmentCount: 7,
+      clusterSwitchCount: 4,
+      clusterSwitchRate: 4 / 6,
+      totalWindowCount: 3,
+      activeWindowCount: 3,
+      windowsWithTwoOrMoreClusters: 1,
+      windowsWithThreeOrMoreClusters: 1,
+      windowsWithThreeOrMoreClusterRate: 1 / 3,
+      maximumDistinctClustersPerWindow: 3,
+      meanDistinctClustersPerActiveWindow: 5 / 3,
+    });
+  });
+
+  it('returns empty churn metrics when no diarization spans are present', () => {
+    expect(summarizeDiarizationChurn([], 0)).toEqual({
+      windowSizeMs: 10_000,
+      segmentCount: 0,
+      clusterSwitchCount: 0,
+      clusterSwitchRate: null,
+      totalWindowCount: 0,
+      activeWindowCount: 0,
+      windowsWithTwoOrMoreClusters: 0,
+      windowsWithThreeOrMoreClusters: 0,
+      windowsWithThreeOrMoreClusterRate: null,
+      maximumDistinctClustersPerWindow: 0,
+      meanDistinctClustersPerActiveWindow: null,
     });
   });
 });

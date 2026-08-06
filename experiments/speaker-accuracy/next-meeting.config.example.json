@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "next-meeting",
+  "mediaPath": "/absolute/path/to/exported-recording.webm",
+  "annotationPath": "/absolute/path/to/anonymous-annotation.json",
+  "outputDirectory": "/absolute/path/to/.sotto-speaker-eval/runs/next-meeting"
+}
