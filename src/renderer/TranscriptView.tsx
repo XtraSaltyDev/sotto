@@ -53,14 +53,21 @@ import {
 } from './app-format';
 
 const SpeakerEditor = ({
+  onMerge,
   speakers,
   onRename,
 }: {
   speakers: TranscriptSpeaker[];
   onRename: (speakerId: string, label: string) => Promise<string | null>;
+  onMerge: (
+    sourceSpeakerId: string,
+    targetSpeakerId: string,
+  ) => Promise<string | null>;
 }) => {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [mergeSourceId, setMergeSourceId] = useState<string | null>(null);
+  const [mergeTargetBySource, setMergeTargetBySource] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   return (
@@ -112,6 +119,60 @@ const SpeakerEditor = ({
               type="submit"
             >
               {savingId === speaker.id ? 'Saving…' : 'Save'}
+            </button>
+            <label className="speaker-editor__merge">
+              <span>Merge into</span>
+              <select
+                aria-label={`Merge ${speaker.label} into`}
+                disabled={mergeSourceId === speaker.id}
+                onChange={(event) =>
+                  setMergeTargetBySource((current) => ({
+                    ...current,
+                    [speaker.id]: event.target.value,
+                  }))
+                }
+                value={mergeTargetBySource[speaker.id] ?? ''}
+              >
+                <option value="">Choose speaker…</option>
+                {speakers
+                  .filter((candidate) => candidate.id !== speaker.id)
+                  .map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button
+              disabled={
+                mergeSourceId === speaker.id ||
+                !mergeTargetBySource[speaker.id]
+              }
+              onClick={() => {
+                const targetSpeakerId = mergeTargetBySource[speaker.id];
+                if (!targetSpeakerId) return;
+                setMergeSourceId(speaker.id);
+                setError(null);
+                void onMerge(speaker.id, targetSpeakerId)
+                  .then((reason) => {
+                    setMergeSourceId(null);
+                    setError(reason);
+                    if (!reason) {
+                      setMergeTargetBySource((current) => {
+                        const next = { ...current };
+                        delete next[speaker.id];
+                        return next;
+                      });
+                    }
+                  })
+                  .catch(() => {
+                    setMergeSourceId(null);
+                    setError('Sotto could not merge those speakers.');
+                  });
+              }}
+              type="button"
+            >
+              {mergeSourceId === speaker.id ? 'Merging…' : 'Merge'}
             </button>
           </form>
         ))}
@@ -300,6 +361,16 @@ const MeetingSummaryView = ({
                 ) : null}
               </div>
               <p>{item.text}</p>
+              {title === 'Action items' && (
+                item.owner || item.dueDate || item.sourceSegmentIndex !== undefined
+              ) ? (
+                <p className="meeting-summary__evidence">
+                  {item.owner ? `Owner: ${item.owner}` : null}
+                  {item.owner && item.dueDate ? ' · ' : null}
+                  {item.dueDate ? `Due: ${item.dueDate}` : null}
+                  {item.sourceSegmentIndex === undefined ? null : ' · Source linked'}
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -510,6 +581,7 @@ export const TranscriptView = ({
   onExport,
   onExportRecording,
   onGenerateLocalAiSummary,
+  onMergeSpeaker,
   onOpenLocalAi,
   onRenameSpeaker,
   onUpdateMetadata,
@@ -544,6 +616,10 @@ export const TranscriptView = ({
   onExport: (format: TranscriptExportFormat) => void;
   onExportRecording: () => void;
   onGenerateLocalAiSummary: () => void;
+  onMergeSpeaker: (
+    sourceSpeakerId: string,
+    targetSpeakerId: string,
+  ) => Promise<string | null>;
   onOpenLocalAi: () => void;
   onRenameSpeaker: (speakerId: string, label: string) => Promise<string | null>;
   onUpdateMetadata: (metadata: {
@@ -964,6 +1040,7 @@ export const TranscriptView = ({
             </summary>
           <SpeakerEditor
             key={transcript.id}
+            onMerge={onMergeSpeaker}
             onRename={onRenameSpeaker}
             speakers={transcript.speakerAnalysis.speakers}
           />

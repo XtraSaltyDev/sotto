@@ -218,7 +218,11 @@ const formatSummaryItem = (
   labels: ReadonlyMap<string, string>,
 ): string => {
   const label = item.speakerId ? labels.get(item.speakerId) : null;
-  return `- [${formatReferenceTimestamp(item.startMs)}] ${label ? `${label}: ` : ''}${normalizeInlineText(item.text)}`;
+  const evidence = [
+    item.owner ? `Owner: ${normalizeInlineText(item.owner)}` : null,
+    item.dueDate ? `Due: ${normalizeInlineText(item.dueDate)}` : null,
+  ].filter((value): value is string => value !== null);
+  return `- [${formatReferenceTimestamp(item.startMs)}] ${label ? `${label}: ` : ''}${normalizeInlineText(item.text)}${evidence.length ? ` (${evidence.join('; ')})` : ''}`;
 };
 
 const formatSummaryItems = (

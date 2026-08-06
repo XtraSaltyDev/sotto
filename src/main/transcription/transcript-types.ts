@@ -617,6 +617,34 @@ const parseMeetingSummaryItems = (
         durationMs,
       ),
       speakerId,
+      ...(candidate.sourceSegmentIndex === undefined
+        ? {}
+        : {
+            sourceSegmentIndex: readInteger(
+              candidate.sourceSegmentIndex,
+              `${field}[${index}].sourceSegmentIndex`,
+              0,
+              MAX_TRANSCRIPT_SEGMENTS - 1,
+            ),
+          }),
+      ...(candidate.owner === undefined || candidate.owner === null
+        ? (candidate.owner === null ? { owner: null } : {})
+        : {
+            owner: readBoundedString(
+              candidate.owner,
+              `${field}[${index}].owner`,
+              MAX_SPEAKER_LABEL_CHARACTERS,
+            ).replace(/\s+/gu, ' ').trim(),
+          }),
+      ...(candidate.dueDate === undefined || candidate.dueDate === null
+        ? (candidate.dueDate === null ? { dueDate: null } : {})
+        : {
+            dueDate: readBoundedString(
+              candidate.dueDate,
+              `${field}[${index}].dueDate`,
+              120,
+            ).replace(/\s+/gu, ' ').trim(),
+          }),
     };
   });
 };

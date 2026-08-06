@@ -30,6 +30,7 @@ import type {
   LocalAiMeetingSummary,
   LiveRecordingMarker,
   DeleteMeetingResult,
+  MergeTranscriptSpeakersResult,
 } from '../shared/contracts';
 import type { SelectedMedia } from './media/media-import';
 import {
@@ -313,8 +314,8 @@ export class AppController {
     recordingCapability: LiveRecordingCapabilitySource =
       DEFAULT_RECORDING_CAPABILITY,
     transcriptionOptions?: () =>
-      | Promise<{ modelPath: string; language: string }>
-      | { modelPath: string; language: string },
+      | Promise<{ modelPath: string; language: string; customVocabulary?: string[] }>
+      | { modelPath: string; language: string; customVocabulary?: string[] },
   ) {
     this.engineStatus = toRendererEngineStatus(runtimeStatus);
     if (typeof recordingCapability === 'function') {
@@ -989,6 +990,36 @@ export class AppController {
           error instanceof TranscriptValidationError
             ? error.message
             : 'Sotto could not rename that speaker.',
+      };
+    }
+  }
+
+  async mergeTranscriptSpeakers(
+    transcriptId: string,
+    sourceSpeakerId: string,
+    targetSpeakerId: string,
+  ): Promise<MergeTranscriptSpeakersResult> {
+    try {
+      const result = await this.repository.mergeSpeakers(
+        transcriptId,
+        sourceSpeakerId,
+        targetSpeakerId,
+      );
+      if (result.outcome !== 'merged') return result;
+      await this.refreshTranscript(transcriptId);
+      this.emit();
+      return {
+        outcome: 'merged',
+        speaker: { ...result.speaker },
+        reassignedCount: result.reassignedCount,
+      };
+    } catch (error) {
+      return {
+        outcome: 'rejected',
+        reason:
+          error instanceof TranscriptValidationError
+            ? error.message
+            : 'Sotto could not merge those speakers.',
       };
     }
   }

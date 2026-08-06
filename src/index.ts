@@ -55,6 +55,7 @@ import {
 import {
   AppSettingsStore,
   listTranscriptionModels,
+  normalizeCustomVocabulary,
   resolveTranscriptionOptions,
 } from './main/settings/app-settings';
 
@@ -369,7 +370,11 @@ const initialize = async (): Promise<void> => {
         ? runtimeStatus.runtime.modelPath
         : path.join(bundledModelsDirectory, DEFAULT_TRANSCRIPTION_MODEL.fileName),
     );
-    return { modelPath: resolved.modelPath, language: resolved.language };
+    return {
+      modelPath: resolved.modelPath,
+      language: resolved.language,
+      customVocabulary: [...settingsStore.get().customVocabulary],
+    };
   };
 
   controller = new AppController(
@@ -552,6 +557,7 @@ const initialize = async (): Promise<void> => {
         return {
           transcriptionModelId: resolvedModel?.id ?? DEFAULT_TRANSCRIPTION_MODEL.id,
           transcriptionLanguage: settings.transcriptionLanguage,
+          customVocabulary: [...settings.customVocabulary],
           availableModels: models.map((model) => ({
             id: model.id,
             multilingual: model.multilingual,
@@ -573,6 +579,19 @@ const initialize = async (): Promise<void> => {
             return {
               outcome: 'rejected' as const,
               reason: 'Choose a model that is available on this computer.',
+            };
+          }
+        }
+        if (input.customVocabulary !== undefined) {
+          // The settings store applies the same normalization when it writes;
+          // validate here so the renderer gets a useful rejection instead of
+          // silently losing a malformed term list.
+          try {
+            normalizeCustomVocabulary(input.customVocabulary);
+          } catch (error) {
+            return {
+              outcome: 'rejected' as const,
+              reason: error instanceof Error ? error.message : 'Enter valid vocabulary.',
             };
           }
         }

@@ -517,6 +517,18 @@ const summaryParagraphs = (
                 ? [new TextRun({ bold: true, text: `${speaker}: ` })]
                 : []),
               ...segmentTextRuns(item.text),
+              ...(item.owner || item.dueDate
+                ? [
+                    new TextRun({
+                      color: STYLE.metadata.color,
+                      italics: true,
+                      text: `  [${[
+                        item.owner ? `Owner: ${item.owner}` : null,
+                        item.dueDate ? `Due: ${item.dueDate}` : null,
+                      ].filter((value): value is string => value !== null).join('; ')}]`,
+                    }),
+                  ]
+                : []),
             ],
           });
         }),

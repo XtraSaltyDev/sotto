@@ -181,7 +181,7 @@ describe('LocalTranscriptionService durable recording behavior', () => {
     withSpeakerRuntime = true,
     serviceOptions: Pick<
       LocalTranscriptionServiceOptions,
-      'availableParallelism' | 'platform'
+      'availableParallelism' | 'platform' | 'transcriptionOptions'
     > = {},
   ) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-transcription-'));
@@ -299,6 +299,33 @@ describe('LocalTranscriptionService durable recording behavior', () => {
       call.args?.includes('--output-json-full'),
     );
     expect(macWhisper?.args).not.toContain('--threads');
+  });
+
+  it('passes custom vocabulary only to the local Whisper process', async () => {
+    const calls: RunProcessOptions[] = [];
+    const context = await setup(
+      async (options) => {
+        calls.push(options);
+        return makeRunner(() => false)(options);
+      },
+      async () => ({ segments: [], clusterConsistency: null }),
+      false,
+      {
+        transcriptionOptions: () => ({
+          modelPath: '/models/ggml-small.bin',
+          language: 'en',
+          customVocabulary: ['Sotto', 'ScreenCaptureKit'],
+        }),
+      },
+    );
+    const terminal = context.nextTerminal();
+    await context.service.start(context.media);
+    await expect(terminal).resolves.toMatchObject({ stage: 'completed' });
+
+    const whisper = calls.find((call) => call.args?.includes('--output-json-full'));
+    expect(whisper?.args).toEqual(
+      expect.arrayContaining(['--prompt', 'Sotto, ScreenCaptureKit']),
+    );
   });
 
   it('uses an indeterminate handoff until Whisper reports real progress', async () => {

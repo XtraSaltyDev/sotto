@@ -1477,6 +1477,30 @@ const MainApp = ({
     return null;
   };
 
+  const handleMergeSpeaker = async (
+    sourceSpeakerId: string,
+    targetSpeakerId: string,
+  ): Promise<string | null> => {
+    if (!window.sotto || !selectedId) return 'Sotto could not merge those speakers.';
+    if (!confirmLocalAiSummaryDiscard()) return null;
+    if (!window.confirm('Move every segment from the first speaker to the selected speaker? This keeps timing and removes the duplicate label.')) {
+      return null;
+    }
+    const result = await window.sotto.mergeTranscriptSpeakers(
+      selectedId,
+      sourceSpeakerId,
+      targetSpeakerId,
+    );
+    if (result.outcome === 'rejected') return result.reason;
+    if (result.outcome === 'not-found') return 'Those speakers are no longer available.';
+    const detail = await window.sotto.getTranscript(selectedId);
+    if (detail) setTranscript(detail);
+    showInfo(
+      `Merged the duplicate speaker label and reassigned ${result.reassignedCount.toLocaleString()} ${result.reassignedCount === 1 ? 'segment' : 'segments'}.`,
+    );
+    return null;
+  };
+
   const handleUpdateMetadata = async (metadata: {
     title?: string;
     tags?: string[];
@@ -1840,6 +1864,7 @@ const MainApp = ({
           }}
           onCancelLocalAiSummary={handleCancelLocalAiSummary}
           onGenerateLocalAiSummary={() => void handleRequestLocalAiSummary()}
+          onMergeSpeaker={handleMergeSpeaker}
           onOpenLocalAi={() => setCurrentPage('local-ai')}
           onRenameSpeaker={handleRenameSpeaker}
           onUpdateMetadata={handleUpdateMetadata}

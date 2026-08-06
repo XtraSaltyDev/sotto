@@ -9,6 +9,7 @@ import { DEFAULT_TRANSCRIPTION_MODEL } from '../shared/default-transcription-mod
 const EMPTY_SETTINGS: AppSettingsSummary = {
   transcriptionModelId: DEFAULT_TRANSCRIPTION_MODEL.id,
   transcriptionLanguage: 'en',
+  customVocabulary: [],
   availableModels: [],
   userModelsDirectory: '',
   dictationShortcut: '',
@@ -30,6 +31,7 @@ export const SettingsPage = () => {
   const [settings, setSettings] = useState<AppSettingsSummary>(EMPTY_SETTINGS);
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+  const [vocabularyDraft, setVocabularyDraft] = useState('');
 
   useEffect(() => {
     if (!window.sotto?.getAppSettings) {
@@ -40,7 +42,10 @@ export const SettingsPage = () => {
     window.sotto
       .getAppSettings()
       .then((loaded) => {
-        if (!cancelled) setSettings(loaded);
+        if (!cancelled) {
+          setSettings(loaded);
+          setVocabularyDraft(loaded.customVocabulary.join('\n'));
+        }
       })
       .catch(() => {
         if (!cancelled) setMessage('Sotto could not read its settings.');
@@ -56,6 +61,7 @@ export const SettingsPage = () => {
   const applyUpdate = async (input: {
     transcriptionModelId?: string;
     transcriptionLanguage?: string;
+    customVocabulary?: string[];
   }) => {
     if (!window.sotto || busy) return;
     setBusy(true);
@@ -64,6 +70,7 @@ export const SettingsPage = () => {
       const result = await window.sotto.updateAppSettings(input);
       if (result.outcome === 'updated') {
         setSettings(result.settings);
+        setVocabularyDraft(result.settings.customVocabulary.join('\n'));
         setMessage('Saved. New transcriptions use this setting.');
       } else {
         setMessage(result.reason);
@@ -73,6 +80,14 @@ export const SettingsPage = () => {
     } finally {
       setBusy(false);
     }
+  };
+
+  const saveVocabulary = () => {
+    const terms = vocabularyDraft
+      .split(/\r?\n/gu)
+      .map((term) => term.trim())
+      .filter(Boolean);
+    void applyUpdate({ customVocabulary: terms });
   };
 
   const selectedModel = settings.availableModels.find(
@@ -143,6 +158,30 @@ export const SettingsPage = () => {
             type="button"
           >
             Open the models folder
+          </button>
+          <label className="settings-field">
+            <span>Custom vocabulary</span>
+            <textarea
+              aria-describedby="settings-vocabulary-help"
+              disabled={busy}
+              onChange={(event) => setVocabularyDraft(event.target.value)}
+              placeholder={'One name, product, or specialist term per line'}
+              rows={5}
+              value={vocabularyDraft}
+            />
+            <small id="settings-vocabulary-help">
+              These terms are used as a local speech-model hint for new
+              transcriptions. They do not rewrite saved transcripts or leave
+              this computer.
+            </small>
+          </label>
+          <button
+            className="settings-link"
+            disabled={busy}
+            onClick={saveVocabulary}
+            type="button"
+          >
+            Save vocabulary
           </button>
         </div>
 

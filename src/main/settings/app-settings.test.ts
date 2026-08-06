@@ -37,9 +37,33 @@ describe('AppSettingsStore', () => {
     await store.update({ transcriptionLanguage: 'de', transcriptionModelId: 'small' });
     const reloaded = new AppSettingsStore(path.join(root, 'settings.json'));
     await expect(reloaded.load()).resolves.toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       transcriptionModelId: 'small',
       transcriptionLanguage: 'de',
+      customVocabulary: [],
+    });
+  });
+
+  it('migrates legacy settings and persists bounded custom vocabulary', async () => {
+    const root = await scratch();
+    const filePath = path.join(root, 'settings.json');
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        transcriptionModelId: 'small',
+        transcriptionLanguage: 'en',
+      }),
+    );
+    const store = new AppSettingsStore(filePath);
+    await expect(store.load()).resolves.toMatchObject({
+      schemaVersion: 2,
+      customVocabulary: [],
+    });
+
+    await store.update({ customVocabulary: [' Sotto ', 'SOTTO', 'Local AI'] });
+    await expect(new AppSettingsStore(filePath).load()).resolves.toMatchObject({
+      customVocabulary: ['Sotto', 'Local AI'],
     });
   });
 
@@ -109,9 +133,10 @@ describe('resolveTranscriptionOptions', () => {
     expect(
       resolveTranscriptionOptions(
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           transcriptionModelId: 'small',
           transcriptionLanguage: 'de',
+          customVocabulary: [],
         },
         models,
         '/models/ggml-small.en.bin',
@@ -123,9 +148,10 @@ describe('resolveTranscriptionOptions', () => {
     expect(
       resolveTranscriptionOptions(
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           transcriptionModelId: 'small.en',
           transcriptionLanguage: 'de',
+          customVocabulary: [],
         },
         models,
         '/models/ggml-small.en.bin',
@@ -141,9 +167,10 @@ describe('resolveTranscriptionOptions', () => {
     expect(
       resolveTranscriptionOptions(
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           transcriptionModelId: 'missing',
           transcriptionLanguage: 'de',
+          customVocabulary: [],
         },
         models,
         '/models/ggml-small.en.bin',
@@ -159,9 +186,10 @@ describe('resolveTranscriptionOptions', () => {
     expect(
       resolveTranscriptionOptions(
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           transcriptionModelId: 'small.en',
           transcriptionLanguage: 'en',
+          customVocabulary: [],
         },
         [],
         '/models/ggml-large-v3-turbo.bin',
@@ -177,9 +205,10 @@ describe('resolveTranscriptionOptions', () => {
     expect(
       resolveTranscriptionOptions(
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           transcriptionModelId: null,
           transcriptionLanguage: 'de',
+          customVocabulary: [],
         },
         [],
         '/models/ggml-large-v3-turbo.bin',

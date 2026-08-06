@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { TRANSCRIPT_SCHEMA_VERSION, type TranscriptRecord } from '../transcription/transcript-types';
-import { buildMeetingSummary } from './meeting-summary';
+import { buildMeetingSummary, extractActionItemEvidence } from './meeting-summary';
 
 const record = (segments: TranscriptRecord['segments']): TranscriptRecord => ({
   schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
@@ -20,6 +20,32 @@ const record = (segments: TranscriptRecord['segments']): TranscriptRecord => ({
 });
 
 describe('buildMeetingSummary', () => {
+  it('keeps action-item owner and due wording tied to the source sentence', () => {
+    expect(extractActionItemEvidence('Morgan will send the plan by Friday.')).toEqual({
+      owner: 'Morgan',
+      dueDate: 'by Friday',
+    });
+    expect(extractActionItemEvidence('Someone should handle it soon.')).toEqual({
+      owner: null,
+      dueDate: null,
+    });
+
+    const summary = buildMeetingSummary(record([
+      {
+        startMs: 2_000,
+        endMs: 8_000,
+        speakerId: null,
+        words: [],
+        text: 'Morgan will send the revised schedule by Friday.',
+      },
+    ]));
+    expect(summary?.actionItems[0]).toMatchObject({
+      sourceSegmentIndex: 0,
+      owner: 'Morgan',
+      dueDate: 'by Friday',
+    });
+  });
+
   it('extracts timestamped key points, decisions, and action items locally', () => {
     const summary = buildMeetingSummary(record([
       {

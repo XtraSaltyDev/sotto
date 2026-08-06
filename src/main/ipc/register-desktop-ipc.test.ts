@@ -78,6 +78,7 @@ const createController = () => ({
   updateTranscriptSegment: vi.fn(async () => ({ outcome: 'not-found' })),
   updateTranscriptMetadata: vi.fn(async () => ({ outcome: 'not-found' })),
   renameTranscriptSpeaker: vi.fn(async () => ({ outcome: 'not-found' })),
+  mergeTranscriptSpeakers: vi.fn(async () => ({ outcome: 'not-found' })),
   searchTranscriptLibrary: vi.fn(async () => ({ transcripts: [], matches: [] })),
   previewLocalAiMeetingSummary: vi.fn(async () => ({ outcome: 'not-found' })),
   generateLocalAiMeetingSummary: vi.fn(async () => ({ outcome: 'not-found' })),
@@ -495,6 +496,43 @@ describe('registerDesktopIpc speaker annotation gate', () => {
 
     expect(controller.assignTranscriptSegmentSpeaker).not.toHaveBeenCalled();
     expect(controller.addTranscriptSpeaker).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerDesktopIpc speaker merge', () => {
+  it('allows a validated merge in the normal packaged-safe transcript path', async () => {
+    const { controller, mainWindow } = setup();
+    const event = eventFrom(mainWindow);
+    const source = '6d73be9d-c055-4dc2-93d6-d821fb4f95ec';
+    const target = 'a75d6b1a-eaa3-43bf-8084-08e3b509c445';
+
+    await invoke(
+      IPC_CHANNELS.mergeTranscriptSpeakers,
+      event,
+      TRANSCRIPT_ID,
+      source,
+      target,
+    );
+
+    expect(controller.mergeTranscriptSpeakers).toHaveBeenCalledWith(
+      TRANSCRIPT_ID,
+      source,
+      target,
+    );
+  });
+
+  it('refuses invalid speaker ids before storage', async () => {
+    const { controller, mainWindow } = setup();
+    await expect(
+      invoke(
+        IPC_CHANNELS.mergeTranscriptSpeakers,
+        eventFrom(mainWindow),
+        TRANSCRIPT_ID,
+        'source',
+        'target',
+      ),
+    ).resolves.toEqual({ outcome: 'not-found' });
+    expect(controller.mergeTranscriptSpeakers).not.toHaveBeenCalled();
   });
 });
 

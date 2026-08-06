@@ -7,6 +7,7 @@ import type {
   MeetingSummaryItem,
 } from '../../shared/contracts';
 import type { TranscriptRecord } from '../transcription/transcript-types';
+import { extractActionItemEvidence } from '../summarization/meeting-summary';
 
 const REQUEST_TIMEOUT_MS = 120_000;
 const MAX_RESPONSE_BYTES = 1024 * 1_024;
@@ -344,11 +345,22 @@ const toIndexedSegments = (record: TranscriptRecord): IndexedSegment[] => {
 const summaryItems = (
   draftItems: DraftItem[],
   segmentByIndex: ReadonlyMap<number, IndexedSegment>,
+  actionItems = false,
 ): MeetingSummaryItem[] =>
   draftItems.flatMap((item): MeetingSummaryItem[] => {
     const segment = segmentByIndex.get(item.segmentIndex);
     return segment
-      ? [{ text: item.text, startMs: segment.startMs, speakerId: segment.speakerId }]
+      ? [{
+          text: item.text,
+          startMs: segment.startMs,
+          speakerId: segment.speakerId,
+          ...(actionItems
+            ? {
+                sourceSegmentIndex: segment.index,
+                ...extractActionItemEvidence(segment.text),
+              }
+            : {}),
+        }]
       : [];
   });
 
@@ -446,7 +458,7 @@ export const generateLocalAiMeetingSummary = async ({
     overview: draft.overview,
     keyPoints: summaryItems(draft.keyPoints, segmentByIndex),
     decisions: summaryItems(draft.decisions, segmentByIndex),
-    actionItems: summaryItems(draft.actionItems, segmentByIndex),
+    actionItems: summaryItems(draft.actionItems, segmentByIndex, true),
   };
   return {
     summary,

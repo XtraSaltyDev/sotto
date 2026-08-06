@@ -24,6 +24,7 @@ export const IPC_CHANNELS = {
   addTranscriptSpeaker: 'sotto:transcript:speaker:add',
   exportSpeakerAnnotation: 'sotto:transcript:speaker-annotation:export',
   renameTranscriptSpeaker: 'sotto:transcript:speaker:rename',
+  mergeTranscriptSpeakers: 'sotto:transcript:speakers:merge',
   deleteTranscript: 'sotto:transcript:delete',
   retranscribeTranscript: 'sotto:transcript:retranscribe',
   exportTranscript: 'sotto:transcript:export',
@@ -328,6 +329,12 @@ export interface MeetingSummaryItem {
   text: string;
   startMs: number;
   speakerId: string | null;
+  /** Zero-based transcript segment that supports this item. */
+  sourceSegmentIndex?: number;
+  /** Filled only when the cited segment states an owner explicitly. */
+  owner?: string | null;
+  /** Preserves the transcript's explicit due-date wording; never inferred. */
+  dueDate?: string | null;
 }
 
 export interface MeetingSummary {
@@ -447,6 +454,7 @@ export interface TranscriptionModelSummary {
 export interface AppSettingsSummary {
   transcriptionModelId: string;
   transcriptionLanguage: string;
+  customVocabulary: string[];
   availableModels: TranscriptionModelSummary[];
   userModelsDirectory: string;
   dictationShortcut: string;
@@ -455,6 +463,7 @@ export interface AppSettingsSummary {
 export interface UpdateAppSettingsInput {
   transcriptionModelId?: string;
   transcriptionLanguage?: string;
+  customVocabulary?: string[];
 }
 
 export type UpdateAppSettingsResult =
@@ -696,6 +705,11 @@ export type RenameTranscriptSpeakerResult =
   | { outcome: 'not-found' }
   | { outcome: 'rejected'; reason: string };
 
+export type MergeTranscriptSpeakersResult =
+  | { outcome: 'merged'; speaker: TranscriptSpeaker; reassignedCount: number }
+  | { outcome: 'not-found' }
+  | { outcome: 'rejected'; reason: string };
+
 export type UpdateTranscriptMetadataResult =
   | { outcome: 'updated'; title: string; tags: string[] }
   | { outcome: 'not-found' }
@@ -821,6 +835,11 @@ export interface SottoDesktopApi {
     speakerId: string,
     label: string,
   ): Promise<RenameTranscriptSpeakerResult>;
+  mergeTranscriptSpeakers(
+    transcriptId: string,
+    sourceSpeakerId: string,
+    targetSpeakerId: string,
+  ): Promise<MergeTranscriptSpeakersResult>;
   deleteTranscript(transcriptId: string): Promise<DeleteTranscriptResult>;
   retranscribeTranscript(
     transcriptId: string,

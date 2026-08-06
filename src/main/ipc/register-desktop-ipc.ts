@@ -54,6 +54,7 @@ import {
   type RetryRecordingResult,
   type RequestRecordingPermissionsResult,
   type RenameTranscriptSpeakerResult,
+  type MergeTranscriptSpeakersResult,
   type StartLiveRecordingResult,
   type TranscriptLibraryResult,
   type TranscriptExportFormat,
@@ -88,6 +89,7 @@ import { insertTextAtCursor } from '../dictation/cursor-insertion';
 import type { LocalAiConnectionService } from '../local-ai/local-ai-connection';
 import { isLocalAiTranscriptFingerprint } from '../local-ai/local-ai-meeting-summary';
 import type { UpdateService } from '../updates/update-service';
+import { normalizeCustomVocabulary } from '../settings/app-settings';
 import {
   isTranscriptCopyKind,
   isTranscriptExportFormat,
@@ -365,6 +367,16 @@ export const registerDesktopIpc = ({
           return { outcome: 'rejected', reason: 'Choose a supported language.' };
         }
         changes.transcriptionLanguage = input.transcriptionLanguage;
+      }
+      if (input.customVocabulary !== undefined) {
+        try {
+          changes.customVocabulary = normalizeCustomVocabulary(input.customVocabulary);
+        } catch (error) {
+          return {
+            outcome: 'rejected',
+            reason: error instanceof Error ? error.message : 'Enter valid vocabulary.',
+          };
+        }
       }
       const result = await appSettings.update(changes);
       if (result.outcome === 'rejected') return result;
@@ -1193,6 +1205,30 @@ export const registerDesktopIpc = ({
   );
 
   ipcMain.handle(
+    IPC_CHANNELS.mergeTranscriptSpeakers,
+    async (
+      event,
+      transcriptId: unknown,
+      sourceSpeakerId: unknown,
+      targetSpeakerId: unknown,
+    ): Promise<MergeTranscriptSpeakersResult> => {
+      trust(event);
+      if (
+        !isTranscriptId(transcriptId) ||
+        !isTranscriptSpeakerId(sourceSpeakerId) ||
+        !isTranscriptSpeakerId(targetSpeakerId)
+      ) {
+        return { outcome: 'not-found' };
+      }
+      return controller.mergeTranscriptSpeakers(
+        transcriptId,
+        sourceSpeakerId,
+        targetSpeakerId,
+      );
+    },
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.deleteTranscript,
     async (event, id: unknown): Promise<DeleteTranscriptResult> => {
       trust(event);
@@ -1415,6 +1451,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.addTranscriptSpeaker,
       IPC_CHANNELS.exportSpeakerAnnotation,
       IPC_CHANNELS.renameTranscriptSpeaker,
+      IPC_CHANNELS.mergeTranscriptSpeakers,
       IPC_CHANNELS.deleteTranscript,
       IPC_CHANNELS.deletePlayback,
       IPC_CHANNELS.exportTranscript,

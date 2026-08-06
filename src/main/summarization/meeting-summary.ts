@@ -42,6 +42,32 @@ interface Candidate extends MeetingSummaryItem {
   words: string[];
 }
 
+export interface ActionItemEvidence {
+  owner: string | null;
+  dueDate: string | null;
+}
+
+const ACTION_OWNER_PATTERN =
+  /\b((?:I|i|we|We|you|You|they|They|he|He|she|She|the team|The team)|[\p{Lu}][\p{L}'-]*(?:\s+[\p{Lu}][\p{L}'-]*){0,2})\s+(?:'ll|will|should|need(?:s)? to)\b/u;
+const ACTION_DUE_DATE_PATTERN =
+  /\b(?:(?:by|on|before|until|due(?:\s+(?:on|by))?)\s+(?:today|tomorrow|tonight|this\s+\w+|next\s+\w+|[\p{L}]+day|[\p{L}]+\s+\d{1,2}(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)|today|tomorrow|tonight|this\s+week|next\s+week|[\p{L}]+day)\b/iu;
+
+/**
+ * Reads only owner and due-date wording that is literally present in the
+ * cited source sentence. It intentionally returns null for implications such
+ * as "someone should handle it" or dates that would need calendar math.
+ */
+export const extractActionItemEvidence = (text: string): ActionItemEvidence => {
+  const ownerCandidate = ACTION_OWNER_PATTERN.exec(text)?.[1]?.trim() ?? null;
+  const owner = ownerCandidate && !/^(?:someone|somebody|a person)$/iu.test(ownerCandidate)
+    ? ownerCandidate
+    : null;
+  return {
+    owner,
+    dueDate: ACTION_DUE_DATE_PATTERN.exec(text)?.[0]?.trim() ?? null,
+  };
+};
+
 const normalizeText = (value: string): string =>
   value.replace(/\s+/gu, ' ').trim();
 
@@ -81,7 +107,7 @@ const sentenceCandidates = (record: TranscriptRecord): Candidate[] => {
     pending = null;
   };
 
-  for (const segment of record.segments) {
+  for (const [sourceSegmentIndex, segment] of record.segments.entries()) {
     const segmentText = normalizeText(segment.text);
     if (!segmentText) continue;
 
@@ -111,6 +137,7 @@ const sentenceCandidates = (record: TranscriptRecord): Candidate[] => {
         pending = {
           speakerId: segment.speakerId,
           startMs: segment.startMs,
+          sourceSegmentIndex,
           text: piece,
         };
       }
@@ -141,6 +168,7 @@ const distinctItems = (
       text: candidate.text,
       startMs: candidate.startMs,
       speakerId: candidate.speakerId,
+      sourceSegmentIndex: candidate.sourceSegmentIndex,
     });
     if (items.length === maximum) break;
   }
@@ -237,6 +265,9 @@ export const buildMeetingSummary = (
     actionItems: distinctItems(
       candidates.filter((candidate) => isUsefulSignal(candidate, ACTION_PATTERN)),
       MAX_ACTION_ITEMS,
-    ),
+    ).map((item) => ({
+      ...item,
+      ...extractActionItemEvidence(item.text),
+    })),
   };
 };
