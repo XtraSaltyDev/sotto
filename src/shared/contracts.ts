@@ -275,10 +275,25 @@ export interface TranscriptLibraryQuery {
   tag: string | null;
 }
 
+export type TranscriptLibraryMatchField =
+  | 'title'
+  | 'transcript'
+  | 'speaker'
+  | 'tag'
+  | 'summary';
+
+/** A bounded local excerpt explaining why a library result matched. */
+export interface TranscriptLibraryMatch {
+  transcriptId: string;
+  field: TranscriptLibraryMatchField;
+  text: string;
+}
+
 export interface TranscriptLibraryResult {
   transcripts: TranscriptSummary[];
   availableSpeakers: string[];
   availableTags: string[];
+  matches: TranscriptLibraryMatch[];
 }
 
 export interface TranscriptSegment {

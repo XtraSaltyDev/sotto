@@ -297,10 +297,23 @@ Use **Transcript Library** to search every saved transcript. Search covers
 manual titles, full transcript text and segments, transcript-local speaker
 names, tags, and the existing local meeting-summary draft. Terms are
 case-insensitive, accent-insensitive, and can match different fields in the
-same transcript. Date, speaker, and tag filters can be combined with search.
+same transcript. Matching results also show up to three short, field-labeled
+excerpts from the transcript or summary so a cross-meeting hit can be judged
+before opening it. Date, speaker, and tag filters can be combined with search.
 Press **Command + F** on macOS or **Ctrl + F** on Windows while the library is
 open to focus its search field. Opening a result and returning to the library
 restores keyboard focus to that transcript when it is still visible.
+
+The search index is intentionally small and local: it is derived in memory from
+the saved records each app run, with a weak object cache for unchanged records.
+It normalizes case, accents, and whitespace, then requires every search term to
+occur somewhere in the same record. A valid saved Local AI summary is included;
+an edited or stale Local AI summary is ignored in favor of the built-in
+extractive summary. Search returns bounded excerpts only; it does not write an
+index file, send query or transcript text anywhere, or invoke Local AI. The
+`TranscriptLibraryResult.matches` field is shared by the main process, preload,
+and renderer, so changes to this result shape should be merged as one contract
+change and covered at all three boundaries.
 
 Open a transcript and use **Transcript information** to replace its title or
 edit its comma-separated tags. Titles are manual only; Sotto does not generate

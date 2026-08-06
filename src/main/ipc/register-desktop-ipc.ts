@@ -970,6 +970,7 @@ export const registerDesktopIpc = ({
           transcripts: [],
           availableSpeakers: [],
           availableTags: [],
+          matches: [],
         };
       }
     },

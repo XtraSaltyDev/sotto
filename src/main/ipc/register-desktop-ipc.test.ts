@@ -78,7 +78,7 @@ const createController = () => ({
   updateTranscriptSegment: vi.fn(async () => ({ outcome: 'not-found' })),
   updateTranscriptMetadata: vi.fn(async () => ({ outcome: 'not-found' })),
   renameTranscriptSpeaker: vi.fn(async () => ({ outcome: 'not-found' })),
-  searchTranscriptLibrary: vi.fn(async () => ({ transcripts: [] })),
+  searchTranscriptLibrary: vi.fn(async () => ({ transcripts: [], matches: [] })),
   previewLocalAiMeetingSummary: vi.fn(async () => ({ outcome: 'not-found' })),
   generateLocalAiMeetingSummary: vi.fn(async () => ({ outcome: 'not-found' })),
   cancelLocalAiMeetingSummary: vi.fn(),

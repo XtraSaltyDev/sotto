@@ -705,6 +705,7 @@ export class AppController {
       transcripts: selection.records.map(toTranscriptSummary),
       availableSpeakers: selection.availableSpeakers,
       availableTags: selection.availableTags,
+      matches: selection.matches,
     };
   }
 

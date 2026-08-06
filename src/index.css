@@ -2375,8 +2375,34 @@ textarea:focus-visible {
   gap: 5px;
 }
 
+.meeting-row__matches {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.meeting-row__match {
+  display: block;
+  overflow: hidden;
+  color: var(--ink) !important;
+  font-size: 10px !important;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meeting-row__match span {
+  margin-right: 5px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .meeting-row__body strong,
-.meeting-row__body > span:not(.tag-list) {
+.meeting-row__body > span:not(.tag-list):not(.meeting-row__matches) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2386,7 +2412,7 @@ textarea:focus-visible {
   font-size: 13px;
 }
 
-.meeting-row__body > span:not(.tag-list) {
+.meeting-row__body > span:not(.tag-list):not(.meeting-row__matches) {
   color: var(--muted);
   font-size: 11px;
 }
@@ -3813,7 +3839,7 @@ textarea:focus-visible {
 .transcript-row__body span,
 .transcript-row__meta,
 .tag,
-.meeting-row__body > span:not(.tag-list),
+.meeting-row__body > span:not(.tag-list):not(.meeting-row__matches),
 .meeting-row__meta,
 .meeting-row__capabilities span,
 .meeting-row__menu > summary,
