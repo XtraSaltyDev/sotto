@@ -1,4 +1,8 @@
-import type { TranscriptLibraryQuery } from '../../shared/contracts';
+import type {
+  TranscriptLibraryMatch,
+  TranscriptLibraryMatchField,
+  TranscriptLibraryQuery,
+} from '../../shared/contracts';
 import { fingerprintTranscriptForLocalAi } from '../local-ai/local-ai-meeting-summary';
 import { buildMeetingSummary } from '../summarization/meeting-summary';
 import { MAX_RELIABLE_AUTOMATIC_SPEAKERS } from '../transcription/speaker-alignment';
@@ -8,6 +12,7 @@ export interface TranscriptLibrarySelection {
   records: TranscriptRecord[];
   availableSpeakers: string[];
   availableTags: string[];
+  matches: TranscriptLibraryMatch[];
 }
 
 const normalizeSearchValue = (value: string): string =>
@@ -50,6 +55,38 @@ const searchableMeetingSummaryText = (record: TranscriptRecord): string[] => {
   ];
 };
 
+interface SearchSource {
+  field: TranscriptLibraryMatchField;
+  text: string;
+}
+
+const searchSourcesByRecord = new WeakMap<TranscriptRecord, SearchSource[]>();
+
+const searchSources = (record: TranscriptRecord): SearchSource[] => {
+  const cached = searchSourcesByRecord.get(record);
+  if (cached) return cached;
+
+  const sources: SearchSource[] = [
+    { field: 'title', text: record.title },
+    { field: 'transcript', text: record.text },
+    ...record.segments.map((segment) => ({
+      field: 'transcript' as const,
+      text: segment.text,
+    })),
+    ...searchableSpeakerLabels(record).map((text) => ({
+      field: 'speaker' as const,
+      text,
+    })),
+    ...record.tags.map((text) => ({ field: 'tag' as const, text })),
+    ...searchableMeetingSummaryText(record).map((text) => ({
+      field: 'summary' as const,
+      text,
+    })),
+  ];
+  searchSourcesByRecord.set(record, sources);
+  return sources;
+};
+
 /**
  * The normalized haystack (which includes a derived meeting summary) is
  * expensive to build, so it is cached per record object. Records are
@@ -62,14 +99,7 @@ const searchHaystack = (record: TranscriptRecord): string => {
   const cached = haystackByRecord.get(record);
   if (cached !== undefined) return cached;
   const haystack = normalizeSearchValue(
-    [
-      record.title,
-      record.text,
-      ...record.segments.map((segment) => segment.text),
-      ...searchableSpeakerLabels(record),
-      ...record.tags,
-      ...searchableMeetingSummaryText(record),
-    ].join('\n'),
+    searchSources(record).map((source) => source.text).join('\n'),
   );
   haystackByRecord.set(record, haystack);
   return haystack;
@@ -80,6 +110,39 @@ const matchesText = (record: TranscriptRecord, query: string): boolean => {
   if (terms.length === 0) return true;
   const haystack = searchHaystack(record);
   return terms.every((term) => haystack.includes(term));
+};
+
+const matchPreview = (text: string): string => {
+  const normalized = text.replace(/\s+/gu, ' ').trim();
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}…` : normalized;
+};
+
+const matchesForRecord = (
+  record: TranscriptRecord,
+  query: string,
+): TranscriptLibraryMatch[] => {
+  const terms = normalizeSearchValue(query).split(' ').filter(Boolean);
+  if (terms.length === 0) return [];
+
+  const seen = new Set<string>();
+  return searchSources(record)
+    .filter((source) => {
+      const value = normalizeSearchValue(source.text);
+      return terms.some((term) => value.includes(term));
+    })
+    .filter((source) => source.text.trim().length > 0)
+    .filter((source) => {
+      const key = normalizeSearchValue(source.text);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 3)
+    .map((source) => ({
+      transcriptId: record.id,
+      field: source.field,
+      text: matchPreview(source.text),
+    }));
 };
 
 export const searchTranscriptRecords = (
@@ -121,5 +184,6 @@ export const searchTranscriptRecords = (
     records: selected,
     availableSpeakers,
     availableTags,
+    matches: selected.flatMap((record) => matchesForRecord(record, query.text)),
   };
 };

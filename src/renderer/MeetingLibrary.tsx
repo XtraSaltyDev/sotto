@@ -8,6 +8,7 @@ import {
 
 import type {
   SavedRecordingSummary,
+  TranscriptLibraryMatchField,
   TranscriptLibraryResult,
   TranscriptSummary,
 } from '../shared/contracts';
@@ -35,6 +36,10 @@ export interface TranscriptLibraryViewState {
   speaker: string;
   tag: string;
 }
+
+const transcriptLibraryMatchFieldLabel = (
+  field: TranscriptLibraryMatchField,
+): string => field[0].toLocaleUpperCase() + field.slice(1);
 
 export const MeetingLibrary = ({
   busyId,
@@ -71,6 +76,7 @@ export const MeetingLibrary = ({
     transcripts,
     availableSpeakers: [],
     availableTags: [],
+    matches: [],
   });
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -176,6 +182,15 @@ export const MeetingLibrary = ({
     () => new Set(result.transcripts.map((candidate) => candidate.id)),
     [result.transcripts],
   );
+  const matchesByTranscript = useMemo(() => {
+    const matches = new Map<string, TranscriptLibraryResult['matches']>();
+    for (const match of result.matches) {
+      const current = matches.get(match.transcriptId) ?? [];
+      current.push(match);
+      matches.set(match.transcriptId, current);
+    }
+    return matches;
+  }, [result.matches]);
   const visibleRecordings = useMemo(
     () => hasFilters
       ? recordings.filter(
@@ -354,6 +369,16 @@ export const MeetingLibrary = ({
                     <span className="meeting-row__body">
                       <strong>{title}</strong>
                       <span>{transcript.preview || 'No speech detected'}</span>
+                      {transcript && query.trim() ? (
+                        <span className="meeting-row__matches" aria-label="Why this meeting matched">
+                          {(matchesByTranscript.get(transcript.id) ?? []).map((match) => (
+                            <span className="meeting-row__match" key={`${match.field}-${match.text}`}>
+                              <span>{transcriptLibraryMatchFieldLabel(match.field)}</span>
+                              {match.text}
+                            </span>
+                          ))}
+                        </span>
+                      ) : null}
                       {transcript.tags.length ? (
                         <span className="tag-list" aria-label={`Tags: ${transcript.tags.join(', ')}`}>
                           {transcript.tags.map((transcriptTag) => (

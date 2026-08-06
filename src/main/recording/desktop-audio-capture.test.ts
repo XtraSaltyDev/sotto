@@ -3,15 +3,39 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   configureMacDesktopAudioFallback,
   MACOS_DESKTOP_AUDIO_FALLBACK_FEATURE,
+  macOSUsesCoreAudioTap,
   resolveLiveRecordingCapability,
 } from './desktop-audio-capture';
 
 describe('macOS desktop audio capture', () => {
-  it('uses Electron\'s Screen & System Audio Recording fallback on macOS', () => {
+  it.each([
+    ['14.2', true],
+    ['14.6.1', true],
+    ['26.6', true],
+    ['14.1.2', false],
+    ['13.7', false],
+  ])('selects the expected macOS capture path for %s', (version, expected) => {
+    expect(macOSUsesCoreAudioTap(version)).toBe(expected);
+  });
+
+  it('keeps Electron\'s Core Audio Tap path on macOS 14.2 and newer', () => {
+    const appendSwitch = vi.fn();
+    const getSwitchValue = vi.fn();
+
+    configureMacDesktopAudioFallback('darwin', '26.6', {
+      appendSwitch,
+      getSwitchValue,
+    });
+
+    expect(appendSwitch).not.toHaveBeenCalled();
+    expect(getSwitchValue).not.toHaveBeenCalled();
+  });
+
+  it('uses Electron\'s Screen & System Audio Recording fallback before macOS 14.2', () => {
     const appendSwitch = vi.fn();
     const getSwitchValue = vi.fn().mockReturnValue('');
 
-    configureMacDesktopAudioFallback('darwin', {
+    configureMacDesktopAudioFallback('darwin', '14.1.2', {
       appendSwitch,
       getSwitchValue,
     });
@@ -32,7 +56,7 @@ describe('macOS desktop audio capture', () => {
         `ExistingFeature,${MACOS_DESKTOP_AUDIO_FALLBACK_FEATURE}`,
       );
 
-    configureMacDesktopAudioFallback('darwin', {
+    configureMacDesktopAudioFallback('darwin', '14.1.2', {
       appendSwitch,
       getSwitchValue,
     });
@@ -49,7 +73,7 @@ describe('macOS desktop audio capture', () => {
       const appendSwitch = vi.fn();
       const getSwitchValue = vi.fn();
 
-      configureMacDesktopAudioFallback(platform, {
+      configureMacDesktopAudioFallback(platform, '14.1.2', {
         appendSwitch,
         getSwitchValue,
       });

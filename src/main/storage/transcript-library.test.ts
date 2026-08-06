@@ -4,6 +4,7 @@ import {
   TRANSCRIPT_SCHEMA_VERSION,
   type TranscriptRecord,
 } from '../transcription/transcript-types';
+import { fingerprintTranscriptForLocalAi } from '../local-ai/local-ai-meeting-summary';
 import { searchTranscriptRecords } from './transcript-library';
 
 const createRecord = (
@@ -70,18 +71,92 @@ describe('Transcript Library search', () => {
   });
 
   it('requires every search term while allowing terms from different fields', () => {
-    expect(
-      searchTranscriptRecords([createRecord()], {
-        ...query,
-        text: 'Morgan Tuesday',
-      }).records,
-    ).toHaveLength(1);
+    const result = searchTranscriptRecords([createRecord()], {
+      ...query,
+      text: 'Morgan Tuesday',
+    });
+    expect(result.records).toHaveLength(1);
+    expect(result.matches).toEqual([
+      {
+        transcriptId: createRecord().id,
+        field: 'transcript',
+        text: 'We decided to move the launch to Tuesday.',
+      },
+      { transcriptId: createRecord().id, field: 'speaker', text: 'Mórgan' },
+    ]);
     expect(
       searchTranscriptRecords([createRecord()], {
         ...query,
         text: 'Morgan Thursday',
       }).records,
     ).toHaveLength(0);
+  });
+
+  it('returns bounded excerpts from summary content as well as transcript content', () => {
+    const record = createRecord({
+      text: 'A different transcript sentence.',
+      segments: [
+        {
+          startMs: 0,
+          endMs: 4_000,
+          text: 'A different transcript sentence.',
+          speakerId: null,
+          words: [],
+        },
+      ],
+    });
+    record.localAiMeetingSummary = {
+      inputFingerprint: fingerprintTranscriptForLocalAi(record),
+      model: 'test-model',
+      generatedAt: '2026-07-27T12:11:00.000Z',
+      summary: {
+        overview: 'Approved Tuesday launch after customer review.',
+        keyPoints: [],
+        decisions: [],
+        actionItems: [],
+      },
+    };
+    const result = searchTranscriptRecords([record], {
+      ...query,
+      text: 'approved customer',
+    });
+
+    expect(result.records).toHaveLength(1);
+    expect(result.matches).toEqual([
+      {
+        transcriptId: record.id,
+        field: 'summary',
+        text: 'Approved Tuesday launch after customer review.',
+      },
+    ]);
+  });
+
+  it('limits match excerpts to three per transcript', () => {
+    const record = createRecord({
+      title: 'Launch planning',
+      text: 'Launch transcript.',
+      tags: ['Launch'],
+      segments: [
+        {
+          startMs: 0,
+          endMs: 1_000,
+          text: 'Launch segment one.',
+          speakerId: null,
+          words: [],
+        },
+        {
+          startMs: 1_000,
+          endMs: 2_000,
+          text: 'Launch segment two.',
+          speakerId: null,
+          words: [],
+        },
+      ],
+    });
+
+    expect(
+      searchTranscriptRecords([record], { ...query, text: 'launch' }).matches,
+    ).toHaveLength(3);
   });
 
   it('combines date, speaker, and tag filters', () => {

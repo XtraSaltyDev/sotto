@@ -102,7 +102,7 @@ export interface DesktopIpcOptions {
   onControllerStateChanged?: (state: AppState) => void;
   openRecordingSettings: () => Promise<void>;
   requestRecordingPermissions: () => Promise<
-    'native-requested' | 'settings-opened'
+    'native-requested' | 'native-prompted'
   >;
   revealDownloadedUpdate: (filePath: string) => void;
   relaunchForUpdate: () => void;
@@ -513,10 +513,7 @@ export const registerDesktopIpc = ({
       try {
         const outcome = await requestRecordingPermissions();
         return {
-          outcome:
-            outcome === 'native-requested'
-              ? 'requested'
-              : 'settings-opened',
+          outcome: outcome === 'native-requested' ? 'requested' : 'prompted',
         };
       } catch (error) {
         return {
@@ -881,6 +878,7 @@ export const registerDesktopIpc = ({
           transcripts: [],
           availableSpeakers: [],
           availableTags: [],
+          matches: [],
         };
       }
     },

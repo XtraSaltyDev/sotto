@@ -188,14 +188,18 @@ For an ad-hoc local build, open the DMG and drag `Sotto.app` to
 permission after an upgrade, click **Request access for this Sotto**. Because an
 ad-hoc identity changes
 when the app is rebuilt, repeat this approval after replacing Sotto with a newer
-build. If macOS does not show the native prompt, Sotto opens System Settings as
-a fallback without removing the existing entry. Under **Privacy & Security →
-Screen & System Audio Recording**, turn Sotto on. Do not remove the entry: on
-current macOS Tahoe releases, removing it can prevent Apple's native request
-from returning until the Mac is restarted. Choose **Quit & Reopen** when macOS
-asks.
+build. If macOS does not show the native prompt, dismiss any prompt first and
+use **Open System Settings** as the separate repair step. Under **Privacy &
+Security**, turn on the exact Sotto copy. Current macOS uses **System Audio
+Recording Only** for Electron's Core Audio Tap path; older macOS uses **Screen &
+System Audio Recording**. Do not remove an existing entry: on current macOS
+releases, removing it can prevent Apple's native request from returning until
+the Mac is restarted. Choose **Quit & Reopen** when macOS asks.
 If macOS has never asked for access, Sotto instead enables **Set up live
-recording** so a user click can start the system permission request.
+recording** so a user click can start the system permission request. That
+action keeps System Settings closed while the native prompt is pending; if no
+prompt appears, dismiss any prompt first and use **Open System Settings** as the
+separate repair step.
 
 Click **Import Recording**, choose a local audio/video file, and leave the
 source file in place until the job completes. The source is read-only. When the
@@ -293,10 +297,23 @@ Use **Transcript Library** to search every saved transcript. Search covers
 manual titles, full transcript text and segments, transcript-local speaker
 names, tags, and the existing local meeting-summary draft. Terms are
 case-insensitive, accent-insensitive, and can match different fields in the
-same transcript. Date, speaker, and tag filters can be combined with search.
+same transcript. Matching results also show up to three short, field-labeled
+excerpts from the transcript or summary so a cross-meeting hit can be judged
+before opening it. Date, speaker, and tag filters can be combined with search.
 Press **Command + F** on macOS or **Ctrl + F** on Windows while the library is
 open to focus its search field. Opening a result and returning to the library
 restores keyboard focus to that transcript when it is still visible.
+
+The search index is intentionally small and local: it is derived in memory from
+the saved records each app run, with a weak object cache for unchanged records.
+It normalizes case, accents, and whitespace, then requires every search term to
+occur somewhere in the same record. A valid saved Local AI summary is included;
+an edited or stale Local AI summary is ignored in favor of the built-in
+extractive summary. Search returns bounded excerpts only; it does not write an
+index file, send query or transcript text anywhere, or invoke Local AI. The
+`TranscriptLibraryResult.matches` field is shared by the main process, preload,
+and renderer, so changes to this result shape should be merged as one contract
+change and covered at all three boundaries.
 
 Open a transcript and use **Transcript information** to replace its title or
 edit its comma-separated tags. Titles are manual only; Sotto does not generate
