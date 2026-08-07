@@ -84,8 +84,11 @@ Sotto keeps two independent trust layers:
 
 The update service downloads the ZIP over HTTPS with the configured private CA,
 refuses redirects and cross-origin artifacts, enforces published size and
-SHA-256, writes a local Squirrel feed, and waits for Squirrel's
-`update-downloaded` event. **Restart now** calls `autoUpdater.quitAndInstall()`.
+SHA-256, then streams the verified file to Squirrel through a temporary server
+bound only to `127.0.0.1`. The loopback feed closes as soon as Squirrel reports
+`update-downloaded`. Do not use a `file://` feed here: macOS can buffer a large
+archive through `CFURLConnection` and crash near its 2 GB allocation boundary.
+**Restart now** calls `autoUpdater.quitAndInstall()`.
 
 Sotto must never move, delete, edit, or replace its own running app bundle. It
 must never relaunch a path inside a retired bundle. Rollback copies and update

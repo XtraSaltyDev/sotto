@@ -1,8 +1,7 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,14 +26,24 @@ afterEach(async () => {
 });
 
 describe('SquirrelMacUpdateInstaller', () => {
-  it('prepares a local Squirrel feed and installs only after validation', async () => {
+  it('streams a local Squirrel feed and installs only after validation', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'sotto-squirrel-'));
     temporaryDirectories.push(directory);
     const archivePath = path.join(directory, 'Sotto-0.2.0.zip');
     await writeFile(archivePath, 'archive');
     const updater = new FakeAutoUpdater();
+    let observedFeed: Promise<{ feedUrl: string; body: unknown }>;
     updater.checkForUpdates.mockImplementation(() => {
-      queueMicrotask(() => updater.emit('update-downloaded'));
+      const feedUrl = updater.setFeedURL.mock.calls[0][0].url as string;
+      observedFeed = (async () => {
+        const feed = await fetch(feedUrl).then(async (response) => response.json());
+        const archive = await fetch((feed as { url: string }).url).then(
+          async (response) => response.text(),
+        );
+        expect(archive).toBe('archive');
+        return { feedUrl, body: feed };
+      })();
+      void observedFeed.then(() => updater.emit('update-downloaded'));
     });
     const installer = new SquirrelMacUpdateInstaller(updater);
 
@@ -45,13 +54,14 @@ describe('SquirrelMacUpdateInstaller', () => {
     });
 
     expect(updater.setFeedURL).toHaveBeenCalledOnce();
-    const feedUrl = updater.setFeedURL.mock.calls[0][0].url as string;
-    const feed = JSON.parse(await readFile(fileURLToPath(feedUrl), 'utf8'));
-    expect(feed).toEqual({
-      url: pathToFileURL(archivePath).href,
+    const { feedUrl, body } = await observedFeed!;
+    expect(feedUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/feed\.json$/u);
+    expect(body).toEqual({
+      url: feedUrl.replace('/feed.json', '/Sotto.zip'),
       name: '0.2.0',
       pub_date: '2026-08-06T12:00:00.000Z',
     });
+    await expect(fetch(feedUrl)).rejects.toThrow();
 
     installer.installUpdate('0.2.0');
     expect(updater.quitAndInstall).toHaveBeenCalledOnce();
