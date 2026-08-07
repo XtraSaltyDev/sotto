@@ -120,6 +120,27 @@ describe('updateStateFromProgress', () => {
     })).toBe(offered);
   });
 
+  it('adopts a newer version when a retry starts from a refreshed manifest', () => {
+    const retrying: AppUpdateNoticeState = {
+      phase: 'downloading',
+      version: '0.2.0',
+      receivedBytes: 0,
+      totalBytes: 100,
+    };
+
+    expect(updateStateFromProgress(retrying, {
+      phase: 'downloading',
+      version: '0.2.1',
+      receivedBytes: 0,
+      totalBytes: 120,
+    })).toEqual({
+      phase: 'downloading',
+      version: '0.2.1',
+      receivedBytes: 0,
+      totalBytes: 120,
+    });
+  });
+
   it('ignores progress when nothing is showing', () => {
     expect(updateStateFromProgress(null, {
       phase: 'downloading',

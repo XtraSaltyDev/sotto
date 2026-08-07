@@ -75,10 +75,18 @@ export const updateStateFromProgress = (
   current: AppUpdateNoticeState | null,
   progress: AppUpdateProgress,
 ): AppUpdateNoticeState | null => {
+  // A retry re-fetches the manifest in the main process. If a newer release
+  // appeared after the original offer, its first zero-byte event is the
+  // authoritative start of this new download and should replace the stale
+  // version shown by the renderer.
+  const startsNewerDownload =
+    current?.phase === 'downloading' &&
+    progress.phase === 'downloading' &&
+    progress.receivedBytes === 0;
   if (
     !current ||
     current.phase === 'check-failed' ||
-    current.version !== progress.version ||
+    (current.version !== progress.version && !startsNewerDownload) ||
     !PROGRESS_ADOPTING_PHASES.has(current.phase)
   ) {
     return current;
