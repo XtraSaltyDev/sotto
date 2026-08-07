@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   compareAppVersions,
+  MAX_SQUIRREL_MAC_ARCHIVE_BYTES,
   UpdateService,
   updatePlatformKey,
 } from './update-service';
@@ -423,6 +424,50 @@ subjectAltName=IP:127.0.0.1
         size: archive.byteLength,
       },
     });
+  });
+
+  it('falls back to the DMG when a Squirrel archive exceeds the safe size', async () => {
+    const dmg = Buffer.from('safe-dmg-installer');
+    const archive = Buffer.from('oversized-archive-placeholder');
+    const manifest = manifestFor('0.2.0', dmg);
+    manifest.artifacts['darwin-arm64-archive'] = {
+      target: 'darwin-arm64-archive',
+      file: 'Sotto-darwin-arm64.zip',
+      downloadUrl: `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+      sha256: createHash('sha256').update(archive).digest('hex'),
+      size: MAX_SQUIRREL_MAC_ARCHIVE_BYTES + 1,
+    };
+    const fetcher = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('latest.json')
+        ? Response.json(signedManifest(manifest))
+        : new Response(dmg),
+    );
+    const root = await downloadsDirectory();
+    const prepareUpdate = vi.fn(async () => undefined);
+    const service = serviceWith(fetcher as typeof fetch, root, '0.1.9', {
+      installedAppPath: '/Applications/Sotto.app',
+      macUpdateInstaller: {
+        prepareUpdate,
+        installUpdate: vi.fn(),
+      },
+    });
+
+    await expect(service.checkForUpdates()).resolves.toEqual({
+      outcome: 'update-available',
+      update: {
+        version: '0.2.0',
+        publishedAt: '2026-07-31T12:00:00.000Z',
+        size: dmg.byteLength,
+      },
+    });
+    await expect(service.downloadUpdate()).resolves.toMatchObject({
+      outcome: 'downloaded',
+      fileName: 'Sotto-0.2.0-arm64.dmg',
+    });
+    expect(prepareUpdate).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls.map(([input]) => String(input))).not.toContain(
+      `${ORIGIN}/internal/sotto/Sotto-darwin-arm64.zip`,
+    );
   });
 
   it('treats the current and older versions as up to date', async () => {

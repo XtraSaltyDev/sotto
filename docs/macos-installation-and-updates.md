@@ -82,13 +82,21 @@ Sotto keeps two independent trust layers:
 2. Squirrel.Mac verifies the downloaded replacement against the installed
    app's Apple code requirement and applies it after the app quits.
 
-The update service downloads the ZIP over HTTPS with the configured private CA,
-refuses redirects and cross-origin artifacts, enforces published size and
-SHA-256, then streams the verified file to Squirrel through a temporary server
-bound only to `127.0.0.1`. The loopback feed closes as soon as Squirrel reports
-`update-downloaded`. Do not use a `file://` feed here: macOS can buffer a large
-archive through `CFURLConnection` and crash near its 2 GB allocation boundary.
-**Restart now** calls `autoUpdater.quitAndInstall()`.
+For an update ZIP no larger than 900 MiB, the update service downloads it over
+HTTPS with the configured private CA, refuses redirects and cross-origin
+artifacts, enforces the published size and SHA-256, then streams the verified
+file to Squirrel through a temporary server bound only to `127.0.0.1`. The
+loopback feed closes as soon as Squirrel reports `update-downloaded`. Do not use
+a `file://` feed here.
+
+Squirrel.Mac still buffers the full response internally. Sotto's bundled 1.5 GB
+Whisper model makes the current update ZIP about 1.6 GB, which can force Core
+Foundation to grow its buffer past its allocation boundary and terminate the
+app. The publisher therefore omits Mac archives above 900 MiB, and the client
+independently ignores any oversized archive that appears in a manifest. In that
+case Sotto downloads the signed, notarized DMG to Downloads and asks the user to
+quit Sotto, open the DMG, and replace the app. **Restart now** is offered only
+for a safely sized archive that Squirrel has accepted.
 
 Sotto must never move, delete, edit, or replace its own running app bundle. It
 must never relaunch a path inside a retired bundle. Rollback copies and update
@@ -103,8 +111,9 @@ safe automatic updates.
 The first corrected release must use `SOTTO_MAC_MANUAL_INSTALL_ONLY=1`. Its
 legacy-compatible signed manifest omits the Mac ZIP, causing old clients to
 download and reveal the signed/notarized DMG. Users replace the app manually
-once. The next release removes the flag and proves Developer ID A-to-B automatic
-updating.
+once. Later releases may remove the flag only after the update archive is below
+the enforced Squirrel size ceiling. With the Whisper model bundled in the app,
+normal Mac releases remain manual DMG updates.
 
 The manual replacement preserves user data because application data is outside
 the bundle. The first transition can require one final microphone or system
@@ -127,7 +136,9 @@ Release acceptance requires separate evidence for:
   and Gatekeeper acceptance;
 - publication: hosted hashes and signed manifest match the release commit;
 - installation: fresh DMG install from a representative user path;
-- update: installed Developer ID version A updates to B through Squirrel.Mac;
+- update: an installed Developer ID version downloads and installs the
+  notarized DMG, or—only for an archive below the enforced ceiling—updates
+  through Squirrel.Mac;
 - continuity: settings, transcripts, microphone, and system-audio capture remain
   usable after update;
 - network: office LAN and corporate VPN can fetch the real manifest and ZIP.

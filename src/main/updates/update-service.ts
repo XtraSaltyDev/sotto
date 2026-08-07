@@ -39,6 +39,12 @@ const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
 
+// Squirrel.Mac's legacy URL loader buffers the complete archive in memory.
+// Core Foundation grows that buffer geometrically and aborts while handling
+// Sotto's 1.6 GB package. Keep a conservative ceiling here as a second line of
+// defense even though the publisher also omits oversized archives.
+export const MAX_SQUIRREL_MAC_ARCHIVE_BYTES = 900 * 1024 * 1024;
+
 export type UpdatePlatformKey = 'darwin-arm64' | 'win32-x64';
 
 /**
@@ -212,11 +218,20 @@ export class UpdateService {
       this.options.macUpdateInstaller
     ) {
       return (
-        manifest.artifacts['darwin-arm64-archive'] ??
+        this.safeMacArchive(manifest) ??
         manifest.artifacts[platformKey]
       );
     }
     return manifest.artifacts[platformKey];
+  }
+
+  private safeMacArchive(
+    manifest: ParsedReleaseManifest,
+  ): ReleaseManifestArtifact | undefined {
+    const archive = manifest.artifacts['darwin-arm64-archive'];
+    return archive && archive.size <= MAX_SQUIRREL_MAC_ARCHIVE_BYTES
+      ? archive
+      : undefined;
   }
 
   async checkForUpdates(): Promise<CheckForAppUpdateResult> {
@@ -278,7 +293,7 @@ export class UpdateService {
         platformKey === 'darwin-arm64' &&
         this.options.installedAppPath &&
         this.options.macUpdateInstaller
-          ? manifest.artifacts['darwin-arm64-archive']
+          ? this.safeMacArchive(manifest)
           : undefined;
       if (archive) {
         return await this.stageInPlaceUpdate(
