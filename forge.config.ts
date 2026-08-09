@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -13,6 +13,8 @@ import { WebpackPlugin } from '@electron-forge/plugin-webpack';
 import { mainConfig } from './webpack.main.config';
 import { rendererConfig } from './webpack.renderer.config';
 import { SOTTO_APP_BUNDLE_ID } from './src/shared/app-identity';
+import { createSourceProvenance } from './scripts/source-provenance.cjs';
+
 
 export const createMacSignOptions = (configuredIdentity?: string) => {
   const identity = configuredIdentity?.trim();
@@ -36,12 +38,21 @@ export const createMacNotarizeOptions = (configuredProfile?: string) => {
   return keychainProfile ? { keychainProfile } : undefined;
 };
 
-export const createWindowsSquirrelOptions = () => ({
-  // Keep the package name lowercase for stable Squirrel update metadata while
-  // productName continues to control the user-facing application name.
-  name: 'sotto',
-  setupIcon: './resources/Sotto.ico',
-});
+export const createWindowsSquirrelOptions = (configuredThumbprint?: string) => {
+  const certificateSha1 = configuredThumbprint?.trim().toUpperCase();
+  if (certificateSha1 && !/^[0-9A-F]{40}$/u.test(certificateSha1)) {
+    throw new Error(
+      'SOTTO_WINDOWS_SIGNING_CERTIFICATE_SHA1 must be a 40-character certificate thumbprint.',
+    );
+  }
+  return {
+    // Keep the package name lowercase for stable Squirrel update metadata while
+    // productName continues to control the user-facing application name.
+    name: 'sotto',
+    setupIcon: './resources/Sotto.ico',
+    ...(certificateSha1 ? { certificateSha1 } : {}),
+  };
+};
 
 export const createMacDmgOptions = (configuredIdentity?: string) => {
   const identity = configuredIdentity?.trim();
@@ -112,30 +123,53 @@ export const resolveUpdateCaExtraResources = (
   );
 
 export type PackageBuildReceipt = Readonly<{
-  schemaVersion: 1;
+  schemaVersion: 2;
   app: 'sotto';
   bundleId: typeof SOTTO_APP_BUNDLE_ID;
   version: string;
   commit: string;
+  sourceState: 'clean' | 'dirty';
+  sourceDigest: string;
+  lockfileSha256: string;
+  nodeVersion: string;
 }>;
 
 export const createPackageBuildReceipt = (
   version: string,
-  commit: string,
+  provenance: Readonly<{
+    commit: string;
+    sourceState: 'clean' | 'dirty';
+    sourceDigest: string;
+  }>,
+  lockfileSha256: string,
+  nodeVersion: string,
 ): PackageBuildReceipt => {
   if (!/^\d+\.\d+\.\d+$/u.test(version)) {
     throw new Error('The package build receipt version is invalid.');
   }
-  if (!/^[0-9a-f]{40}$/u.test(commit)) {
+  if (!/^[0-9a-f]{40}$/u.test(provenance.commit)) {
     throw new Error('The package build receipt commit is invalid.');
+  }
+  if (!/^[0-9a-f]{64}$/u.test(provenance.sourceDigest)) {
+    throw new Error('The package build receipt source digest is invalid.');
+  }
+  if (!/^[0-9a-f]{64}$/u.test(lockfileSha256)) {
+    throw new Error('The package build receipt lockfile digest is invalid.');
+  }
+  if (!/^v\d+\.\d+\.\d+$/u.test(nodeVersion)) {
+    throw new Error('The package build receipt Node version is invalid.');
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     app: 'sotto',
     bundleId: SOTTO_APP_BUNDLE_ID,
     version,
-    commit,
+    commit: provenance.commit,
+    sourceState: provenance.sourceState,
+    sourceDigest: provenance.sourceDigest,
+    lockfileSha256,
+    nodeVersion,
   };
 };
 
@@ -421,12 +455,20 @@ const updateCaExtraResources = resolveUpdateCaExtraResources(
 const sourcePackage = JSON.parse(
   readFileSync(path.join(__dirname, 'package.json'), 'utf8'),
 ) as { version: string };
+const projectSourceProvenance = createSourceProvenance(__dirname);
+if (
+  process.env.SOTTO_REQUIRE_CLEAN_SOURCE === '1' &&
+  projectSourceProvenance.sourceState !== 'clean'
+) {
+  throw new Error('Release packaging requires a clean source checkout.');
+}
 const packageBuildReceipt = createPackageBuildReceipt(
   sourcePackage.version,
-  execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: __dirname,
-    encoding: 'utf8',
-  }).trim(),
+  projectSourceProvenance,
+  createHash('sha256')
+    .update(readFileSync(path.join(__dirname, 'package-lock.json')))
+    .digest('hex'),
+  process.version,
 );
 const writePackageBuildReceipt =
   createWritePackageBuildReceiptHook(packageBuildReceipt);
@@ -478,7 +520,11 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel(createWindowsSquirrelOptions()),
+    new MakerSquirrel(
+      createWindowsSquirrelOptions(
+        process.env.SOTTO_WINDOWS_SIGNING_CERTIFICATE_SHA1,
+      ),
+    ),
     // ZIP has no host-specific tooling, so it is also the portable Windows
     // artifact that can be assembled from a macOS development machine.
     new MakerZIP({}, ['darwin', 'win32']),

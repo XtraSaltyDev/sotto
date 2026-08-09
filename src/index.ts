@@ -36,6 +36,7 @@ import {
 } from './main/recording/desktop-audio-capture';
 import { requestMacScreenRecordingAccess } from './main/recording/macos-screen-recording-access';
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
+import { provisionManagedDefaultModel } from './main/runtime/managed-model';
 import { TranscriptRepository } from './main/storage/transcript-repository';
 import { createPlaybackResponse } from './main/media/playback-response';
 import { LocalAiConnectionService } from './main/local-ai/local-ai-connection';
@@ -395,10 +396,28 @@ const initialize = async (): Promise<void> => {
       (permission === 'media' || String(permission) === 'display-capture'),
   );
 
+  const userModelsDirectory = path.join(app.getPath('userData'), 'models');
+  const managedModelsDirectory = path.join(
+    app.getPath('userData'),
+    'managed-models',
+    DEFAULT_TRANSCRIPTION_MODEL.revision,
+  );
+  await mkdir(userModelsDirectory, { recursive: true }).catch(() => undefined);
+  const managedModelPath = app.isPackaged
+    ? await provisionManagedDefaultModel({
+        bundledModelPath: path.join(
+          process.resourcesPath,
+          'models',
+          DEFAULT_TRANSCRIPTION_MODEL.fileName,
+        ),
+        managedModelsDirectory,
+      })
+    : undefined;
   const runtimeStatus = await resolveEngineRuntime({
     appPath: app.getAppPath(),
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
+    managedModelPath,
   });
   const repository = new TranscriptRepository(
     path.join(app.getPath('userData'), 'transcripts'),
@@ -407,8 +426,6 @@ const initialize = async (): Promise<void> => {
     path.join(app.getPath('userData'), 'settings.json'),
   );
   await settingsStore.load();
-  const userModelsDirectory = path.join(app.getPath('userData'), 'models');
-  await mkdir(userModelsDirectory, { recursive: true }).catch(() => undefined);
   const bundledModelsDirectory = runtimeStatus.ready
     ? path.dirname(runtimeStatus.runtime.modelPath)
     : path.join(process.resourcesPath, 'models');
@@ -497,12 +514,24 @@ const initialize = async (): Promise<void> => {
         return undefined;
       })
     : undefined;
+  const packageCommit = app.isPackaged
+    ? await readFile(path.join(process.resourcesPath, 'sotto-build.json'), 'utf8')
+        .then((raw) => {
+          const receipt = JSON.parse(raw) as { commit?: unknown };
+          return typeof receipt.commit === 'string' &&
+            /^[0-9a-f]{40}$/u.test(receipt.commit)
+            ? receipt.commit
+            : undefined;
+        })
+        .catch(() => undefined)
+    : undefined;
   const updateService = new UpdateService({
     manifestUrl:
       updateConfiguration?.manifestUrl ?? DEFAULT_SOTTO_UPDATE_MANIFEST_URL,
     trustedManifestKeys:
       updateConfiguration?.trustedManifestKeys ?? {},
     currentVersion: app.getVersion(),
+    currentCommit: packageCommit,
     platformKey: updatePlatformKey(process.platform, process.arch),
     downloadsDirectory: app.getPath('downloads'),
     stagingDirectory: path.join(app.getPath('userData'), 'updates'),
@@ -575,6 +604,7 @@ const initialize = async (): Promise<void> => {
     controller,
     localAiService,
     updateService,
+    getAppVersion: () => app.getVersion(),
     getMainWindow: () => mainWindow,
     getActivityWindow: () => activityWindow,
     collapseForActivity,

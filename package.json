@@ -1,13 +1,14 @@
 {
   "name": "sotto",
   "productName": "Sotto",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "description": "Private, local-first desktop transcription.",
   "main": ".webpack/main",
   "private": true,
+  "packageManager": "npm@11.17.0",
   "engines": {
-    "node": ">=22.12.0",
-    "npm": ">=10"
+    "node": ">=24.19.0 <25",
+    "npm": "11.17.0"
   },
   "scripts": {
     "start": "electron-forge start",
@@ -19,7 +20,10 @@
     "make:windows:zip": "electron-forge make --platform=win32 --arch=x64 --targets=@electron-forge/maker-zip",
     "verify:package:mac": "node scripts/verify-packaged-app.mjs darwin-arm64",
     "verify:package:windows": "node scripts/verify-packaged-app.mjs win32-x64",
-    "publish": "electron-forge publish",
+    "release:candidate": "bash scripts/release.sh",
+    "release:stage": "bash scripts/publish-spark-distribution.sh",
+    "release:promote": "bash scripts/promote-spark-distribution.sh",
+    "verify:toolchain": "node scripts/verify-toolchain.mjs",
     "lint": "eslint --ext .ts,.tsx .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude '**/.build/**' --exclude '**/*.integration.test.ts'",
@@ -41,6 +45,10 @@
     "email": "116808225+XtraSaltyDev@users.noreply.github.com"
   },
   "license": "MIT",
+  "overrides": {
+    "tar": "7.5.22",
+    "tmp": "0.2.7"
+  },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",
     "@electron-forge/maker-dmg": "^7.11.2",
@@ -56,7 +64,7 @@
     "@typescript-eslint/parser": "^8.65.0",
     "@vercel/webpack-asset-relocator-loader": "1.7.3",
     "css-loader": "^6.11.0",
-    "electron": "43.2.0",
+    "electron": "43.3.0",
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
     "fork-ts-checker-webpack-plugin": "^7.3.0",

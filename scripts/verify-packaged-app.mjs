@@ -9,9 +9,11 @@ import { extractFile } from '@electron/asar';
 
 import updateConfig from '../src/main/updates/update-config.cjs';
 import packageBuildReceipt from './package-build-receipt.cjs';
+import sourceProvenance from './source-provenance.cjs';
 
 const { parseUpdateConfiguration } = updateConfig;
 const { validatePackageBuildReceipt } = packageBuildReceipt;
+const { createSourceProvenance } = sourceProvenance;
 
 const [target, suppliedAppPath] = process.argv.slice(2);
 const targets = {
@@ -196,12 +198,15 @@ await Promise.all([
 const sourcePackage = JSON.parse(
   await readFile(path.resolve('package.json'), 'utf8'),
 );
-const expectedCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
-  encoding: 'utf8',
-}).trim();
+const expectedProvenance = createSourceProvenance(process.cwd());
 const buildReceipt = validatePackageBuildReceipt(
   JSON.parse(await readFile(buildReceiptPath, 'utf8')),
-  { version: sourcePackage.version, commit: expectedCommit },
+  {
+    version: sourcePackage.version,
+    ...expectedProvenance,
+    lockfileSha256: await sha256(path.resolve('package-lock.json')),
+    nodeVersion: process.version,
+  },
 );
 let secureUpdateConfiguration = 'not embedded';
 try {

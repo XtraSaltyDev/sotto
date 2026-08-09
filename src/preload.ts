@@ -20,6 +20,7 @@ import {
 
 const api: SottoDesktopApi = Object.freeze({
   getAppState: () => ipcRenderer.invoke(IPC_CHANNELS.getAppState),
+  getAppVersion: () => ipcRenderer.invoke(IPC_CHANNELS.getAppVersion),
   importMedia: (expectedSpeakerCount: ExpectedSpeakerCount = null) =>
     ipcRenderer.invoke(IPC_CHANNELS.importMedia, expectedSpeakerCount),
   startLiveRecording: (kind: RecordingKind = 'meeting') =>
@@ -210,6 +211,8 @@ const api: SottoDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.checkForAppUpdate),
   downloadAppUpdate: () =>
     ipcRenderer.invoke(IPC_CHANNELS.downloadAppUpdate),
+  revealDownloadedAppUpdate: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.revealDownloadedAppUpdate),
   cancelAppUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.cancelAppUpdate),
   installAppUpdate: () =>
     ipcRenderer.invoke(IPC_CHANNELS.installAppUpdate),

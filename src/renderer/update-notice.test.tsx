@@ -33,6 +33,7 @@ describe('UpdateNotice', () => {
       <UpdateNotice
         onDismiss={vi.fn()}
         onDownload={vi.fn()}
+        onRevealDownloaded={vi.fn()}
         state={{
           phase: 'downloaded',
           fileName: 'Sotto-0.2.0-arm64.dmg',
@@ -43,7 +44,9 @@ describe('UpdateNotice', () => {
 
     expect(markup).toContain('Update ready to install');
     expect(markup).toContain('Sotto-0.2.0-arm64.dmg');
-    expect(markup).toContain('Downloads folder');
+    expect(markup).toContain('in Downloads');
+    expect(markup).toContain('Show in Finder');
+    expect(markup).toContain('replace Sotto in Applications');
   });
 
   it('shows download progress and a cancel action', () => {
@@ -226,6 +229,7 @@ describe('UpdatePopup', () => {
     onDismiss: vi.fn(),
     onDownload: vi.fn(),
     onInstall: vi.fn(),
+    onRevealDownloaded: vi.fn(),
   };
 
   it('shows a determinate progress bar while downloading', () => {
@@ -273,6 +277,23 @@ describe('UpdatePopup', () => {
 
     expect(markup).toContain('Update failed');
     expect(markup).toContain('Retry');
+  });
+
+  it('keeps the manual DMG available after download', () => {
+    const markup = renderToStaticMarkup(
+      <UpdatePopup
+        {...handlers}
+        state={{
+          phase: 'downloaded',
+          fileName: 'Sotto-0.1.29-arm64.dmg',
+          version: '0.1.29',
+        }}
+      />,
+    );
+
+    expect(markup).toContain('Show in Finder');
+    expect(markup).toContain('open the DMG');
+    expect(markup).toContain('replace Sotto in Applications');
   });
 
   it('clamps progress percentages and reports unknown totals as null', () => {

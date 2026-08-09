@@ -10,6 +10,7 @@ import {
 import type {
   AppUpdateProgress,
   AppState,
+  CheckForAppUpdateResult,
   ExpectedSpeakerCount,
   CapturePermissionState,
   LiveCaptureHealth,
@@ -159,6 +160,8 @@ const MainApp = ({
     ReadonlySet<string>
   >(new Set());
   const [appUpdate, setAppUpdate] = useState<AppUpdateNoticeState | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
   const [isUpdatePopupOpen, setIsUpdatePopupOpen] = useState(false);
   /** Latest update notice, for listeners registered once at mount. */
   const appUpdateRef = useRef<AppUpdateNoticeState | null>(null);
@@ -333,8 +336,22 @@ const MainApp = ({
   }, [appUpdate]);
 
   useEffect(() => {
-    if (!window.sotto?.onManualUpdateCheck) return undefined;
-    return window.sotto.onManualUpdateCheck((result) => {
+    let cancelled = false;
+    window.sotto
+      .getAppVersion()
+      .then((version) => {
+        if (!cancelled) setAppVersion(version);
+      })
+      .catch(() => {
+        if (!cancelled) setAppVersion(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const applyManualUpdateCheck = useCallback(
+    (result: CheckForAppUpdateResult) => {
       // Decided outside the state updater: opening the popup is an action, and
       // React may invoke an updater more than once.
       const { state, openPopup } = updateStateFromManualCheck(
@@ -343,8 +360,14 @@ const MainApp = ({
       );
       setAppUpdate(state);
       if (openPopup) setIsUpdatePopupOpen(true);
-    });
-  }, []);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!window.sotto?.onManualUpdateCheck) return undefined;
+    return window.sotto.onManualUpdateCheck(applyManualUpdateCheck);
+  }, [applyManualUpdateCheck]);
 
   useEffect(() => {
     if (!window.sotto?.onAppUpdateProgress) return undefined;
@@ -391,6 +414,36 @@ const MainApp = ({
         reason: 'Sotto could not install the update.',
         version,
       });
+    }
+  };
+
+  const revealDownloadedAppUpdate = async (version: string) => {
+    try {
+      const result = await window.sotto.revealDownloadedAppUpdate();
+      if (result.outcome === 'unavailable') {
+        setAppUpdate({ phase: 'failed', reason: result.reason, version });
+      }
+    } catch {
+      setAppUpdate({
+        phase: 'failed',
+        reason: 'Sotto could not show the downloaded installer.',
+        version,
+      });
+    }
+  };
+
+  const checkForAppUpdates = async () => {
+    if (isCheckingForUpdate) return;
+    setIsCheckingForUpdate(true);
+    try {
+      applyManualUpdateCheck(await window.sotto.checkForAppUpdate());
+    } catch {
+      applyManualUpdateCheck({
+        outcome: 'unavailable',
+        reason: 'Sotto could not check for updates.',
+      });
+    } finally {
+      setIsCheckingForUpdate(false);
     }
   };
 
@@ -451,6 +504,11 @@ const MainApp = ({
       onInstall={() => {
         if (appUpdate.phase === 'ready') {
           void installAppUpdate(appUpdate.version);
+        }
+      }}
+      onRevealDownloaded={() => {
+        if (appUpdate.phase === 'downloaded') {
+          void revealDownloadedAppUpdate(appUpdate.version);
         }
       }}
       state={appUpdate}
@@ -1820,7 +1878,14 @@ const MainApp = ({
           updateNotice={updateNotice}
         />
         {updatePopup}
-        <SettingsPage onToggleTheme={onToggleTheme} theme={theme} />
+        <SettingsPage
+          appUpdate={appUpdate}
+          appVersion={appVersion}
+          isCheckingForUpdate={isCheckingForUpdate}
+          onCheckForUpdates={checkForAppUpdates}
+          onToggleTheme={onToggleTheme}
+          theme={theme}
+        />
       </div>
     );
   }

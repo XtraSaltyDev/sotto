@@ -96,6 +96,13 @@ type Harness = {
   dispose: () => void;
   mainWindow: FakeWindow;
   requestRecordingPermissions: ReturnType<typeof vi.fn>;
+  revealDownloadedUpdate: ReturnType<typeof vi.fn>;
+  updateService: {
+    checkForUpdates: ReturnType<typeof vi.fn>;
+    downloadUpdate: ReturnType<typeof vi.fn>;
+    cancelDownload: ReturnType<typeof vi.fn>;
+    installUpdate: ReturnType<typeof vi.fn>;
+  };
 };
 
 type PermissionRepairOutcome = 'native-requested' | 'native-prompted';
@@ -109,6 +116,8 @@ const setup = (
   overrides: {
     mainWindow?: FakeWindow | null;
     annotationEnabled?: boolean;
+    downloadAppUpdateResult?: unknown;
+    appVersion?: string;
     requestRecordingPermissionsOutcome?: PermissionRepairOutcome;
   } = {},
 ): Harness => {
@@ -121,6 +130,15 @@ const setup = (
   const requestRecordingPermissions = vi.fn(async () =>
     overrides.requestRecordingPermissionsOutcome ?? 'native-requested',
   );
+  const updateService = {
+    checkForUpdates: vi.fn(async () => ({ outcome: 'up-to-date', version: '0.1.29' })),
+    downloadUpdate: vi.fn(async () =>
+      overrides.downloadAppUpdateResult ?? { outcome: 'failed', reason: 'no' },
+    ),
+    cancelDownload: vi.fn(),
+    installUpdate: vi.fn(async () => ({ outcome: 'failed', reason: 'no' })),
+  };
+  const revealDownloadedUpdate = vi.fn();
   const dispose = registerDesktopIpc({
     controller: controller as never,
     localAiService: {
@@ -128,19 +146,15 @@ const setup = (
       connect: vi.fn(async () => ({ outcome: 'rejected', reason: 'no' })),
       disconnect: vi.fn(async () => undefined),
     } as never,
-    updateService: {
-      checkForUpdate: vi.fn(async () => ({ outcome: 'up-to-date' })),
-      download: vi.fn(async () => ({ outcome: 'failed', reason: 'no' })),
-      cancel: vi.fn(),
-      install: vi.fn(async () => ({ outcome: 'failed', reason: 'no' })),
-    } as never,
+    updateService: updateService as never,
+    getAppVersion: () => overrides.appVersion ?? '0.1.29',
     getMainWindow: () => (mainWindow as never) ?? null,
     getActivityWindow: () => activityWindow as never,
     collapseForActivity: vi.fn(),
     restoreMainWindow: vi.fn(),
     openRecordingSettings: vi.fn(async () => undefined),
     requestRecordingPermissions,
-    revealDownloadedUpdate: vi.fn(),
+    revealDownloadedUpdate,
     appSettings: {
       get: vi.fn(async () => ({}) as never),
       update: vi.fn(async () => ({ outcome: 'updated' as const })),
@@ -154,6 +168,8 @@ const setup = (
     dispose,
     mainWindow: mainWindow as FakeWindow,
     requestRecordingPermissions,
+    revealDownloadedUpdate,
+    updateService,
   };
 };
 
@@ -246,6 +262,52 @@ describe('registerDesktopIpc sender trust', () => {
       ),
     ).rejects.toThrow('untrusted');
     expect(controller.getTranscript).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerDesktopIpc app update handoff', () => {
+  it('returns the main-process app version to the trusted renderer', async () => {
+    const { mainWindow } = setup({ appVersion: '0.1.29' });
+
+    expect(invoke(IPC_CHANNELS.getAppVersion, eventFrom(mainWindow))).toBe(
+      '0.1.29',
+    );
+  });
+
+  it('keeps the downloaded installer path in main and reveals it again', async () => {
+    const filePath = '/Users/test/Downloads/Sotto-0.1.29-arm64.dmg';
+    const { mainWindow, revealDownloadedUpdate } = setup({
+      downloadAppUpdateResult: {
+        outcome: 'downloaded',
+        fileName: 'Sotto-0.1.29-arm64.dmg',
+        filePath,
+        version: '0.1.29',
+      },
+    });
+    const event = eventFrom(mainWindow);
+
+    await expect(
+      invoke(IPC_CHANNELS.downloadAppUpdate, event),
+    ).resolves.toEqual({
+      outcome: 'downloaded',
+      fileName: 'Sotto-0.1.29-arm64.dmg',
+      version: '0.1.29',
+    });
+    expect(invoke(IPC_CHANNELS.revealDownloadedAppUpdate, event)).toEqual({
+      outcome: 'revealed',
+    });
+
+    expect(revealDownloadedUpdate).toHaveBeenCalledTimes(2);
+    expect(revealDownloadedUpdate).toHaveBeenLastCalledWith(filePath);
+  });
+
+  it('does not invent a downloaded installer path', async () => {
+    const { mainWindow, revealDownloadedUpdate } = setup();
+
+    expect(
+      invoke(IPC_CHANNELS.revealDownloadedAppUpdate, eventFrom(mainWindow)),
+    ).toMatchObject({ outcome: 'unavailable' });
+    expect(revealDownloadedUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -556,6 +618,7 @@ describe('registerDesktopIpc teardown', () => {
       controller: controller as never,
       localAiService: {} as never,
       updateService: {} as never,
+      getAppVersion: () => '0.1.29',
       getMainWindow: () => mainWindow as never,
       getActivityWindow: () => null,
       collapseForActivity: vi.fn(),

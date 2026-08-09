@@ -56,7 +56,10 @@ describe('signed release manifests', () => {
         },
         'https://updates.example.test/internal/sotto/latest.json',
       ),
-    ).toMatchObject({ releaseKind: 'internal-developer-id' });
+    ).toMatchObject({
+      releaseKind: 'internal-developer-id',
+      deliveryMode: 'manual-dmg',
+    });
   });
 
   it('verifies a valid Ed25519 manifest and returns authenticated fields', () => {

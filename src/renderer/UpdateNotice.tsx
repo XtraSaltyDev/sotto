@@ -98,6 +98,7 @@ export const UpdatePopup = ({
   onDismiss,
   onDownload,
   onInstall,
+  onRevealDownloaded,
   state,
 }: {
   onCancel: () => void;
@@ -105,6 +106,7 @@ export const UpdatePopup = ({
   onDismiss: () => void;
   onDownload: () => void;
   onInstall: () => void;
+  onRevealDownloaded?: () => void;
   state: AppUpdateNoticeState;
 }) => {
   const percent =
@@ -202,10 +204,19 @@ export const UpdatePopup = ({
           <>
             <strong>Update ready to install</strong>
             <p>
-              {state.fileName} is in your Downloads folder. Quit Sotto and
-              install it to finish updating.
+              {state.fileName} is in Downloads. Quit Sotto, open the DMG, and
+              replace Sotto in Applications to finish updating.
             </p>
             <div className="update-popup__actions">
+              {onRevealDownloaded ? (
+                <button
+                  className="update-popup__primary"
+                  onClick={onRevealDownloaded}
+                  type="button"
+                >
+                  Show in Finder
+                </button>
+              ) : null}
               <button className="update-popup__secondary" onClick={onClose} type="button">
                 Done
               </button>
@@ -250,12 +261,14 @@ export const UpdateNotice = ({
   onDownload,
   onCancel,
   onInstall,
+  onRevealDownloaded,
   state,
 }: {
   onDismiss: () => void;
   onDownload: () => void;
   onCancel?: () => void;
   onInstall?: () => void;
+  onRevealDownloaded?: () => void;
   state: AppUpdateNoticeState;
 }) => (
   <aside
@@ -329,9 +342,14 @@ export const UpdateNotice = ({
       <>
         <div>
           <strong>Update ready to install</strong>
-          <p>{state.fileName} is in your Downloads folder. Quit Sotto and install it to finish updating.</p>
+          <p>{state.fileName} is in Downloads. Quit Sotto, open the DMG, and replace Sotto in Applications to finish updating.</p>
         </div>
         <div className="update-notice__actions">
+          {onRevealDownloaded ? (
+            <button className="update-notice__download" onClick={onRevealDownloaded} type="button">
+              Show in Finder
+            </button>
+          ) : null}
           <button className="update-notice__dismiss" onClick={onDismiss} type="button">
             Done
           </button>

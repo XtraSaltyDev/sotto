@@ -180,10 +180,9 @@ describe('updateStateFromDownloadResult', () => {
 
     expect(updateStateFromDownloadResult(
       {
-        outcome: 'downloaded',
-        fileName: 'Sotto-0.2.0.dmg',
-        filePath: '/tmp/Sotto-0.2.0.dmg',
-        version: '0.2.0',
+      outcome: 'downloaded',
+      fileName: 'Sotto-0.2.0.dmg',
+      version: '0.2.0',
       },
       '0.2.0',
     )).toEqual({

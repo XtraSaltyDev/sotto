@@ -15,6 +15,12 @@ import type {
   DownloadAppUpdateResult,
   InstallAppUpdateResult,
 } from '../../shared/contracts';
+
+type UpdateServiceDownloadResult =
+  | Exclude<DownloadAppUpdateResult, { outcome: 'downloaded' }>
+  | (Extract<DownloadAppUpdateResult, { outcome: 'downloaded' }> & {
+      filePath: string;
+    });
 import {
   verifyReleaseManifest,
 } from './release-manifest.cjs';
@@ -56,6 +62,8 @@ export interface UpdateServiceOptions {
   manifestUrl: string | null;
   trustedManifestKeys: TrustedReleaseKeys;
   currentVersion: string;
+  /** Exact source commit in the installed signed package receipt, when available. */
+  currentCommit?: string;
   platformKey: UpdatePlatformKey | null;
   downloadsDirectory: string;
   /** Private scratch directory for verified updater artifacts. */
@@ -237,6 +245,7 @@ export class UpdateService {
   async checkForUpdates(): Promise<CheckForAppUpdateResult> {
     try {
       const manifest = await this.fetchManifest();
+      this.assertCurrentReleaseIdentity(manifest);
       if (
         compareAppVersions(manifest.version, this.options.currentVersion) <= 0
       ) {
@@ -263,7 +272,7 @@ export class UpdateService {
     }
   }
 
-  async downloadUpdate(): Promise<DownloadAppUpdateResult> {
+  async downloadUpdate(): Promise<UpdateServiceDownloadResult> {
     if (this.downloadInProgress) {
       return {
         outcome: 'failed',
@@ -275,6 +284,7 @@ export class UpdateService {
     let updateVersion: string | null = null;
     try {
       const manifest = await this.fetchManifest();
+      this.assertCurrentReleaseIdentity(manifest);
       updateVersion = manifest.version;
       if (
         compareAppVersions(manifest.version, this.options.currentVersion) <= 0
@@ -361,7 +371,7 @@ export class UpdateService {
     version: string,
     publishedAt: string,
     artifact: ReleaseManifestArtifact,
-  ): Promise<DownloadAppUpdateResult> {
+  ): Promise<Extract<DownloadAppUpdateResult, { outcome: 'staged' }>> {
     const macUpdateInstaller = this.options.macUpdateInstaller;
     if (!macUpdateInstaller) {
       throw new TypeError('The macOS update installer is not available.');
@@ -435,7 +445,7 @@ export class UpdateService {
     version: string,
     platformKey: UpdatePlatformKey,
     artifact: ReleaseManifestArtifact,
-  ): Promise<DownloadAppUpdateResult> {
+  ): Promise<UpdateServiceDownloadResult> {
     await mkdir(this.options.downloadsDirectory, { recursive: true });
     const fileName = artifactFileName(version, platformKey);
     const filePath = path.join(this.options.downloadsDirectory, fileName);
@@ -628,6 +638,21 @@ export class UpdateService {
       throw error;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  private assertCurrentReleaseIdentity(
+    manifest: ParsedReleaseManifest,
+  ): void {
+    const currentCommit = this.options.currentCommit;
+    if (
+      currentCommit &&
+      manifest.version === this.options.currentVersion &&
+      manifest.commit !== currentCommit
+    ) {
+      throw new TypeError(
+        'The published release reuses this version with a different source commit.',
+      );
     }
   }
 }

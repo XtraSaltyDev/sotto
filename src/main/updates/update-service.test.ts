@@ -84,6 +84,7 @@ const serviceWith = (
   downloads: string,
   currentVersion = '0.1.9',
   options: {
+    currentCommit?: string;
     installedAppPath?: string | null;
     macUpdateInstaller?: MacUpdateInstaller;
     onProgress?: (progress: AppUpdateProgress) => void;
@@ -93,6 +94,7 @@ const serviceWith = (
     manifestUrl: MANIFEST_URL,
     trustedManifestKeys: testTrustedKeys,
     currentVersion,
+    currentCommit: options.currentCommit,
     platformKey: 'darwin-arm64',
     downloadsDirectory: downloads,
     stagingDirectory: path.join(downloads, 'staging'),
@@ -388,6 +390,25 @@ subjectAltName=IP:127.0.0.1
         publishedAt: '2026-07-31T12:00:00.000Z',
         size: artifact.byteLength,
       },
+    });
+  });
+
+  it('rejects a same-version manifest from a different source commit', async () => {
+    const artifact = Buffer.from('replacement-build');
+    const fetcher = vi.fn(async () =>
+      Response.json(signedManifest(manifestFor('0.1.9', artifact))),
+    );
+    const service = serviceWith(
+      fetcher as typeof fetch,
+      await downloadsDirectory(),
+      '0.1.9',
+      { currentCommit: 'f'.repeat(40) },
+    );
+
+    await expect(service.checkForUpdates()).resolves.toEqual({
+      outcome: 'unavailable',
+      reason:
+        'The published release reuses this version with a different source commit.',
     });
   });
 

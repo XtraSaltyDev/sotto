@@ -258,6 +258,10 @@ const parseAuthenticatedManifest = (
     app: 'sotto',
     channel: 'internal',
     releaseKind: value.releaseKind,
+    deliveryMode:
+      artifacts['darwin-arm64-archive'] === undefined
+        ? 'manual-dmg'
+        : 'automatic-archive',
     version: value.version,
     bundleId: 'com.sotto.desktop',
     commit: value.commit,

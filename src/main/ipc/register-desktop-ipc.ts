@@ -53,6 +53,7 @@ import {
   type RetranscribeTranscriptResult,
   type RetryRecordingResult,
   type RequestRecordingPermissionsResult,
+  type RevealDownloadedAppUpdateResult,
   type RenameTranscriptSpeakerResult,
   type MergeTranscriptSpeakersResult,
   type StartLiveRecordingResult,
@@ -101,6 +102,7 @@ export interface DesktopIpcOptions {
   controller: AppController;
   localAiService: LocalAiConnectionService;
   updateService: UpdateService;
+  getAppVersion: () => string;
   getMainWindow: () => BrowserWindow | null;
   getActivityWindow: () => BrowserWindow | null;
   collapseForActivity: (mode: ActivityMode) => void;
@@ -288,6 +290,7 @@ export const registerDesktopIpc = ({
   controller,
   localAiService,
   updateService,
+  getAppVersion,
   getMainWindow,
   getActivityWindow,
   collapseForActivity,
@@ -298,6 +301,7 @@ export const registerDesktopIpc = ({
   revealDownloadedUpdate,
   appSettings,
 }: DesktopIpcOptions): (() => void) => {
+  let downloadedUpdatePath: string | null = null;
   const trust = (event: IpcMainInvokeEvent): BrowserWindow =>
     assertTrustedSender(event, getMainWindow);
   const rendererTrust = (event: IpcMainInvokeEvent): BrowserWindow =>
@@ -306,6 +310,11 @@ export const registerDesktopIpc = ({
   ipcMain.handle(IPC_CHANNELS.getAppState, (event) => {
     rendererTrust(event);
     return controller.getState();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.getAppVersion, (event): string => {
+    trust(event);
+    return getAppVersion();
   });
 
   ipcMain.handle(
@@ -432,11 +441,30 @@ export const registerDesktopIpc = ({
     IPC_CHANNELS.downloadAppUpdate,
     async (event): Promise<DownloadAppUpdateResult> => {
       trust(event);
+      downloadedUpdatePath = null;
       const result = await updateService.downloadUpdate();
       if (result.outcome === 'downloaded') {
-        revealDownloadedUpdate(result.filePath);
+        const { filePath, ...rendererResult } = result;
+        downloadedUpdatePath = filePath;
+        revealDownloadedUpdate(filePath);
+        return rendererResult;
       }
       return result;
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.revealDownloadedAppUpdate,
+    (event): RevealDownloadedAppUpdateResult => {
+      trust(event);
+      if (!downloadedUpdatePath) {
+        return {
+          outcome: 'unavailable',
+          reason: 'The downloaded installer is no longer available. Download it again.',
+        };
+      }
+      revealDownloadedUpdate(downloadedUpdatePath);
+      return { outcome: 'revealed' };
     },
   );
 
@@ -1406,6 +1434,7 @@ export const registerDesktopIpc = ({
     unsubscribe();
     for (const channel of [
       IPC_CHANNELS.getAppState,
+      IPC_CHANNELS.getAppVersion,
       IPC_CHANNELS.retranscribeTranscript,
       IPC_CHANNELS.getAppSettings,
       IPC_CHANNELS.updateAppSettings,
@@ -1419,6 +1448,7 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.cancelLocalAiMeetingSummary,
       IPC_CHANNELS.checkForAppUpdate,
       IPC_CHANNELS.downloadAppUpdate,
+      IPC_CHANNELS.revealDownloadedAppUpdate,
       IPC_CHANNELS.cancelAppUpdate,
       IPC_CHANNELS.installAppUpdate,
       IPC_CHANNELS.importMedia,

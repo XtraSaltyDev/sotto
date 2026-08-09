@@ -8,6 +8,7 @@ import { DEFAULT_TRANSCRIPTION_MODEL } from '../shared/default-transcription-mod
 import {
   CheckCircleIcon,
   ChevronDownIcon,
+  DownloadIcon,
   FolderIcon,
   KeyboardIcon,
   ModelIcon,
@@ -15,12 +16,14 @@ import {
   SunIcon,
 } from './icons';
 import { type AppTheme } from './theme';
+import type { AppUpdateNoticeState } from './UpdateNotice';
 
 export type SettingsSection =
   | 'appearance'
   | 'transcription'
   | 'storage'
-  | 'shortcuts';
+  | 'shortcuts'
+  | 'about';
 
 const EMPTY_SETTINGS: AppSettingsSummary = {
   transcriptionModelId: DEFAULT_TRANSCRIPTION_MODEL.id,
@@ -45,12 +48,52 @@ export const modelDescription = (model: {
 
 const NOOP = () => undefined;
 
+export const settingsUpdateStatus = (
+  currentVersion: string | null,
+  update: AppUpdateNoticeState | null,
+): string => {
+  if (!update) {
+    return currentVersion
+      ? `Sotto ${currentVersion} is installed.`
+      : 'Sotto could not read its installed version.';
+  }
+  switch (update.phase) {
+    case 'available':
+      return `Sotto ${update.version} is available.`;
+    case 'downloading':
+      return `Sotto ${update.version} is downloading.`;
+    case 'preparing':
+      return `Sotto ${update.version} is being verified and prepared.`;
+    case 'ready':
+      return `Sotto ${update.version} is ready. Restart to finish installing it.`;
+    case 'restarting':
+      return `Sotto ${update.version} is being installed.`;
+    case 'downloaded':
+      return `Sotto ${update.version} is downloaded and ready for manual installation.`;
+    case 'cancelled':
+      return `The Sotto ${update.version} download was canceled.`;
+    case 'failed':
+    case 'check-failed':
+      return update.reason;
+    case 'up-to-date':
+      return `Sotto ${update.version} is up to date.`;
+  }
+};
+
 export const SettingsPage = ({
+  appUpdate = null,
+  appVersion = null,
   initialSection = 'appearance',
+  isCheckingForUpdate = false,
+  onCheckForUpdates = NOOP,
   onToggleTheme = NOOP,
   theme = 'light',
 }: {
+  appUpdate?: AppUpdateNoticeState | null;
+  appVersion?: string | null;
   initialSection?: SettingsSection;
+  isCheckingForUpdate?: boolean;
+  onCheckForUpdates?: () => void | Promise<void>;
   onToggleTheme?: () => void;
   theme?: AppTheme;
 }) => {
@@ -122,6 +165,11 @@ export const SettingsPage = ({
     (model) => model.id === settings.transcriptionModelId,
   );
   const languageLocked = selectedModel ? !selectedModel.multilingual : true;
+  const updateInProgress =
+    appUpdate?.phase === 'downloading' ||
+    appUpdate?.phase === 'preparing' ||
+    appUpdate?.phase === 'ready' ||
+    appUpdate?.phase === 'restarting';
 
   const selectSection = (section: SettingsSection) => {
     setActiveSection(section);
@@ -193,6 +241,18 @@ export const SettingsPage = ({
             >
               <KeyboardIcon />
               <span><strong>Shortcuts</strong><small>Keyboard controls</small></span>
+            </button>
+            <button
+              aria-controls="settings-panel-about"
+              aria-selected={activeSection === 'about'}
+              className={activeSection === 'about' ? 'settings-section--active' : undefined}
+              id="settings-tab-about"
+              onClick={() => selectSection('about')}
+              role="tab"
+              type="button"
+            >
+              <DownloadIcon />
+              <span><strong>About</strong><small>Version and updates</small></span>
             </button>
           </nav>
 
@@ -396,6 +456,55 @@ export const SettingsPage = ({
                     <p>Capture your microphone without switching windows.</p>
                   </div>
                   <kbd>{settings.dictationShortcut || '⌘⇧D'}</kbd>
+                </div>
+              </section>
+            ) : null}
+
+            {activeSection === 'about' ? (
+              <section
+                aria-labelledby="settings-tab-about"
+                className="settings-panel"
+                id="settings-panel-about"
+                role="tabpanel"
+              >
+                <header className="settings-panel__header">
+                  <span>About</span>
+                  <h2>Sotto on this computer.</h2>
+                  <p>See the installed version and check the trusted internal release channel.</p>
+                </header>
+                <div className="settings-card">
+                  <div className="settings-version">
+                    <div>
+                      <span>Installed version</span>
+                      <strong>{appVersion ? `Sotto ${appVersion}` : 'Version unavailable'}</strong>
+                    </div>
+                    <CheckCircleIcon />
+                  </div>
+                  <p aria-live="polite" role="status">
+                    {isCheckingForUpdate
+                      ? 'Checking for updates…'
+                      : settingsUpdateStatus(appVersion, appUpdate)}
+                  </p>
+                  <button
+                    className="settings-link settings-link--primary"
+                    disabled={isCheckingForUpdate || updateInProgress}
+                    onClick={() => void onCheckForUpdates()}
+                    type="button"
+                  >
+                    {isCheckingForUpdate
+                      ? 'Checking…'
+                      : updateInProgress
+                        ? 'Update in progress'
+                        : 'Check for updates'}
+                  </button>
+                </div>
+                <div className="settings-card">
+                  <h3>Manual macOS updates</h3>
+                  <p>
+                    Large updates download as a signed DMG. Sotto will show it in Finder;
+                    quit the app, open the DMG, and replace Sotto in Applications.
+                    Your settings, recordings, and transcripts remain outside the app bundle.
+                  </p>
                 </div>
               </section>
             ) : null}

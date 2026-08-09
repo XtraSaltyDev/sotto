@@ -43,7 +43,7 @@ export type EngineComponentState =
 export interface EngineComponentStatus {
   readonly path: string | null;
   readonly state: EngineComponentState;
-  readonly source: 'bundled' | 'override';
+  readonly source: 'bundled' | 'managed' | 'override';
 }
 
 export interface EngineComponentsStatus {
@@ -80,20 +80,21 @@ export interface ResolveEngineRuntimeOptions {
   readonly platform?: NodeJS.Platform;
   readonly arch?: string;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly managedModelPath?: string;
 }
 
 type EngineComponentName = keyof EngineComponentsStatus;
 
 interface CandidatePath {
   readonly path: string;
-  readonly source: 'bundled' | 'override';
+  readonly source: 'bundled' | 'managed' | 'override';
   readonly invalidOverride: boolean;
 }
 
 const unavailableComponent = (
   state: EngineComponentState,
   filePath: string | null = null,
-  source: 'bundled' | 'override' = 'bundled',
+  source: 'bundled' | 'managed' | 'override' = 'bundled',
 ): EngineComponentStatus => ({ path: filePath, source, state });
 
 const resolveCandidate = (
@@ -285,12 +286,14 @@ export const resolveEngineRuntime = async (
       options,
       platform,
     ),
-    model: resolveCandidate(
-      'model',
-      bundledPaths.modelPath,
-      options,
-      platform,
-    ),
+    model:
+      options.isPackaged && options.managedModelPath
+        ? {
+            path: options.managedModelPath,
+            source: 'managed' as const,
+            invalidOverride: !path.isAbsolute(options.managedModelPath),
+          }
+        : resolveCandidate('model', bundledPaths.modelPath, options, platform),
     speakerChild: resolveCandidate(
       'speakerChild',
       bundledPaths.speakerChildPath,

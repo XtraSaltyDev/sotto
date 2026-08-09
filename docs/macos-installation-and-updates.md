@@ -95,8 +95,10 @@ Foundation to grow its buffer past its allocation boundary and terminate the
 app. The publisher therefore omits Mac archives above 900 MiB, and the client
 independently ignores any oversized archive that appears in a manifest. In that
 case Sotto downloads the signed, notarized DMG to Downloads and asks the user to
-quit Sotto, open the DMG, and replace the app. **Restart now** is offered only
-for a safely sized archive that Squirrel has accepted.
+quit Sotto, open the DMG, and replace the app. The completed-download state
+keeps a **Show in Finder** action available so the user can return to the
+verified installer without exposing its path to the renderer. **Restart now**
+is offered only for a safely sized archive that Squirrel has accepted.
 
 Sotto must never move, delete, edit, or replace its own running app bundle. It
 must never relaunch a path inside a retired bundle. Rollback copies and update
@@ -108,8 +110,9 @@ Published 0.1.22 through 0.1.24 Mac artifacts are ad-hoc signed. They have no
 Apple Team ID, fail Gatekeeper, and cannot establish the identity required for
 safe automatic updates.
 
-The first corrected release must use `SOTTO_MAC_MANUAL_INSTALL_ONLY=1`. Its
-legacy-compatible signed manifest omits the Mac ZIP, causing old clients to
+The first corrected release is automatically manual-only while its verified
+Mac ZIP exceeds 900 MiB. Its legacy-compatible signed manifest omits the ZIP,
+causing old clients to
 download and reveal the signed/notarized DMG. Users replace the app manually
 once. Later releases may remove the flag only after the update archive is below
 the enforced Squirrel size ceiling. With the Whisper model bundled in the app,
@@ -123,10 +126,15 @@ on a representative installed client.
 
 ## Release and acceptance gates
 
-`scripts/release.sh` must stop before publication unless all source, package,
-and Apple checks pass. `scripts/publish-spark-distribution.sh` independently
-rechecks the exact DMG and ZIP content, then uploads artifacts under pending
-names and publishes the signed manifest last.
+`scripts/release.sh` creates a candidate and cannot publish. It requires a
+clean `main` commit that exactly matches `origin/main` and a pushed
+`v<version>` tag pointing to that commit. It uses the pinned toolchain and
+lockfile, runs source and native-runtime gates, and stops unless package and
+Apple checks pass. `scripts/publish-spark-distribution.sh` stages the exact
+candidate under an immutable versioned path without changing `latest.json`.
+`scripts/promote-spark-distribution.sh` requires a matching installed-app
+acceptance record, atomically changes the stable pointer, and verifies it over
+the configured HTTPS trust path.
 
 Release acceptance requires separate evidence for:
 
@@ -134,7 +142,10 @@ Release acceptance requires separate evidence for:
 - package: embedded config/CA/receipt and native resource verification;
 - Apple: Developer ID authority, Team ID, Hardened Runtime, app and DMG tickets,
   and Gatekeeper acceptance;
-- publication: hosted hashes and signed manifest match the release commit;
+- staging: remote immutable artifacts match the candidate hashes while the
+  stable pointer is unchanged;
+- publication: the hosted signed stable manifest exactly matches the accepted
+  candidate and release commit;
 - installation: fresh DMG install from a representative user path;
 - update: an installed Developer ID version downloads and installs the
   notarized DMG, or—only for an archive below the enforced ceiling—updates

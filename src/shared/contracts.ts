@@ -1,5 +1,6 @@
 export const IPC_CHANNELS = {
   getAppState: 'sotto:state:get',
+  getAppVersion: 'sotto:version:get',
   importMedia: 'sotto:media:import',
   startLiveRecording: 'sotto:recording:start',
   appendLiveRecordingChunk: 'sotto:recording:chunk',
@@ -46,6 +47,7 @@ export const IPC_CHANNELS = {
   deletePlayback: 'sotto:playback:delete',
   checkForAppUpdate: 'sotto:updates:check',
   downloadAppUpdate: 'sotto:updates:download',
+  revealDownloadedAppUpdate: 'sotto:updates:reveal-downloaded',
   cancelAppUpdate: 'sotto:updates:cancel',
   installAppUpdate: 'sotto:updates:install',
   manualUpdateCheck: 'sotto:updates:manual-check',
@@ -751,7 +753,6 @@ export type DownloadAppUpdateResult =
   | {
       outcome: 'downloaded';
       fileName: string;
-      filePath: string;
       version: string;
     }
   | { outcome: 'staged'; version: string }
@@ -762,8 +763,13 @@ export type InstallAppUpdateResult =
   | { outcome: 'installed'; version: string }
   | { outcome: 'failed'; reason: string };
 
+export type RevealDownloadedAppUpdateResult =
+  | { outcome: 'revealed' }
+  | { outcome: 'unavailable'; reason: string };
+
 export interface SottoDesktopApi {
   getAppState(): Promise<AppState>;
+  getAppVersion(): Promise<string>;
   importMedia(
     expectedSpeakerCount?: ExpectedSpeakerCount,
   ): Promise<ImportMediaResult>;
@@ -879,6 +885,7 @@ export interface SottoDesktopApi {
   cancelLocalAiMeetingSummary(transcriptId: string): Promise<void>;
   checkForAppUpdate(): Promise<CheckForAppUpdateResult>;
   downloadAppUpdate(): Promise<DownloadAppUpdateResult>;
+  revealDownloadedAppUpdate(): Promise<RevealDownloadedAppUpdateResult>;
   cancelAppUpdate(): Promise<void>;
   installAppUpdate(): Promise<InstallAppUpdateResult>;
   onManualUpdateCheck(

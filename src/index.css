@@ -694,6 +694,38 @@ textarea:focus-visible {
   max-width: 540px;
 }
 
+.settings-version {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.settings-version div {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-version span {
+  color: var(--muted-light);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.settings-version strong {
+  font-size: 20px;
+  letter-spacing: -0.015em;
+}
+
+.settings-version > svg {
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+}
+
 .settings-field {
   display: block;
   margin-bottom: 24px;

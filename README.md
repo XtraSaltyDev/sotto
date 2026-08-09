@@ -113,7 +113,7 @@ This saved project already contains a verified macOS arm64 runtime and model.
 Build the unpacked app:
 
 ```bash
-npm install
+npm ci
 npm run setup:hooks
 npm run package
 npm run make
@@ -121,7 +121,9 @@ npm run make
 
 `setup:hooks` wires the repository's pre-push quality gate (lint, typecheck,
 tests) so nothing broken reaches the remote; bypass a run deliberately with
-`git push --no-verify`. Releases use `scripts/release.sh <version>`.
+`git push --no-verify`. GitHub runs the same lint, typecheck, unit-test, and
+production-audit source gates with the pinned Node/npm toolchain. Releases use
+the separate candidate, stage, acceptance, and promotion commands below.
 
 Then open:
 
@@ -170,10 +172,20 @@ and ZIP. The release command also signs, notarizes, and staples the finished
 DMG. Keep both the Apple Developer team and `com.sotto.desktop` bundle ID
 unchanged for every release.
 
-Use `scripts/release.sh <version>` for a published release. It requires the
-Apple settings, runs the guarded macOS build, checks the app and DMG with
-Gatekeeper, builds Windows, verifies both packages, and only then publishes the
-signed manifest.
+Releases are split into candidate, staging, acceptance, and promotion. Prepare
+the version commit on `main`, create and push the exact `v<version>` tag, then
+run `npm run release:candidate -- <version>`. It uses the pinned toolchain and
+lockfile, runs source and native-runtime gates, and builds the Developer ID
+signed, notarized, stapled macOS candidate. It does not commit, push, upload,
+install, or publish.
+
+`npm run release:stage -- <version>` uploads that exact candidate to an
+immutable versioned directory without changing `latest.json`. After
+fresh-install and previous-version upgrade acceptance is recorded, set
+`SOTTO_RELEASE_ACCEPTANCE_FILE` and run
+`npm run release:promote -- <version>`. Windows is excluded until it has a
+native Windows build, Authenticode signature, install/upgrade acceptance, and
+its own qualified artifact record.
 
 The first Developer-ID-signed release cannot inherit permission that was
 granted to an older ad-hoc build because the old grant names that build's exact
@@ -683,8 +695,9 @@ installer also needs Authenticode code signing and an install/upgrade test.
 4. Evaluate speaker-label quality on representative multi-person Teams meetings
    and rebuild the native speaker runtime for older macOS versions if needed.
 
-Cloud sync, accounts, an updater, and internet-hosted summarization remain
-intentionally out of scope.
+Cloud sync, accounts, and internet-hosted summarization remain intentionally
+out of scope. Private, signed updates are implemented only for the controlled
+Spark HTTPS channel described above.
 
 ## Primary references
 

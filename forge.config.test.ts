@@ -119,7 +119,13 @@ describe('package build receipt', () => {
     await mkdir(resourcesPath, { recursive: true });
     const receipt = createPackageBuildReceipt(
       '0.2.0',
-      '0123456789abcdef0123456789abcdef01234567',
+      {
+        commit: '0123456789abcdef0123456789abcdef01234567',
+        sourceState: 'clean',
+        sourceDigest: 'a'.repeat(64),
+      },
+      'b'.repeat(64),
+      'v24.19.0',
     );
     const hook = createWritePackageBuildReceiptHook(receipt);
 
@@ -229,6 +235,16 @@ describe('Windows packaging', () => {
       name: 'sotto',
       setupIcon: './resources/Sotto.ico',
     });
+    expect(
+      createWindowsSquirrelOptions(
+        '0123456789abcdef0123456789abcdef01234567',
+      ),
+    ).toMatchObject({
+      certificateSha1: '0123456789ABCDEF0123456789ABCDEF01234567',
+    });
+    expect(() => createWindowsSquirrelOptions('not-a-thumbprint')).toThrow(
+      /40-character certificate thumbprint/u,
+    );
   });
 
   it('removes native payloads for the other operating system', () => {
