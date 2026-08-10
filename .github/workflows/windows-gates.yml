@@ -1,0 +1,46 @@
+name: Windows gates
+
+# Source portability check for the win32-x64 target. Deliberately narrow: the
+# macOS job already covers audit, lint, and typecheck, which are all
+# platform-independent, so repeating them here would only spend Windows minutes
+# (billed at 2x) to relearn the same result. This job exists for the one thing
+# macOS cannot answer: whether the source runs on Windows at all.
+#
+# The native runtime is not provisioned here. setup:runtime:windows is a MinGW
+# cross-build in Docker plus a 1.5 GB model download, so the *.integration.test.ts
+# suite that depends on it stays excluded, exactly as it is on macOS.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'test/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.node-version'
+      - '.github/workflows/windows-gates.yml'
+
+permissions:
+  contents: read
+
+# Superseded pushes stop immediately rather than finishing on paid minutes.
+concurrency:
+  group: windows-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
