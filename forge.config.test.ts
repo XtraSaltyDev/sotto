@@ -1,9 +1,9 @@
+import { realpathSync } from 'node:fs';
 import {
   access,
   mkdir,
   mkdtemp,
   readFile,
-  realpath,
   rm,
   symlink,
   writeFile,
@@ -57,9 +57,13 @@ describe('secure update package configuration', () => {
       await writeFile(externalFile, '{}');
       await symlink(internalFile, externalSymlink);
 
+      // Resolve with the same realpath variant the implementation uses. On
+      // Windows the sync and promise forms disagree about 8.3 short names
+      // ("RUNNER~1" against "runneradmin"), so mixing them fails there while
+      // passing on macOS, where both return the same string.
       expect(
         resolveUpdateConfigExtraResources(externalFile, projectRoot),
-      ).toEqual([await realpath(externalFile)]);
+      ).toEqual([realpathSync(externalFile)]);
       expect(() =>
         resolveUpdateConfigExtraResources(internalFile, projectRoot),
       ).toThrow(/outside the repository/u);
@@ -91,7 +95,7 @@ describe('secure update package configuration', () => {
       await writeFile(internalFile, 'public CA certificate');
 
       expect(resolveUpdateCaExtraResources(externalFile, projectRoot)).toEqual([
-        await realpath(externalFile),
+        realpathSync(externalFile),
       ]);
       expect(() =>
         resolveUpdateCaExtraResources(internalFile, projectRoot),
@@ -248,15 +252,18 @@ describe('Windows packaging', () => {
   });
 
   it('removes native payloads for the other operating system', () => {
+    // The implementation builds these with path.join, so the expectations do
+    // too. Hard-coding forward slashes passes on macOS and fails on Windows,
+    // where path.join produces backslashes.
     expect(unusedNativeResourcePaths('win32', 'x64')).toEqual([
-      'sidecars/darwin-arm64',
-      'sidecars/darwin-x64',
-      'speaker-runtime/sherpa-onnx-darwin-arm64',
+      path.join('sidecars', 'darwin-arm64'),
+      path.join('sidecars', 'darwin-x64'),
+      path.join('speaker-runtime', 'sherpa-onnx-darwin-arm64'),
     ]);
     expect(unusedNativeResourcePaths('darwin', 'arm64')).toEqual([
-      'sidecars/darwin-x64',
-      'sidecars/win32-x64',
-      'speaker-runtime/sherpa-onnx-win-x64',
+      path.join('sidecars', 'darwin-x64'),
+      path.join('sidecars', 'win32-x64'),
+      path.join('speaker-runtime', 'sherpa-onnx-win-x64'),
     ]);
   });
 

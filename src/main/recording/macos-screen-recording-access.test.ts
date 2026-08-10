@@ -45,8 +45,15 @@ describe('macOS screen recording access', () => {
 
     await expect(requestMacScreenRecordingAccess(options)).resolves.toBe(true);
     await expect(requestMacScreenRecordingAccess(options)).resolves.toBe(false);
+    // Built with path.join, matching the implementation and the sibling
+    // resolution tests above. A forward-slash literal only holds on POSIX.
     expect(runHelper).toHaveBeenCalledWith(
-      '/work/sotto/resources/sidecars/darwin-arm64/sotto-screen-permission-request',
+      path.join(
+        '/work/sotto/resources',
+        'sidecars',
+        'darwin-arm64',
+        'sotto-screen-permission-request',
+      ),
       [],
     );
   });

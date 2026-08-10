@@ -13,6 +13,21 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolveEngineRuntime } from './engine-runtime';
 
+// Some cases below assert behaviour that only exists on POSIX hosts and cannot
+// be reproduced on Windows:
+//
+//   - chmod(0o000) and stripping the execute bit are no-ops there. Windows
+//     chmod only toggles the read-only attribute, and access(X_OK) is treated
+//     as access(F_OK), so a file the test intends to be unreadable or
+//     non-executable still resolves as 'ready'.
+//   - cases that pin `platform: 'darwin'` while pointing at host temp paths.
+//     resolveEngineRuntime validates overrides with path.posix on darwin, and a
+//     Windows absolute path ("C:\...") is correctly not POSIX-absolute.
+//
+// Skipping keeps the Windows gate honest instead of asserting behaviour the
+// platform does not have. See the executability note in the Windows gate.
+const skipOnWindows = process.platform === 'win32';
+
 const temporaryDirectories: string[] = [];
 
 const makeTemporaryDirectory = async (): Promise<string> => {
@@ -132,7 +147,7 @@ describe('resolveEngineRuntime', () => {
     });
   });
 
-  it('accepts absolute overrides only during development', async () => {
+  it.skipIf(skipOnWindows)('accepts absolute overrides only during development', async () => {
     const appPath = await makeTemporaryDirectory();
     const overridesRoot = await makeTemporaryDirectory();
     const whisperPath = path.join(overridesRoot, 'whisper-cli');
@@ -214,7 +229,7 @@ describe('resolveEngineRuntime', () => {
     );
   });
 
-  it('keeps Whisper ready when optional speaker resources are unavailable', async () => {
+  it.skipIf(skipOnWindows)('keeps Whisper ready when optional speaker resources are unavailable', async () => {
     const appPath = await makeTemporaryDirectory();
     const resourcesRoot = path.join(appPath, 'resources');
     await writeRuntime(resourcesRoot);
@@ -266,7 +281,7 @@ describe('resolveEngineRuntime', () => {
     });
   });
 
-  it('reports missing and non-executable runtime components', async () => {
+  it.skipIf(skipOnWindows)('reports missing and non-executable runtime components', async () => {
     const appPath = await makeTemporaryDirectory();
     const resourcesRoot = path.join(appPath, 'resources');
     await writeRuntime(resourcesRoot);

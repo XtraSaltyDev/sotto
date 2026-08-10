@@ -1,0 +1,28 @@
+# Keep every text file LF in the repository and in the working tree on all
+# platforms. Windows checkouts default to core.autocrlf=true, which rewrites LF
+# to CRLF and breaks two things here:
+#
+#   - the shebang'd scripts/*.mjs release tooling. A trailing CR on the "#!"
+#     line survives shebang stripping, and the module then fails to parse with
+#     "SyntaxError: Invalid or unexpected token".
+#   - the scripts/*.sh release and provisioning scripts, which bash rejects when
+#     the interpreter line ends in CR.
+#
+# Both failures appear only on Windows, so normalize here rather than relying on
+# every checkout being configured correctly.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted. text=auto already detects
+# most of these, but the models and native payloads staged by the provisioning
+# scripts are large enough that a misdetection would be expensive and silent.
+*.bin binary
+*.onnx binary
+*.dmg binary
+*.zip binary
+*.tgz binary
+*.xz binary
+*.bz2 binary
+*.png binary
+*.icns binary
+*.ico binary
+*.pdf binary
