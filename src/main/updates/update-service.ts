@@ -46,9 +46,8 @@ const MAX_MANIFEST_BYTES = 64 * 1024;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
 
 // Squirrel.Mac's legacy URL loader buffers the complete archive in memory.
-// Core Foundation grows that buffer geometrically and aborts while handling
-// Sotto's 1.6 GB package. Keep a conservative ceiling here as a second line of
-// defense even though the publisher also omits oversized archives.
+// Keep a conservative ceiling here as a second line of defense even though the
+// publisher also omits oversized archives.
 export const MAX_SQUIRREL_MAC_ARCHIVE_BYTES = 900 * 1024 * 1024;
 
 export type UpdatePlatformKey = 'darwin-arm64' | 'win32-x64';

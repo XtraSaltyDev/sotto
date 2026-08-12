@@ -43,7 +43,7 @@ export const modelDescription = (model: {
 }): string =>
   [
     model.multilingual ? 'Multilingual' : 'English only',
-    model.source === 'bundled' ? 'included with Sotto' : 'added by you',
+    model.source === 'bundled' ? 'default Sotto model' : 'added by you',
   ].join(' · ');
 
 const NOOP = () => undefined;

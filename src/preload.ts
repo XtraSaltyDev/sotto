@@ -216,6 +216,11 @@ const api: SottoDesktopApi = Object.freeze({
   cancelAppUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.cancelAppUpdate),
   installAppUpdate: () =>
     ipcRenderer.invoke(IPC_CHANNELS.installAppUpdate),
+  retryModelProvisioning: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.retryModelProvisioning),
+  cancelModelProvisioning: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.cancelModelProvisioning),
+  importModel: () => ipcRenderer.invoke(IPC_CHANNELS.importModel),
   onManualUpdateCheck: (
     listener: (result: CheckForAppUpdateResult) => void,
   ) => {

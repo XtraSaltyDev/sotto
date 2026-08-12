@@ -102,6 +102,7 @@ import {
 } from './MeetingLibrary';
 import { TranscriptView } from './TranscriptView';
 import { Sidebar, type AppPage } from './Sidebar';
+import { ModelProvisioningNotice } from './ModelProvisioningNotice';
 
 /**
  * Generous enough that a cold start reading a large local library is never
@@ -701,6 +702,27 @@ const MainApp = ({
   const progressIsIndeterminate = isIndeterminateTranscriptionProgress(
     appState?.activeJob ?? null,
   );
+
+  const modelProvisioning = appState?.modelProvisioning;
+  const modelSetupIncomplete =
+    modelProvisioning !== undefined && modelProvisioning.state !== 'ready';
+
+  const retryModelProvisioning = () => {
+    void (window.sotto?.retryModelProvisioning() ?? Promise.resolve()).catch(() => undefined);
+  };
+
+  const cancelModelProvisioning = () => {
+    void (window.sotto?.cancelModelProvisioning() ?? Promise.resolve()).catch(() => undefined);
+  };
+
+  const importModel = async () => {
+    try {
+      const result = await window.sotto?.importModel();
+      if (result?.outcome === 'failed' && result.reason) showError(result.reason);
+    } catch {
+      showError('Sotto could not import that model.');
+    }
+  };
 
   const stopCaptureSignalMonitor = () => {
     if (captureSignalTimerRef.current !== null) {
@@ -1984,6 +2006,14 @@ const MainApp = ({
             </button>
           )}
         </header>
+        {modelSetupIncomplete && modelProvisioning ? (
+          <ModelProvisioningNotice
+            status={modelProvisioning}
+            onCancel={cancelModelProvisioning}
+            onImport={() => void importModel()}
+            onRetry={retryModelProvisioning}
+          />
+        ) : null}
         {(appState?.startupNotices ?? [])
           .filter((startupNotice) => !dismissedStartupNotices.has(startupNotice))
           .map((startupNotice) => (

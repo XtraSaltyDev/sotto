@@ -9,7 +9,7 @@ import { DEFAULT_TRANSCRIPTION_MODEL } from '../../shared/default-transcription-
 
 export interface AppSettings {
   schemaVersion: 2;
-  /** ggml model id such as 'large-v3-turbo'; null selects the bundled default. */
+  /** ggml model id such as 'large-v3-turbo'; null selects the managed default. */
   transcriptionModelId: string | null;
   /** Language code from SUPPORTED_TRANSCRIPTION_LANGUAGES, or 'auto'. */
   transcriptionLanguage: string;
@@ -187,9 +187,9 @@ const scanModelsDirectory = async (
 };
 
 /**
- * Whisper ggml models available to this install: the bundled model plus
+ * Whisper ggml models available to this install: the managed default plus
  * any the user drops into their own models directory. A user model with
- * the same id as a bundled one wins, so users can override the default.
+ * the same id as the default one wins, so users can override the default.
  */
 export const listTranscriptionModels = async (
   bundledModelsDirectory: string,
@@ -210,7 +210,7 @@ export interface ResolvedTranscriptionOptions {
 
 /**
  * Chooses the effective model and language for a new transcription. A
- * missing or vanished selection falls back to the default model, and an
+ * missing or vanished selection falls back to the managed default model, and an
  * English-only model always forces English regardless of the language
  * preference.
  */

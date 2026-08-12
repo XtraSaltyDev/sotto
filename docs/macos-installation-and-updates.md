@@ -89,16 +89,14 @@ file to Squirrel through a temporary server bound only to `127.0.0.1`. The
 loopback feed closes as soon as Squirrel reports `update-downloaded`. Do not use
 a `file://` feed here.
 
-Squirrel.Mac still buffers the full response internally. Sotto's bundled 1.5 GB
-Whisper model makes the current update ZIP about 1.6 GB, which can force Core
-Foundation to grow its buffer past its allocation boundary and terminate the
-app. The publisher therefore omits Mac archives above 900 MiB, and the client
-independently ignores any oversized archive that appears in a manifest. In that
+Squirrel.Mac still buffers the full response internally. The default Whisper
+model is now external to the signed app, so ordinary update archives are
+expected to remain comfortably below 900 MiB and can use the automatic path.
+The publisher must omit any archive above the ceiling, and the client
+independently ignores an oversized archive that appears in a manifest. In that
 case Sotto downloads the signed, notarized DMG to Downloads and asks the user to
-quit Sotto, open the DMG, and replace the app. The completed-download state
-keeps a **Show in Finder** action available so the user can return to the
-verified installer without exposing its path to the renderer. **Restart now**
-is offered only for a safely sized archive that Squirrel has accepted.
+replace the app manually. The model is provisioned separately through the
+trusted update origin and is not copied again during an app update.
 
 Sotto must never move, delete, edit, or replace its own running app bundle. It
 must never relaunch a path inside a retired bundle. Rollback copies and update
@@ -115,8 +113,8 @@ Mac ZIP exceeds 900 MiB. Its legacy-compatible signed manifest omits the ZIP,
 causing old clients to
 download and reveal the signed/notarized DMG. Users replace the app manually
 once. Later releases may remove the flag only after the update archive is below
-the enforced Squirrel size ceiling. With the Whisper model bundled in the app,
-normal Mac releases remain manual DMG updates.
+the enforced Squirrel size ceiling. With the Whisper model external to the app,
+unchanged-model Mac releases can use the automatic archive path.
 
 The manual replacement preserves user data because application data is outside
 the bundle. The first transition can require one final microphone or system
@@ -152,6 +150,8 @@ Release acceptance requires separate evidence for:
   through Squirrel.Mac;
 - continuity: settings, transcripts, microphone, and system-audio capture remain
   usable after update;
+- model continuity: an upgrade reuses a matching managed model without a second
+  copy, while a fresh install visibly provisions or imports the model;
 - network: office LAN and corporate VPN can fetch the real manifest and ZIP.
 
 Package or server checks alone do not prove the installed update journey.

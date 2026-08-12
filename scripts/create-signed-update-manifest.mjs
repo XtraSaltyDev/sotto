@@ -17,6 +17,12 @@ const { signReleaseManifest, verifyReleaseManifest } = releaseManifest;
 const { parseUpdateConfiguration } = updateConfig;
 
 const KEY_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
+export const DEFAULT_MODEL_ARTIFACT = {
+  file: 'ggml-large-v3-turbo.bin',
+  revision: '6034871ec87c84e342efab769d4c5c06cd126db3',
+  sha256: '1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69',
+  size: 1_624_555_275,
+};
 
 const isRecord = (value) =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -52,6 +58,43 @@ const hashArtifact = async (filePath) => {
   return { sha256: hash.digest('hex'), size: fileStat.size };
 };
 
+export const verifyDefaultModelArtifact = async ({ artifact, modelUrl, manifestUrl }) => {
+  if (!isRecord(artifact) || typeof artifact.file !== 'string' || typeof artifact.revision !== 'string' || typeof artifact.localPath !== 'string' || typeof artifact.downloadUrl !== 'string') {
+    throw new TypeError('The default model artifact description is invalid.');
+  }
+  let modelEndpoint;
+  let manifestEndpoint;
+  try {
+    modelEndpoint = new URL(modelUrl);
+    manifestEndpoint = new URL(manifestUrl);
+  } catch {
+    throw new TypeError('The model artifact URLs are invalid.');
+  }
+  if (
+    artifact.file !== DEFAULT_MODEL_ARTIFACT.file ||
+    artifact.revision !== DEFAULT_MODEL_ARTIFACT.revision ||
+    artifact.downloadUrl !== modelUrl ||
+    modelEndpoint.protocol !== 'https:' ||
+    manifestEndpoint.protocol !== 'https:' ||
+    modelEndpoint.username ||
+    modelEndpoint.password ||
+    modelEndpoint.search ||
+    modelEndpoint.hash ||
+    manifestEndpoint.username ||
+    manifestEndpoint.password ||
+    manifestEndpoint.search ||
+    manifestEndpoint.hash ||
+    modelEndpoint.origin !== manifestEndpoint.origin
+  ) {
+    throw new TypeError('The default model artifact is not bound to the compiled model identity and update origin.');
+  }
+  const digest = await hashArtifact(artifact.localPath);
+  if (digest.size !== DEFAULT_MODEL_ARTIFACT.size || digest.sha256 !== DEFAULT_MODEL_ARTIFACT.sha256) {
+    throw new TypeError('The default model artifact does not match the compiled model identity.');
+  }
+  return { ...DEFAULT_MODEL_ARTIFACT, localPath: artifact.localPath, downloadUrl: artifact.downloadUrl };
+};
+
 export const createSignedUpdateManifest = async ({
   projectRoot,
   privateKeyFile,
@@ -63,6 +106,7 @@ export const createSignedUpdateManifest = async ({
   publishedAt,
   releaseKind = 'internal-developer-id',
   artifacts,
+  modelArtifact,
 }) => {
   const configuration = parseUpdateConfiguration(
     JSON.parse(await readFile(updateConfigFile, 'utf8')),
@@ -102,6 +146,16 @@ export const createSignedUpdateManifest = async ({
   }
   if (!isRecord(artifacts) || Object.keys(artifacts).length === 0) {
     throw new TypeError('At least one update artifact is required.');
+  }
+  if (modelArtifact !== undefined) {
+    if (!configuration.modelUrl) {
+      throw new TypeError('The embedded update configuration must include modelUrl for a model artifact.');
+    }
+    await verifyDefaultModelArtifact({
+      artifact: modelArtifact,
+      modelUrl: configuration.modelUrl,
+      manifestUrl: configuration.manifestUrl,
+    });
   }
   const authenticatedArtifacts = {};
   for (const [target, artifact] of Object.entries(artifacts)) {

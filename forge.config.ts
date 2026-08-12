@@ -273,11 +273,7 @@ const staleBundledModelPaths = async (resourcesPath: string): Promise<string[]> 
   }
 
   return entries
-    .filter(
-      (entry) =>
-        /^ggml-[a-z0-9][a-z0-9.-]*\.bin$/u.test(entry) &&
-        entry !== 'ggml-large-v3-turbo.bin',
-    )
+    .filter((entry) => /^ggml-[a-z0-9][a-z0-9.-]*\.bin$/u.test(entry))
     .map((entry) => path.join(resourcesPath, 'models', entry));
 };
 
@@ -503,7 +499,6 @@ const config: ForgeConfig = {
     osxNotarize: createMacNotarizeOptions(macNotaryKeychainProfile),
     extraResource: [
       './resources/diarization',
-      './resources/models',
       './resources/sidecars',
       './resources/speaker-runtime',
       './scripts/speaker-diarization-child.cjs',

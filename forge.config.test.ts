@@ -13,7 +13,7 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import {
+import forgeConfig, {
   ELECTRON_FUSE_V1_OPTIONS,
   assertMacReleaseConfiguration,
   assertSupportedPackageTarget,
@@ -34,6 +34,11 @@ import {
 } from './forge.config';
 
 describe('secure update package configuration', () => {
+  it('does not include the default Whisper model in Forge extra resources', () => {
+    const extraResources = forgeConfig.packagerConfig?.extraResource ?? [];
+    expect(extraResources).not.toContain('./resources/models');
+    expect(extraResources).toContain('./resources/sidecars');
+  });
   it('keeps ordinary local packages usable without update configuration', () => {
     expect(resolveUpdateConfigExtraResources(undefined, '/checkout/sotto')).toEqual([]);
   });
@@ -328,7 +333,7 @@ describe('Windows packaging', () => {
       await expect(access(foreignWindowsRuntime)).rejects.toThrow();
       await expect(
         access(path.join(resourcesPath, 'models', 'ggml-large-v3-turbo.bin')),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow();
       await expect(
         access(path.join(resourcesPath, 'models', 'ggml-small.en.bin')),
       ).rejects.toThrow();

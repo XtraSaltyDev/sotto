@@ -31,6 +31,7 @@ import type {
   LiveRecordingMarker,
   DeleteMeetingResult,
   MergeTranscriptSpeakersResult,
+  ModelProvisioningStatus,
 } from '../shared/contracts';
 import type { SelectedMedia } from './media/media-import';
 import {
@@ -264,7 +265,7 @@ export const formatTranscriptForExport = (
 
 export class AppController {
   private readonly listeners = new Set<StateListener>();
-  private readonly service: LocalTranscriptionService | null;
+  private service: LocalTranscriptionService | null;
   private readonly recordingService: LiveRecordingService;
   private readonly playbackRepository: PlaybackRepository;
   private readonly recordingCapabilityProvider: () => LiveRecordingCapability;
@@ -306,6 +307,11 @@ export class AppController {
   private transcriptSummaries: TranscriptSummary[] = [];
   private transcriptLibraryRecords: TranscriptRecord[] = [];
   private recordingTranscriptIds = new Set<string>();
+  private modelProvisioning: ModelProvisioningStatus | undefined;
+  private readonly jobsRoot: string;
+  private readonly transcriptionOptions?: () =>
+    | Promise<{ modelPath: string; language: string; customVocabulary?: string[] }>
+    | { modelPath: string; language: string; customVocabulary?: string[] };
 
   constructor(
     private readonly repository: TranscriptRepository,
@@ -316,7 +322,11 @@ export class AppController {
     transcriptionOptions?: () =>
       | Promise<{ modelPath: string; language: string; customVocabulary?: string[] }>
       | { modelPath: string; language: string; customVocabulary?: string[] },
+    modelProvisioning?: ModelProvisioningStatus,
   ) {
+    this.jobsRoot = jobsRoot;
+    this.transcriptionOptions = transcriptionOptions;
+    this.modelProvisioning = modelProvisioning;
     this.engineStatus = toRendererEngineStatus(runtimeStatus);
     if (typeof recordingCapability === 'function') {
       this.recordingCapabilityProvider = recordingCapability;
@@ -344,7 +354,7 @@ export class AppController {
       : null;
   }
 
-  private readonly engineStatus: RendererEngineStatus;
+  private engineStatus: RendererEngineStatus;
 
   private readonly startupNotices: string[] = [];
 
@@ -398,10 +408,46 @@ export class AppController {
     return () => this.listeners.delete(listener);
   }
 
+  async setRuntimeStatus(runtimeStatus: RuntimeStatus): Promise<void> {
+    this.engineStatus = toRendererEngineStatus(runtimeStatus);
+    if (runtimeStatus.ready && this.service === null) {
+      this.service = new LocalTranscriptionService({
+        runtime: runtimeStatus.runtime,
+        jobsRoot: this.jobsRoot,
+        repository: this.repository,
+        playbackRepository: this.playbackRepository,
+        onJobChanged: (job) => this.handleJobChanged(job),
+        ...(this.transcriptionOptions
+          ? { transcriptionOptions: this.transcriptionOptions }
+          : {}),
+      });
+      const interruptedImports = await this.service.initialize();
+      for (const sourceName of interruptedImports.slice(0, 3)) {
+        this.startupNotices.push(
+          `The import of “${sourceName}” was interrupted when Sotto closed. Import the file again to transcribe it.`,
+        );
+      }
+      if (interruptedImports.length > 3) {
+        this.startupNotices.push(
+          `${interruptedImports.length - 3} more imports were interrupted when Sotto closed.`,
+        );
+      }
+    }
+    this.emit();
+  }
+
+  setModelProvisioning(status: ModelProvisioningStatus): void {
+    this.modelProvisioning = { ...status };
+    this.emit();
+  }
+
   getState(): AppState {
     this.refreshRecordingCapability();
     return {
       engine: { ...this.engineStatus },
+      ...(this.modelProvisioning
+        ? { modelProvisioning: { ...this.modelProvisioning } }
+        : {}),
       recording: {
         capability: { ...this.recordingCapability },
         active: this.activeRecording ? { ...this.activeRecording } : null,

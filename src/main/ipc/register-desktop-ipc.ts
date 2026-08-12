@@ -90,6 +90,7 @@ import { insertTextAtCursor } from '../dictation/cursor-insertion';
 import type { LocalAiConnectionService } from '../local-ai/local-ai-connection';
 import { isLocalAiTranscriptFingerprint } from '../local-ai/local-ai-meeting-summary';
 import type { UpdateService } from '../updates/update-service';
+import type { ManagedModelProvisioner } from '../runtime/managed-model';
 import { normalizeCustomVocabulary } from '../settings/app-settings';
 import {
   isTranscriptCopyKind,
@@ -102,6 +103,7 @@ export interface DesktopIpcOptions {
   controller: AppController;
   localAiService: LocalAiConnectionService;
   updateService: UpdateService;
+  modelProvisioner?: ManagedModelProvisioner;
   getAppVersion: () => string;
   getMainWindow: () => BrowserWindow | null;
   getActivityWindow: () => BrowserWindow | null;
@@ -290,6 +292,7 @@ export const registerDesktopIpc = ({
   controller,
   localAiService,
   updateService,
+  modelProvisioner,
   getAppVersion,
   getMainWindow,
   getActivityWindow,
@@ -481,6 +484,46 @@ export const registerDesktopIpc = ({
     async (event): Promise<InstallAppUpdateResult> => {
       trust(event);
       return updateService.installUpdate();
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.retryModelProvisioning, (event): void => {
+    trust(event);
+    void (modelProvisioner?.provision() ?? Promise.resolve()).catch(() => undefined);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.cancelModelProvisioning, (event): void => {
+    trust(event);
+    modelProvisioner?.cancel();
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.importModel,
+    async (event): Promise<{
+      outcome: 'imported' | 'cancelled' | 'failed';
+      reason?: string;
+    }> => {
+      const window = trust(event);
+      if (!modelProvisioner) {
+        return { outcome: 'failed', reason: 'Model setup is not available in this build.' };
+      }
+      const selection = await dialog.showOpenDialog(window, {
+        buttonLabel: 'Use Model',
+        filters: [{ name: 'Whisper model', extensions: ['bin'] }],
+        message: 'Choose the verified Sotto default model file already on this computer.',
+        properties: ['openFile'],
+        title: 'Set Up Sotto Transcription',
+      });
+      if (selection.canceled || !selection.filePaths[0]) return { outcome: 'cancelled' };
+      try {
+        await modelProvisioner.importFromPath(selection.filePaths[0]);
+        return { outcome: 'imported' };
+      } catch (error) {
+        return {
+          outcome: 'failed',
+          reason: error instanceof Error ? error.message : 'The selected model could not be imported.',
+        };
+      }
     },
   );
 
@@ -1451,6 +1494,9 @@ export const registerDesktopIpc = ({
       IPC_CHANNELS.revealDownloadedAppUpdate,
       IPC_CHANNELS.cancelAppUpdate,
       IPC_CHANNELS.installAppUpdate,
+      IPC_CHANNELS.retryModelProvisioning,
+      IPC_CHANNELS.cancelModelProvisioning,
+      IPC_CHANNELS.importModel,
       IPC_CHANNELS.importMedia,
       IPC_CHANNELS.startLiveRecording,
       IPC_CHANNELS.updateLiveRecordingHealth,

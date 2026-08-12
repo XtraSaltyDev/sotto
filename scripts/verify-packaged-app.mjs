@@ -102,7 +102,6 @@ const commonRequiredPaths = [
   'sotto-build.json',
   'diarization/3dspeaker-eres2net-base.onnx',
   'diarization/pyannote-segmentation-3.0.onnx',
-  'models/ggml-large-v3-turbo.bin',
   'sidecars/PROVENANCE.md',
   'sidecars/THIRD_PARTY_NOTICES.md',
   'sidecars/licenses/3D-Speaker.Apache-2.0.LICENSE',
@@ -116,15 +115,13 @@ const commonRequiredPaths = [
 ];
 
 const bundledModelDirectory = path.join(resourcesPath, 'models');
-const bundledModelEntries = (await readdir(bundledModelDirectory)).filter(
-  (entry) => /^ggml-[a-z0-9][a-z0-9.-]*\.bin$/u.test(entry),
-);
-if (
-  bundledModelEntries.length !== 1 ||
-  bundledModelEntries[0] !== 'ggml-large-v3-turbo.bin'
-) {
+const bundledModelEntries = await readdir(bundledModelDirectory).catch((error) => {
+  if (error?.code === 'ENOENT') return [];
+  throw error;
+});
+if (bundledModelEntries.some((entry) => /^ggml-[a-z0-9][a-z0-9.-]*\.bin$/u.test(entry))) {
   throw new Error(
-    `Unexpected bundled Whisper models: ${bundledModelEntries.join(', ') || 'none'}`,
+    `The default Whisper model must not be bundled in the application: ${bundledModelEntries.join(', ')}`,
   );
 }
 
@@ -139,6 +136,15 @@ if (
   `${manifest.target.platform}-${manifest.target.architecture}` !== target
 ) {
   throw new Error(`Runtime manifest target does not match ${target}.`);
+}
+if (
+  manifest.model?.name !== 'ggml-large-v3-turbo' ||
+  manifest.model?.revision !== '6034871ec87c84e342efab769d4c5c06cd126db3' ||
+  manifest.model?.sha256 !== '1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69' ||
+  manifest.model?.size !== 1624555275 ||
+  Object.prototype.hasOwnProperty.call(manifest.model, 'file')
+) {
+  throw new Error('The runtime manifest does not contain the compiled external-model identity.');
 }
 
 const manifestDirectoryPath = path.dirname(manifestPath);
@@ -162,10 +168,6 @@ const platformBinaryHashChecks =
 // immutable model and every unsigned Windows native binary.
 await Promise.all([
   ...platformBinaryHashChecks,
-  verifyHash(
-    path.resolve(manifestDirectoryPath, manifest.model.file),
-    manifest.model.sha256,
-  ),
   verifyHash(
     path.resolve(
       manifestDirectoryPath,

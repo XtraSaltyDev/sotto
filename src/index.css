@@ -1692,6 +1692,25 @@ textarea:focus-visible {
   margin: 20px clamp(32px, 4vw, 56px) 0;
 }
 
+.model-setup {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.model-setup__privacy {
+  max-width: 48rem;
+}
+
+.model-setup__actions {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  justify-content: flex-end;
+}
+
 .capture-notice,
 .home-status {
   width: min(100%, 720px);

@@ -109,8 +109,10 @@ when timing is still ambiguous.
 
 ## Use the current macOS build
 
-This saved project already contains a verified macOS arm64 runtime and model.
-Build the unpacked app:
+This saved project contains the native macOS arm64 runtime and license
+material. The approximately 1.5 GiB default Whisper model is provisioned into
+per-user Application Support for packaged builds and is not part of the app
+bundle. Build the unpacked app:
 
 ```bash
 npm ci
@@ -492,9 +494,10 @@ npm start
 
 `setup:runtime:mac` downloads pinned source/model inputs, verifies their hashes,
 builds the two native executables, stages complete license material, and writes
-`resources/sidecars/darwin-arm64/runtime-manifest.json`. The model is about
-1.5 GiB, and the two speaker models add about 45 MB. Native binaries and model
-files are intentionally ignored by Git.
+`resources/sidecars/darwin-arm64/runtime-manifest.json`. The Whisper model is
+kept as a verified release input for separate immutable publication; Forge
+does not copy it into the application. The two speaker models add about 45 MB.
+Native binaries and model files are intentionally ignored by Git.
 
 To verify an already staged runtime without network, builds, or writes:
 
@@ -529,13 +532,15 @@ npm run verify:package:windows
 ```
 
 The runtime integration test selects the current supported host and sends the
-bundled AAC-in-MP4 fixture through the real FFmpeg → whisper.cpp → sherpa-onnx
+AAC-in-MP4 fixture through the real FFmpeg → whisper.cpp → sherpa-onnx
 → atomic repository pipeline. It checks recognized speech, timing, persistence,
 and speaker IDs. `test:runtime:mac` and `test:runtime:windows` are explicit
 aliases. The integration is separate from the fast unit suite because it loads
-the 1.5 GiB model. The package verifiers inspect the unpacked application that
-Forge actually produced: they reject foreign native runtimes, check required
-models and licenses, verify immutable runtime hashes, and confirm that the ASAR
+the 1.5 GiB verified model artifact from `.build/runtime/<target>/model-artifact`.
+The package verifiers inspect the
+unpacked application that Forge actually produced: they reject foreign native
+runtimes, reject the default model in app resources, check required licenses,
+verify immutable runtime hashes, and confirm that the ASAR
 contains the current package version.
 
 ## Architecture
@@ -561,9 +566,10 @@ scripts/
 ├── speaker-diarization-child.cjs    isolated native speaker-process entry
 └── verify-packaged-app.mjs          final package resource/hash checks
 
+.build/runtime/<target>/             verified model artifact input, never packaged
+
 resources/
 ├── diarization/                     staged speaker models outside the ASAR
-├── models/                          staged Whisper model outside the ASAR
 ├── speaker-runtime/                 staged native speaker engine
 └── sidecars/<platform-arch>/        executables, manifest, and licenses
 ```
@@ -582,7 +588,7 @@ native file selection or user-started desktop/system-audio capture
   → crash-isolated local speaker segmentation, clustering, bounded word alignment,
     and conservative timing-gap recovery
   → imported-media-only atomic private playback WAV retention
-  → atomic schema-v4 transcript save with validated word timing and local tags
+→ atomic schema-v4 transcript save with validated word timing and local tags
   → Transcript Library/detail state update
 ```
 
@@ -630,7 +636,8 @@ disabled. See `resources/sidecars/PROVENANCE.md`, `sources.json`, and
 ### macOS
 
 `npm run package` has been qualified on macOS arm64 and copies the runtime,
-model, manifests, and license files outside the ASAR. The local bundle is ad-hoc
+manifests, and license files outside the ASAR. The default model remains in
+per-user managed storage rather than the signed bundle. The local bundle is ad-hoc
 signed without Hardened Runtime by the packaging toolchain, which is enough for
 local testing but not a public release. A hardened ad-hoc Electron bundle is
 rejected at launch by macOS 26 library validation because its nested components
@@ -663,7 +670,7 @@ npm run make:windows:zip
 The ZIP is written to `out/make/zip/win32/x64/`. Extract the whole archive on a
 Windows x64 machine and run `Sotto.exe`; it is not an installer.
 
-The cross-built executables, model, complete native speaker DLL closure,
+The cross-built executables, external-model identity, complete native speaker DLL closure,
 licenses, packaged resource layout, and ZIP integrity are checked from macOS.
 An earlier 0.1.2 package was also exercised on a real Windows 11 x64 machine:
 the app launched and a live recording completed normalization, Whisper

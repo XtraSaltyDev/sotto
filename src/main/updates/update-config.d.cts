@@ -2,6 +2,7 @@ import type { TrustedReleaseKeys } from './release-manifest.cjs';
 
 export interface UpdateConfiguration {
   manifestUrl: string;
+  modelUrl?: string;
   trustedManifestKeys: TrustedReleaseKeys;
 }
 

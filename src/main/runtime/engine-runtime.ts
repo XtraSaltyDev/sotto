@@ -286,14 +286,13 @@ export const resolveEngineRuntime = async (
       options,
       platform,
     ),
-    model:
-      options.isPackaged && options.managedModelPath
-        ? {
-            path: options.managedModelPath,
-            source: 'managed' as const,
-            invalidOverride: !path.isAbsolute(options.managedModelPath),
-          }
-        : resolveCandidate('model', bundledPaths.modelPath, options, platform),
+    model: options.managedModelPath
+      ? {
+          path: options.managedModelPath,
+          source: 'managed' as const,
+          invalidOverride: !path.isAbsolute(options.managedModelPath),
+        }
+      : resolveCandidate('model', bundledPaths.modelPath, options, platform),
     speakerChild: resolveCandidate(
       'speakerChild',
       bundledPaths.speakerChildPath,

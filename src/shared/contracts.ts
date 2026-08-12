@@ -55,6 +55,9 @@ export const IPC_CHANNELS = {
   stateChanged: 'sotto:state:changed',
   dictationShortcut: 'sotto:dictation:shortcut',
   activityAction: 'sotto:activity:action',
+  retryModelProvisioning: 'sotto:model:provisioning:retry',
+  cancelModelProvisioning: 'sotto:model:provisioning:cancel',
+  importModel: 'sotto:model:import',
 } as const;
 
 export type EngineState = 'checking' | 'ready' | 'unavailable';
@@ -64,6 +67,22 @@ export interface EngineStatus {
   engineVersion: string | null;
   modelName: string | null;
   message: string;
+}
+
+export type ModelProvisioningState =
+  | 'checking'
+  | 'required'
+  | 'downloading'
+  | 'verifying'
+  | 'ready'
+  | 'failed'
+  | 'cancelled';
+
+export interface ModelProvisioningStatus {
+  state: ModelProvisioningState;
+  message: string;
+  receivedBytes?: number;
+  totalBytes?: number;
 }
 
 export type TranscriptionStage =
@@ -392,6 +411,7 @@ export interface TranscriptDetail extends TranscriptSummary {
 
 export interface AppState {
   engine: EngineStatus;
+  modelProvisioning?: ModelProvisioningStatus;
   recording: LiveRecordingStatus;
   activeJob: TranscriptionJobSnapshot | null;
   /**
@@ -888,6 +908,9 @@ export interface SottoDesktopApi {
   revealDownloadedAppUpdate(): Promise<RevealDownloadedAppUpdateResult>;
   cancelAppUpdate(): Promise<void>;
   installAppUpdate(): Promise<InstallAppUpdateResult>;
+  retryModelProvisioning(): Promise<void>;
+  cancelModelProvisioning(): Promise<void>;
+  importModel(): Promise<{ outcome: 'imported' | 'cancelled' | 'failed'; reason?: string }>;
   onManualUpdateCheck(
     listener: (result: CheckForAppUpdateResult) => void,
   ): () => void;

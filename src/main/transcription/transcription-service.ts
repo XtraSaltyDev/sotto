@@ -99,7 +99,7 @@ export interface LocalTranscriptionServiceOptions {
   playbackRepository?: PlaybackRepository;
   /**
    * Resolves the model and language for each new job, so settings changes
-   * apply without restarting. Falls back to the bundled runtime model and
+   * apply without restarting. Falls back to the verified managed runtime model and
    * English when absent.
    */
   transcriptionOptions?: () =>

@@ -15,6 +15,7 @@ readonly FFMPEG_ARCHIVE_URL="https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION
 readonly MODEL_NAME='ggml-large-v3-turbo.bin'
 readonly MODEL_SHA256='1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69'
 readonly MODEL_REVISION='6034871ec87c84e342efab769d4c5c06cd126db3'
+readonly MODEL_SIZE='1624555275'
 readonly MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/${MODEL_REVISION}/${MODEL_NAME}?download=true"
 
 readonly SHERPA_ONNX_VERSION='1.13.4'
@@ -60,7 +61,7 @@ readonly ONNXRUNTIME_LICENSE_CACHE_PATH="${DOWNLOAD_DIRECTORY}/onnxruntime-${ONN
 readonly ONNXRUNTIME_NOTICES_CACHE_PATH="${DOWNLOAD_DIRECTORY}/onnxruntime-${ONNXRUNTIME_VERSION}.ThirdPartyNotices.txt"
 
 readonly SIDECAR_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/sidecars/darwin-arm64"
-readonly MODEL_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/models"
+readonly MODEL_STAGE_DIRECTORY="${RUNTIME_BUILD_ROOT}/model-artifact"
 readonly MODEL_STAGE_PATH="${MODEL_STAGE_DIRECTORY}/${MODEL_NAME}"
 readonly DIARIZATION_STAGE_DIRECTORY="${REPOSITORY_ROOT}/resources/diarization"
 readonly PYANNOTE_MODEL_STAGE_PATH="${DIARIZATION_STAGE_DIRECTORY}/${PYANNOTE_MODEL_NAME}"
@@ -561,8 +562,8 @@ write_runtime_manifest() {
   "model": {
     "name": "ggml-large-v3-turbo",
     "revision": "${MODEL_REVISION}",
-    "file": "../../models/${MODEL_NAME}",
     "sha256": "${MODEL_SHA256}",
+    "size": ${MODEL_SIZE},
     "language": "Multilingual"
   },
   "speakerDiarization": {
@@ -687,8 +688,10 @@ verify_staged_runtime() {
     "The runtime manifest does not name whisper-cli."
   grep -Fq '"binary": "ffmpeg"' "${RUNTIME_MANIFEST_PATH}" || fail \
     "The runtime manifest does not name ffmpeg."
-  grep -Fq '"file": "../../models/ggml-large-v3-turbo.bin"' "${RUNTIME_MANIFEST_PATH}" || fail \
-    "The runtime manifest does not name the staged model path."
+  grep -Fq '"name": "ggml-large-v3-turbo"' "${RUNTIME_MANIFEST_PATH}" || fail \
+    "The runtime manifest does not name the external model identity."
+  grep -Fq '"size": 1624555275' "${RUNTIME_MANIFEST_PATH}" || fail \
+    "The runtime manifest does not contain the pinned model size."
   grep -Fq "\"binarySha256\": \"${whisper_sha256}\"" "${RUNTIME_MANIFEST_PATH}" || fail \
     "The runtime manifest whisper-cli checksum does not match the staged executable."
   grep -Fq "\"binarySha256\": \"${ffmpeg_sha256}\"" "${RUNTIME_MANIFEST_PATH}" || fail \
@@ -781,7 +784,7 @@ main() {
   log "Provisioning complete."
   log "  whisper-cli: ${SIDECAR_STAGE_DIRECTORY}/whisper-cli"
   log "  ffmpeg:       ${SIDECAR_STAGE_DIRECTORY}/ffmpeg"
-  log "  model:        ${MODEL_STAGE_PATH}"
+  log "  model artifact source (not packaged): ${MODEL_STAGE_PATH}"
   log "  speaker models: ${DIARIZATION_STAGE_DIRECTORY}"
   log "  speaker runtime: ${SPEAKER_RUNTIME_STAGE_DIRECTORY}"
   log "  manifest:     ${RUNTIME_MANIFEST_PATH}"

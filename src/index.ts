@@ -36,7 +36,10 @@ import {
 } from './main/recording/desktop-audio-capture';
 import { requestMacScreenRecordingAccess } from './main/recording/macos-screen-recording-access';
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
-import { provisionManagedDefaultModel } from './main/runtime/managed-model';
+import {
+  ManagedModelProvisioner,
+  pruneManagedModelRevisions,
+} from './main/runtime/managed-model';
 import { TranscriptRepository } from './main/storage/transcript-repository';
 import { createPlaybackResponse } from './main/media/playback-response';
 import { LocalAiConnectionService } from './main/local-ai/local-ai-connection';
@@ -403,22 +406,38 @@ const initialize = async (): Promise<void> => {
     DEFAULT_TRANSCRIPTION_MODEL.revision,
   );
   await mkdir(userModelsDirectory, { recursive: true }).catch(() => undefined);
-  const managedModelPath = app.isPackaged
-    ? await provisionManagedDefaultModel({
-        bundledModelPath: path.join(
-          process.resourcesPath,
-          'models',
-          DEFAULT_TRANSCRIPTION_MODEL.fileName,
-        ),
-        managedModelsDirectory,
+  const updateConfigurationPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'sotto-update-config.json')
+    : process.env.SOTTO_UPDATE_CONFIG_FILE ?? null;
+  const updateConfiguration = await loadUpdateConfiguration(
+    updateConfigurationPath,
+  ).catch((error: unknown) => {
+    console.warn(
+      '[sotto] Secure updates are disabled because the embedded update configuration is invalid.',
+      error,
+    );
+    return null;
+  });
+  const updateCaPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'ca.crt')
+    : process.env.SOTTO_UPDATE_CA_FILE ?? null;
+  const updateCa = updateCaPath
+    ? await readFile(updateCaPath).catch((error: unknown) => {
+        console.warn(
+          '[sotto] The configured update CA could not be loaded; system trust will be used.',
+          error,
+        );
+        return undefined;
       })
     : undefined;
-  const runtimeStatus = await resolveEngineRuntime({
-    appPath: app.getAppPath(),
-    isPackaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
-    managedModelPath,
-  });
+  const modelProvisioner = app.isPackaged
+    ? new ManagedModelProvisioner({
+        managedModelsDirectory,
+        modelUrl: updateConfiguration?.modelUrl,
+        tlsCa: updateCa,
+        fetcher: updateCa ? createTrustedUpdateFetcher(updateCa) : undefined,
+    })
+    : null;
   const repository = new TranscriptRepository(
     path.join(app.getPath('userData'), 'transcripts'),
   );
@@ -426,12 +445,38 @@ const initialize = async (): Promise<void> => {
     path.join(app.getPath('userData'), 'settings.json'),
   );
   await settingsStore.load();
-  const bundledModelsDirectory = runtimeStatus.ready
-    ? path.dirname(runtimeStatus.runtime.modelPath)
-    : path.join(process.resourcesPath, 'models');
+  const defaultModelsDirectory = app.isPackaged
+    ? managedModelsDirectory
+    : path.join(
+        process.cwd(),
+        '.build',
+        'runtime',
+        `${process.platform}-${process.arch}`,
+        'model-artifact',
+      );
+  const initialModels = await listTranscriptionModels(
+    defaultModelsDirectory,
+    userModelsDirectory,
+  );
+  const initialResolved = resolveTranscriptionOptions(
+    settingsStore.get(),
+    initialModels,
+    path.join(defaultModelsDirectory, DEFAULT_TRANSCRIPTION_MODEL.fileName),
+  );
+  const initialUserModelPath = initialModels.some(
+    (model) => model.path === initialResolved.modelPath && model.source === 'user',
+  )
+    ? initialResolved.modelPath
+    : undefined;
+  let runtimeStatus = await resolveEngineRuntime({
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    managedModelPath: initialUserModelPath,
+  });
   const resolveTranscription = async () => {
     const models = await listTranscriptionModels(
-      bundledModelsDirectory,
+      defaultModelsDirectory,
       userModelsDirectory,
     );
     const resolved = resolveTranscriptionOptions(
@@ -439,7 +484,7 @@ const initialize = async (): Promise<void> => {
       models,
       runtimeStatus.ready
         ? runtimeStatus.runtime.modelPath
-        : path.join(bundledModelsDirectory, DEFAULT_TRANSCRIPTION_MODEL.fileName),
+        : path.join(defaultModelsDirectory, DEFAULT_TRANSCRIPTION_MODEL.fileName),
     );
     return {
       modelPath: resolved.modelPath,
@@ -454,6 +499,10 @@ const initialize = async (): Promise<void> => {
     path.join(app.getPath('userData'), 'jobs'),
     liveRecordingCapability,
     resolveTranscription,
+    modelProvisioner?.getStatus() ??
+      (runtimeStatus.ready
+        ? { state: 'ready', message: 'The private local transcription model is ready.' }
+        : { state: 'required', message: 'Model setup is required before transcription can start.' }),
   );
   // Speaker annotation edits transcripts to build evaluation ground truth. It
   // belongs to development only, so a packaged Sotto never turns it on and its
@@ -462,6 +511,35 @@ const initialize = async (): Promise<void> => {
     controller.enableAnnotation();
   }
   await controller.initialize();
+  if (modelProvisioner) {
+    modelProvisioner.subscribe((status) => {
+      controller?.setModelProvisioning(status);
+      if (status.state !== 'ready') return;
+      void modelProvisioner
+        .provision()
+        .then(async (modelPath) => {
+          runtimeStatus = await resolveEngineRuntime({
+            appPath: app.getAppPath(),
+            isPackaged: true,
+            resourcesPath: process.resourcesPath,
+            managedModelPath: modelPath,
+          });
+          await controller?.setRuntimeStatus(runtimeStatus);
+          await pruneManagedModelRevisions({
+            managedModelsRoot: path.join(app.getPath('userData'), 'managed-models'),
+            currentRevision: DEFAULT_TRANSCRIPTION_MODEL.revision,
+            activeModelPaths: [modelPath],
+          });
+        })
+        .catch((error: unknown) => {
+          console.warn('[sotto] The verified model could not activate the local engine.', error);
+          controller?.setModelProvisioning({
+            state: 'failed',
+            message: 'The verified model was downloaded but the local engine could not activate it. Retry Sotto model setup.',
+          });
+        });
+    });
+  }
   const localAiService = new LocalAiConnectionService({
     filePath: path.join(app.getPath('userData'), 'local-ai', 'connection.json'),
     credentialCipher: {
@@ -490,30 +568,6 @@ const initialize = async (): Promise<void> => {
     !bundlePath.startsWith('/Volumes/')
       ? bundlePath
       : null;
-  const updateConfigurationPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'sotto-update-config.json')
-    : process.env.SOTTO_UPDATE_CONFIG_FILE ?? null;
-  const updateConfiguration = await loadUpdateConfiguration(
-    updateConfigurationPath,
-  ).catch((error: unknown) => {
-    console.warn(
-      '[sotto] Secure updates are disabled because the embedded update configuration is invalid.',
-      error,
-    );
-    return null;
-  });
-  const updateCaPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'ca.crt')
-    : process.env.SOTTO_UPDATE_CA_FILE ?? null;
-  const updateCa = updateCaPath
-    ? await readFile(updateCaPath).catch((error: unknown) => {
-        console.warn(
-          '[sotto] The configured update CA could not be loaded; system trust will be used.',
-          error,
-        );
-        return undefined;
-      })
-    : undefined;
   const packageCommit = app.isPackaged
     ? await readFile(path.join(process.resourcesPath, 'sotto-build.json'), 'utf8')
         .then((raw) => {
@@ -604,6 +658,7 @@ const initialize = async (): Promise<void> => {
     controller,
     localAiService,
     updateService,
+    modelProvisioner: modelProvisioner ?? undefined,
     getAppVersion: () => app.getVersion(),
     getMainWindow: () => mainWindow,
     getActivityWindow: () => activityWindow,
@@ -616,7 +671,7 @@ const initialize = async (): Promise<void> => {
     appSettings: {
       get: async () => {
         const models = await listTranscriptionModels(
-          bundledModelsDirectory,
+          defaultModelsDirectory,
           userModelsDirectory,
         );
         const settings = settingsStore.get();
@@ -642,7 +697,7 @@ const initialize = async (): Promise<void> => {
       update: async (input) => {
         if (input.transcriptionModelId !== undefined) {
           const models = await listTranscriptionModels(
-            bundledModelsDirectory,
+            defaultModelsDirectory,
             userModelsDirectory,
           );
           if (!models.some((model) => model.id === input.transcriptionModelId)) {
@@ -700,6 +755,7 @@ const initialize = async (): Promise<void> => {
   }, 20_000);
 
   createWindow();
+  if (modelProvisioner) void modelProvisioner.provision().catch(() => undefined);
   if (!globalShortcut.register(DICTATION_ACCELERATOR, requestDictationToggle)) {
     console.warn(
       `[sotto] The dictation shortcut ${DICTATION_ACCELERATOR} is already in use.`,

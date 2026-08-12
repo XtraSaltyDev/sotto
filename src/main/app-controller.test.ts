@@ -1216,6 +1216,49 @@ describe('transcript presentation', () => {
     });
   });
 
+  it.each<
+    | 'checking'
+    | 'required'
+    | 'downloading'
+    | 'verifying'
+    | 'failed'
+    | 'cancelled'
+  >(['checking', 'required', 'downloading', 'verifying', 'failed', 'cancelled'])(
+    'publishes model provisioning state %s without blocking library initialization',
+    async (state) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-model-state-'));
+      temporaryRoots.push(root);
+      const repository = new TranscriptRepository(path.join(root, 'transcripts'));
+      const runtimeStatus = await resolveEngineRuntime({
+        appPath: root,
+        isPackaged: false,
+        platform: 'linux',
+        arch: 'x64',
+        environment: {},
+      });
+      const controller = new AppController(
+        repository,
+        runtimeStatus,
+        path.join(root, 'jobs'),
+        undefined,
+        undefined,
+        {
+          state,
+          message: 'Model setup is required.',
+          ...(state === 'downloading'
+            ? { receivedBytes: 1, totalBytes: 2 }
+            : {}),
+        },
+      );
+      await controller.initialize();
+      expect(controller.getState().modelProvisioning?.state).toBe(state);
+      await expect(
+        controller.startTranscription(importedMedia(root)),
+      ).rejects.toMatchObject({ code: 'engine-unavailable' });
+      await controller.dispose();
+    },
+  );
+
   it('refreshes a capability provider on state reads and recording lifecycle emits', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-capability-provider-'));
     temporaryRoots.push(root);

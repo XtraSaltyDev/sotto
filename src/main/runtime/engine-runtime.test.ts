@@ -229,6 +229,37 @@ describe('resolveEngineRuntime', () => {
     );
   });
 
+  it('resolves a verified managed model outside packaged resources', async () => {
+    const appPath = await makeTemporaryDirectory();
+    const resourcesPath = await makeTemporaryDirectory();
+    const managedModelPath = path.join(
+      await makeTemporaryDirectory(),
+      'ggml-large-v3-turbo.bin',
+    );
+    await writeRuntime(
+      resourcesPath,
+      path.join(resourcesPath, 'speaker-diarization-child.cjs'),
+    );
+    await writeFile(managedModelPath, 'managed model');
+
+    const status = await resolveEngineRuntime({
+      appPath,
+      resourcesPath,
+      isPackaged: true,
+      platform: 'darwin',
+      arch: 'arm64',
+      managedModelPath,
+    });
+
+    expect(status.ready).toBe(true);
+    expect(status.components.model).toEqual({
+      path: managedModelPath,
+      source: 'managed',
+      state: 'ready',
+    });
+    expect(status.runtime?.modelPath).toBe(managedModelPath);
+  });
+
   it.skipIf(skipOnWindows)('keeps Whisper ready when optional speaker resources are unavailable', async () => {
     const appPath = await makeTemporaryDirectory();
     const resourcesRoot = path.join(appPath, 'resources');

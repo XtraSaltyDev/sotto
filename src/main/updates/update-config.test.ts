@@ -74,6 +74,26 @@ describe('parseUpdateConfiguration', () => {
       'verification key is invalid',
     );
   });
+
+  it('accepts an optional model URL only on the manifest origin', () => {
+    const configuration = {
+      ...validConfiguration(),
+      modelUrl: 'https://updates.example.test/internal/sotto/model.bin',
+    };
+    expect(parseUpdateConfiguration(configuration)).toMatchObject({
+      manifestUrl: configuration.manifestUrl,
+      modelUrl: configuration.modelUrl,
+    });
+    for (const modelUrl of [
+      'http://updates.example.test/internal/sotto/model.bin',
+      'https://other.example.test/internal/sotto/model.bin',
+      'https://updates.example.test/internal/sotto/model.bin?token=secret',
+    ]) {
+      expect(() =>
+        parseUpdateConfiguration({ ...configuration, modelUrl }),
+      ).toThrow(/model URL/u);
+    }
+  });
 });
 
 describe('loadUpdateConfiguration', () => {

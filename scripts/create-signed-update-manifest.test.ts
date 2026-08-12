@@ -6,7 +6,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { verifyReleaseManifest } from '../src/main/updates/release-manifest.cjs';
-import { createSignedUpdateManifest } from './create-signed-update-manifest.mjs';
+import {
+  createSignedUpdateManifest,
+  verifyDefaultModelArtifact,
+} from './create-signed-update-manifest.mjs';
 
 const temporaryDirectories: string[] = [];
 
@@ -28,6 +31,7 @@ const publisherOptions = async ({
   configUrl = 'https://updates.example.test/internal/sotto/latest.json',
   configuredPublicKey,
   keyInsideProject = false,
+  includeModel = false,
 }: {
   configUrl?: string;
   configuredPublicKey?: string;
@@ -53,6 +57,9 @@ const publisherOptions = async ({
     JSON.stringify({
       schemaVersion: 1,
       manifestUrl: configUrl,
+      ...(includeModel
+        ? { modelUrl: 'https://updates.example.test/internal/sotto/model.bin' }
+        : {}),
       keys: [
         {
           algorithm: 'ed25519',
@@ -85,6 +92,21 @@ const publisherOptions = async ({
 };
 
 describe('createSignedUpdateManifest', () => {
+  it('rejects a model artifact URL that is not an immutable HTTPS update-origin path', async () => {
+    await expect(
+      verifyDefaultModelArtifact({
+        artifact: {
+          file: 'ggml-large-v3-turbo.bin',
+          revision: '6034871ec87c84e342efab769d4c5c06cd126db3',
+          localPath: '/missing/model.bin',
+          downloadUrl: 'https://updates.example.test/model.bin?token=secret',
+        },
+        modelUrl: 'https://updates.example.test/model.bin?token=secret',
+        manifestUrl: 'https://updates.example.test/internal/sotto/latest.json',
+      }),
+    ).rejects.toThrow('not bound to the compiled model identity');
+  });
+
   it('hashes release artifacts and signs the authenticated manifest with a test key', async () => {
     const root = await temporaryDirectory();
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -189,5 +211,20 @@ describe('createSignedUpdateManifest', () => {
     await expect(createSignedUpdateManifest(options)).rejects.toThrow(
       'must stay outside the repository',
     );
+  });
+
+  it('rejects a separate model artifact whose filename or identity is not compiled', async () => {
+    const options = await publisherOptions({ includeModel: true });
+    await expect(
+      createSignedUpdateManifest({
+        ...options,
+        modelArtifact: {
+          file: 'wrong-model.bin',
+          revision: '6034871ec87c84e342efab769d4c5c06cd126db3',
+          localPath: options.artifacts['darwin-arm64'].localPath,
+          downloadUrl: 'https://updates.example.test/internal/sotto/model.bin',
+        },
+      }),
+    ).rejects.toThrow(/compiled model identity/u);
   });
 });

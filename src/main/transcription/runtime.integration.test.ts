@@ -36,6 +36,14 @@ const transcribeFixture = async (
     isPackaged: false,
     platform: target.platform,
     arch: target.arch,
+    managedModelPath: path.join(
+      appPath,
+      '.build',
+      'runtime',
+      target.id,
+      'model-artifact',
+      'ggml-large-v3-turbo.bin',
+    ),
     environment: {},
   });
   if (!runtime.ready) {

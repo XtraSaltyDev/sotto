@@ -55,7 +55,7 @@ describe('SettingsPage', () => {
     ).toBe('Multilingual · added by you');
     expect(
       modelDescription({ multilingual: false, source: 'bundled' }),
-    ).toBe('English only · included with Sotto');
+    ).toBe('English only · default Sotto model');
     expect(formatModelSize(487_601_920)).toBe('465 MB');
   });
 
