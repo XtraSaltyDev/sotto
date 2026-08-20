@@ -114,3 +114,4 @@ resources/sidecars/*/whisper-cli
 resources/sidecars/*/runtime-manifest.json
 resources/sidecars/*/*.exe
 resources/sidecars/*/*.dll
+resources/sidecars/darwin-arm64/sotto-screen-permission-request
