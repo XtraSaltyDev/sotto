@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -9,6 +9,9 @@ import type {
   RunProcessOptions,
 } from '../process/process-runner';
 import {
+  MAX_MEDIA_NORMALIZATION_WALL_TIME_MS,
+  MAX_NORMALIZED_AUDIO_BYTES,
+  MAX_NORMALIZED_MEDIA_DURATION_SECONDS,
   normalizeMediaToWav,
   readFfmpegProgressSeconds,
 } from './media-normalizer';
@@ -114,6 +117,8 @@ describe('normalizeMediaToWav', () => {
       'pcm_s16le',
       '-f',
       'wav',
+      '-t',
+      String(MAX_NORMALIZED_MEDIA_DURATION_SECONDS + 1),
       '-progress',
       'pipe:1',
       '-nostats',
@@ -173,6 +178,76 @@ describe('normalizeMediaToWav', () => {
       diagnostics: 'Decoder failed',
     });
     expect(progress).toEqual([0]);
+  });
+
+  it('rejects a known overlong recording before launching FFmpeg', async () => {
+    const processRunner = vi.fn();
+
+    await expect(
+      normalizeMediaToWav({
+        ffmpegPath: '/runtime/ffmpeg',
+        inputPath: '/recordings/all-day.mp4',
+        outputPath: '/recordings/all-day.wav',
+        durationSeconds: MAX_NORMALIZED_MEDIA_DURATION_SECONDS + 1,
+        processRunner,
+      }),
+    ).rejects.toMatchObject({ diagnostics: expect.stringContaining('12-hour') });
+    expect(processRunner).not.toHaveBeenCalled();
+  });
+
+  it('removes decoded output that exceeds the bounded PCM ceiling', async () => {
+    const directory = await makeTemporaryDirectory();
+    const outputPath = path.join(directory, 'oversized.wav');
+    const processRunner = vi.fn(async () => {
+      await writeFile(outputPath, Buffer.alloc(44));
+      await truncate(outputPath, MAX_NORMALIZED_AUDIO_BYTES + 1);
+      return successfulResult;
+    });
+
+    await expect(
+      normalizeMediaToWav({
+        ffmpegPath: '/runtime/ffmpeg',
+        inputPath: '/recordings/unknown.webm',
+        outputPath,
+        durationSeconds: null,
+        processRunner,
+      }),
+    ).rejects.toMatchObject({ diagnostics: expect.stringContaining('12-hour') });
+    await expect(writeFile(outputPath, Buffer.alloc(44), { flag: 'wx' })).resolves.toBeUndefined();
+  });
+
+  it('aborts and removes partial output after the normalization deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const directory = await makeTemporaryDirectory();
+      const outputPath = path.join(directory, 'stalled.wav');
+      const processRunner = vi.fn(async (options: RunProcessOptions) => {
+        return new Promise<ProcessResult>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => reject(new Error('aborted')),
+            { once: true },
+          );
+        });
+      });
+      const assertion = expect(
+        normalizeMediaToWav({
+          ffmpegPath: '/runtime/ffmpeg',
+          inputPath: '/recordings/stalled.webm',
+          outputPath,
+          durationSeconds: null,
+          processRunner,
+        }),
+      ).rejects.toMatchObject({
+        diagnostics: expect.stringContaining('30-minute'),
+      });
+
+      await vi.advanceTimersByTimeAsync(MAX_MEDIA_NORMALIZATION_WALL_TIME_MS);
+      await assertion;
+      await expect(writeFile(outputPath, Buffer.alloc(44), { flag: 'wx' })).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects normalization over the source path', async () => {

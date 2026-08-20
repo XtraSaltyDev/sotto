@@ -124,8 +124,10 @@ npm run make
 `setup:hooks` wires the repository's pre-push quality gate (lint, typecheck,
 tests) so nothing broken reaches the remote; bypass a run deliberately with
 `git push --no-verify`. GitHub runs the same lint, typecheck, unit-test, and
-production-audit source gates with the pinned Node/npm toolchain. Releases use
-the separate candidate, stage, acceptance, and promotion commands below.
+production-audit source gates with the pinned Node/npm toolchain. Public macOS
+releases use the manually dispatched, fail-closed GitHub Actions workflow in
+[docs/github-releases.md](docs/github-releases.md); local packages remain
+development artifacts.
 
 Then open:
 
@@ -142,11 +144,8 @@ out/make/Sotto-<version>-arm64.dmg
 Open the DMG and drag **Sotto** onto **Applications**. The ZIP remains
 available as an alternate artifact and for static-file update workflows.
 
-Internal update-enabled packages follow the signed-manifest, Developer ID, and
-key-rotation procedure in [docs/internal-distribution.md](docs/internal-distribution.md).
-Published macOS packages are signed, notarized, stapled, and Gatekeeper-checked;
-ad-hoc packages are development-only.
-The complete platform contract is in
+Public macOS packages must be signed, notarized, stapled, and
+Gatekeeper-checked; ad-hoc packages are development-only. The complete platform contract is in
 [docs/macos-installation-and-updates.md](docs/macos-installation-and-updates.md).
 
 Local packages use an ad-hoc signature without Hardened Runtime. That is
@@ -174,20 +173,11 @@ and ZIP. The release command also signs, notarizes, and staples the finished
 DMG. Keep both the Apple Developer team and `com.sotto.desktop` bundle ID
 unchanged for every release.
 
-Releases are split into candidate, staging, acceptance, and promotion. Prepare
-the version commit on `main`, create and push the exact `v<version>` tag, then
-run `npm run release:candidate -- <version>`. It uses the pinned toolchain and
-lockfile, runs source and native-runtime gates, and builds the Developer ID
-signed, notarized, stapled macOS candidate. It does not commit, push, upload,
-install, or publish.
-
-`npm run release:stage -- <version>` uploads that exact candidate to an
-immutable versioned directory without changing `latest.json`. After
-fresh-install and previous-version upgrade acceptance is recorded, set
-`SOTTO_RELEASE_ACCEPTANCE_FILE` and run
-`npm run release:promote -- <version>`. Windows is excluded until it has a
-native Windows build, Authenticode signature, install/upgrade acceptance, and
-its own qualified artifact record.
+Public releases use the repository-native GitHub workflow for signing,
+notarization, checksums, provenance, and mounted-DMG verification. Windows is
+excluded until it has a native
+Windows build, Authenticode signature, install/upgrade acceptance, and its own
+qualified artifact record.
 
 The first Developer-ID-signed release cannot inherit permission that was
 granted to an older ad-hoc build because the old grant names that build's exact
@@ -232,8 +222,9 @@ cancelled imports do not retain a playback copy.
 Open **Local AI** from the sidebar to connect Ollama or another
 OpenAI-compatible endpoint running on this computer or a private network.
 **Connect Ollama** uses `http://127.0.0.1:11434/v1`. Sotto also accepts
-private IPv4/IPv6 addresses and `.local` hosts, including authenticated LAN
-controllers. Public internet endpoints, credentials embedded in URLs, query
+literal private IPv4/IPv6 addresses, including authenticated LAN controllers.
+Hostnames that require DNS or mDNS resolution are rejected to prevent endpoint
+rebinding. Public internet endpoints, credentials embedded in URLs, query
 strings, redirects, and non-HTTP protocols are rejected.
 
 **Connect and find models** makes a bounded, eight-second `GET /v1/models`
@@ -685,7 +676,7 @@ fixture, and clean-machine qualification before public release.
 The Windows x64 runtime requires SSE4.2, AVX, AVX2, BMI2, F16C, and FMA CPU
 features. Its runtime manifest records that baseline and hashes the speaker
 addon plus all four required DLLs. The portable ZIP and executable are not
-Authenticode-signed, so they are internal test artifacts.
+Authenticode-signed, so they are development-only test artifacts.
 
 Squirrel.Windows is configured for an installer build, but Electron Forge only
 supports that maker on Windows or Linux with Wine and Mono. Run
@@ -703,8 +694,9 @@ installer also needs Authenticode code signing and an install/upgrade test.
    and rebuild the native speaker runtime for older macOS versions if needed.
 
 Cloud sync, accounts, and internet-hosted summarization remain intentionally
-out of scope. Private, signed updates are implemented only for the controlled
-Spark HTTPS channel described above.
+out of scope. The signed-update protocol remains in the codebase, but no public
+update endpoint is configured. New signed builds are published through GitHub
+Releases and installed manually.
 
 ## Primary references
 

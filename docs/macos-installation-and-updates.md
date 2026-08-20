@@ -22,8 +22,8 @@ and notarization are required.
 Every release must preserve all of these values:
 
 - bundle ID: `com.sotto.desktop`;
-- Apple Team ID: `TEAMID1234`;
-- signing authority: `Developer ID Application: XtraSaltyDev (TEAMID1234)`;
+- Apple Team ID: the project-owned release team configured outside Git;
+- signing authority: a Developer ID Application identity for that same team;
 - a designated code requirement compatible with the installed release;
 - a strictly increasing numeric `CFBundleShortVersionString`.
 
@@ -83,7 +83,7 @@ Sotto keeps two independent trust layers:
    app's Apple code requirement and applies it after the app quits.
 
 For an update ZIP no larger than 900 MiB, the update service downloads it over
-HTTPS with the configured private CA, refuses redirects and cross-origin
+HTTPS with the configured trust roots, refuses redirects and cross-origin
 artifacts, enforces the published size and SHA-256, then streams the verified
 file to Squirrel through a temporary server bound only to `127.0.0.1`. The
 loopback feed closes as soon as Squirrel reports `update-downloaded`. Do not use
@@ -104,9 +104,8 @@ replacement are owned by the framework, not application code.
 
 ## Ad-hoc to Developer ID transition
 
-Published 0.1.22 through 0.1.24 Mac artifacts are ad-hoc signed. They have no
-Apple Team ID, fail Gatekeeper, and cannot establish the identity required for
-safe automatic updates.
+Existing ad-hoc Mac artifacts have no Apple Team ID, fail Gatekeeper, and
+cannot establish the identity required for safe automatic updates.
 
 The first corrected release is automatically manual-only while its verified
 Mac ZIP exceeds 900 MiB. Its legacy-compatible signed manifest omits the ZIP,
@@ -124,15 +123,12 @@ on a representative installed client.
 
 ## Release and acceptance gates
 
-`scripts/release.sh` creates a candidate and cannot publish. It requires a
-clean `main` commit that exactly matches `origin/main` and a pushed
-`v<version>` tag pointing to that commit. It uses the pinned toolchain and
-lockfile, runs source and native-runtime gates, and stops unless package and
-Apple checks pass. `scripts/publish-spark-distribution.sh` stages the exact
-candidate under an immutable versioned path without changing `latest.json`.
-`scripts/promote-spark-distribution.sh` requires a matching installed-app
-acceptance record, atomically changes the stable pointer, and verifies it over
-the configured HTTPS trust path.
+The GitHub-native public-release workflow requires a clean tagged commit,
+pinned toolchain and lockfile, source and native-runtime gates, Developer ID
+signing, notarization, artifact checksums, provenance, and mounted-DMG
+verification. Publication remains separate from candidate creation and never
+silently falls back to ad-hoc signing. Fresh-install acceptance from the public
+GitHub Release remains a required operator check before announcing a release.
 
 Release acceptance requires separate evidence for:
 
@@ -152,7 +148,8 @@ Release acceptance requires separate evidence for:
   usable after update;
 - model continuity: an upgrade reuses a matching managed model without a second
   copy, while a fresh install visibly provisions or imports the model;
-- network: office LAN and corporate VPN can fetch the real manifest and ZIP.
+- network: a representative client can fetch the published manifest and
+  artifacts from the intended release origin.
 
 Package or server checks alone do not prove the installed update journey.
 

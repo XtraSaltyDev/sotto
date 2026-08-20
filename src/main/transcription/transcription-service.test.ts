@@ -22,6 +22,7 @@ import { PlaybackRepository } from '../storage/playback-repository';
 import {
   LocalTranscriptionService,
   resolveWindowsWhisperThreads,
+  whisperTranscriptionTimeoutMs,
   type LocalTranscriptionServiceOptions,
 } from './transcription-service';
 import type { SpeakerDiarizationResult } from './speaker-diarization';
@@ -181,7 +182,10 @@ describe('LocalTranscriptionService durable recording behavior', () => {
     withSpeakerRuntime = true,
     serviceOptions: Pick<
       LocalTranscriptionServiceOptions,
-      'availableParallelism' | 'platform' | 'transcriptionOptions'
+      | 'availableParallelism'
+      | 'platform'
+      | 'transcriptionOptions'
+      | 'whisperTimeoutMs'
     > = {},
   ) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sotto-transcription-'));
@@ -256,6 +260,43 @@ describe('LocalTranscriptionService durable recording behavior', () => {
     [32, 8],
   ])('bounds %s available processors to %s Whisper threads', (parallelism, expected) => {
     expect(resolveWindowsWhisperThreads(parallelism)).toBe(expected);
+  });
+
+  it('bounds Whisper wall time from short through extremely long media', () => {
+    expect(whisperTranscriptionTimeoutMs(30)).toBe(10 * 60_000);
+    expect(whisperTranscriptionTimeoutMs(60 * 60)).toBe(7_500_000);
+    expect(whisperTranscriptionTimeoutMs(24 * 60 * 60)).toBe(8 * 60 * 60_000);
+    expect(whisperTranscriptionTimeoutMs(null)).toBe(8 * 60 * 60_000);
+  });
+
+  it('fails rather than silently cancelling when Whisper exceeds its deadline', async () => {
+    const delegate = makeRunner(() => false);
+    const context = await setup(
+      async (options) => {
+        if (!options.args?.includes('--output-json-full')) {
+          return delegate(options);
+        }
+        return new Promise<ProcessResult>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => reject(new ProcessAbortedError(result())),
+            { once: true },
+          );
+        });
+      },
+      async () => ({ segments: [], clusterConsistency: null }),
+      false,
+      { whisperTimeoutMs: 10 },
+    );
+    const terminal = context.nextTerminal();
+
+    await context.service.start(context.media);
+
+    await expect(terminal).resolves.toMatchObject({
+      stage: 'failed',
+      errorCode: 'transcription-failed',
+      message: 'Local transcription exceeded Sotto\'s processing time limit.',
+    });
   });
 
   it('passes bounded thread arguments to Whisper only on Windows', async () => {

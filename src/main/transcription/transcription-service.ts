@@ -58,6 +58,20 @@ const MODEL_NAME = DEFAULT_TRANSCRIPTION_MODEL.id;
 const transcriptionModelName = (modelPath: string): string =>
   /^ggml-(.+)\.bin$/u.exec(path.basename(modelPath))?.[1] ?? MODEL_NAME;
 const MAX_WINDOWS_WHISPER_THREADS = 8;
+const MIN_WHISPER_TIMEOUT_MS = 10 * 60_000;
+const MAX_WHISPER_TIMEOUT_MS = 8 * 60 * 60_000;
+
+export const whisperTranscriptionTimeoutMs = (
+  durationSeconds: number | null,
+): number => {
+  if (durationSeconds === null || !Number.isFinite(durationSeconds)) {
+    return MAX_WHISPER_TIMEOUT_MS;
+  }
+  return Math.max(
+    MIN_WHISPER_TIMEOUT_MS,
+    Math.min(MAX_WHISPER_TIMEOUT_MS, durationSeconds * 2_000 + 5 * 60_000),
+  );
+};
 
 export const resolveWindowsWhisperThreads = (parallelism: number): number => {
   const normalized = Number.isFinite(parallelism) ? Math.floor(parallelism) : 1;
@@ -96,6 +110,8 @@ export interface LocalTranscriptionServiceOptions {
   /** Test seams for the Windows-only thread policy. */
   platform?: NodeJS.Platform;
   availableParallelism?: number;
+  /** Test seam; production derives a bounded deadline from media duration. */
+  whisperTimeoutMs?: number;
   playbackRepository?: PlaybackRepository;
   /**
    * Resolves the model and language for each new job, so settings changes
@@ -338,6 +354,7 @@ export class LocalTranscriptionService {
         outputJsonPath,
         signal,
         transcription,
+        normalizedDurationSeconds ?? probe.durationSeconds,
       );
 
       const outputStats = await stat(outputJsonPath);
@@ -501,7 +518,17 @@ export class LocalTranscriptionService {
     outputJsonPath: string,
     signal: AbortSignal,
     transcription: { modelPath: string; language: string; customVocabulary?: string[] },
+    durationSeconds: number | null,
   ): Promise<void> {
+    const timeoutMs =
+      this.options.whisperTimeoutMs ??
+      whisperTranscriptionTimeoutMs(durationSeconds);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new TypeError('Whisper timeout must be a positive safe integer.');
+    }
+    const deadlineController = new AbortController();
+    const deadline = setTimeout(() => deadlineController.abort(), timeoutMs);
+    const processSignal = AbortSignal.any([signal, deadlineController.signal]);
     const platform = this.options.platform ?? process.platform;
     const threadArgs =
       platform === 'win32'
@@ -552,7 +579,7 @@ export class LocalTranscriptionService {
           executable: this.options.runtime.whisperPath,
           args: [...baseArgs, ...extraArgs],
           maxDiagnosticBytes: 256 * 1_024,
-          signal,
+          signal: processSignal,
           onStderr: (chunk) => progressParser.push(chunk),
         });
         progressParser.end();
@@ -563,22 +590,35 @@ export class LocalTranscriptionService {
       }
     };
 
-    let result = await invoke();
-    const metalFailure =
-      result.exitCode === 139 ||
-      result.signal === 'SIGSEGV' ||
-      /ggml_metal|metal.*(?:failed|error)/iu.test(result.stderr);
-    if (result.exitCode !== 0 && metalFailure && !signal.aborted) {
-      await unlink(outputJsonPath).catch(() => undefined);
-      this.update('transcribing', 0.2, 'Metal was unavailable; continuing on the CPU…');
-      result = await invoke(['--no-gpu']);
-    }
+    try {
+      let result = await invoke();
+      const metalFailure =
+        result.exitCode === 139 ||
+        result.signal === 'SIGSEGV' ||
+        /ggml_metal|metal.*(?:failed|error)/iu.test(result.stderr);
+      if (result.exitCode !== 0 && metalFailure && !signal.aborted) {
+        await unlink(outputJsonPath).catch(() => undefined);
+        this.update('transcribing', 0.2, 'Metal was unavailable; continuing on the CPU…');
+        result = await invoke(['--no-gpu']);
+      }
 
-    if (result.exitCode !== 0) {
-      throw new PipelineError(
-        'transcription-failed',
-        'The local transcription engine could not process this recording.',
-      );
+      if (result.exitCode !== 0) {
+        throw new PipelineError(
+          'transcription-failed',
+          'The local transcription engine could not process this recording.',
+        );
+      }
+    } catch (error) {
+      if (deadlineController.signal.aborted && !signal.aborted) {
+        await unlink(outputJsonPath).catch(() => undefined);
+        throw new PipelineError(
+          'transcription-failed',
+          'Local transcription exceeded Sotto\'s processing time limit.',
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(deadline);
     }
   }
 

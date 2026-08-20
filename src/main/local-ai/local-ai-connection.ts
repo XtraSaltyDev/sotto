@@ -85,8 +85,7 @@ const isLocalHostname = (hostname: string): boolean => {
   if (addressType === 6) return isPrivateIpv6(normalized);
   return (
     normalized === 'localhost' ||
-    normalized.endsWith('.localhost') ||
-    normalized.endsWith('.local')
+    normalized.endsWith('.localhost')
   );
 };
 
@@ -110,7 +109,7 @@ export const normalizeLocalAiBaseUrl = (value: unknown): string => {
     !isLocalHostname(url.hostname)
   ) {
     throw new TypeError(
-      'Use an HTTP or HTTPS endpoint on localhost, a private network address, or a .local host.',
+      'Use an HTTP or HTTPS endpoint on localhost or a private IP address.',
     );
   }
 

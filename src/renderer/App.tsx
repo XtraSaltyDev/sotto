@@ -993,6 +993,9 @@ const MainApp = ({
         if (!navigator.mediaDevices.getDisplayMedia) {
           throw new Error('This build cannot request desktop audio capture.');
         }
+        if (!window.sotto.authorizeDisplayCapture()) {
+          throw new Error('Sotto could not authorize desktop audio capture.');
+        }
         // Start the display request synchronously from the button gesture. An
         // IPC round-trip before getDisplayMedia can consume the browser's
         // transient user activation and make the OS prompt fail.

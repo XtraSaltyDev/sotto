@@ -9,15 +9,6 @@ dmg="${2:-out/make/Sotto-${version}-arm64.dmg}"
   printf 'Usage: %s <version> [dmg-path]\n' "$0" >&2
   exit 1
 }
-[[ -n "${SOTTO_UPDATE_CONFIG_FILE:-}" && -s "$SOTTO_UPDATE_CONFIG_FILE" ]] || {
-  printf 'SOTTO_UPDATE_CONFIG_FILE is required.\n' >&2
-  exit 1
-}
-[[ -n "${SOTTO_UPDATE_CA_FILE:-}" && -s "$SOTTO_UPDATE_CA_FILE" ]] || {
-  printf 'SOTTO_UPDATE_CA_FILE is required.\n' >&2
-  exit 1
-}
-
 /usr/bin/codesign --verify --strict --verbose=2 "$dmg"
 /usr/bin/xcrun stapler validate "$dmg"
 /usr/sbin/spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
@@ -42,12 +33,16 @@ app_path="$mount_point/Sotto.app"
   exit 1
 }
 SOTTO_REQUIRE_CLEAN_SOURCE=1 \
-  SOTTO_REQUIRE_SECURE_UPDATE_CONFIG=1 \
-  SOTTO_REQUIRE_UPDATE_CA=1 \
   SOTTO_REQUIRE_APPLE_DISTRIBUTION=1 \
   node scripts/verify-packaged-app.mjs darwin-arm64 "$app_path"
-cmp -s "$SOTTO_UPDATE_CONFIG_FILE" "$app_path/Contents/Resources/sotto-update-config.json"
-cmp -s "$SOTTO_UPDATE_CA_FILE" "$app_path/Contents/Resources/ca.crt"
+[[ ! -e "$app_path/Contents/Resources/sotto-update-config.json" ]] || {
+  printf 'Public releases must not embed a private update configuration.\n' >&2
+  exit 1
+}
+[[ ! -e "$app_path/Contents/Resources/ca.crt" ]] || {
+  printf 'Public releases must not embed a private update CA.\n' >&2
+  exit 1
+}
 /usr/bin/hdiutil detach "$mount_point" >/dev/null
 mounted=0
 printf 'Verified signed, notarized Sotto %s DMG and mounted app.\n' "$version"

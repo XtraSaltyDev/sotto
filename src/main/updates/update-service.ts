@@ -45,6 +45,36 @@ const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
 
+const readBoundedManifest = async (response: Response): Promise<string> => {
+  const contentLength = response.headers.get('content-length');
+  if (
+    contentLength !== null &&
+    (!/^\d+$/u.test(contentLength) || Number(contentLength) > MAX_MANIFEST_BYTES)
+  ) {
+    throw new TypeError('The update manifest is too large.');
+  }
+  if (!response.body) {
+    throw new TypeError('The update manifest is empty.');
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  let next = await reader.read();
+  while (!next.done) {
+    bytes += next.value.byteLength;
+    if (bytes > MAX_MANIFEST_BYTES) {
+      await reader.cancel();
+      throw new TypeError('The update manifest is too large.');
+    }
+    chunks.push(next.value);
+    next = await reader.read();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes).toString(
+    'utf8',
+  );
+};
+
 // Squirrel.Mac's legacy URL loader buffers the complete archive in memory.
 // Keep a conservative ceiling here as a second line of defense even though the
 // publisher also omits oversized archives.
@@ -617,10 +647,7 @@ export class UpdateService {
           `The update manifest returned HTTP ${response.status}.`,
         );
       }
-      const body = await response.text();
-      if (Buffer.byteLength(body, 'utf8') > MAX_MANIFEST_BYTES) {
-        throw new TypeError('The update manifest is too large.');
-      }
+      const body = await readBoundedManifest(response);
       return verifyReleaseManifest(
         JSON.parse(body) as unknown,
         this.options.trustedManifestKeys,

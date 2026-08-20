@@ -20,9 +20,7 @@
     "make:windows:zip": "electron-forge make --platform=win32 --arch=x64 --targets=@electron-forge/maker-zip",
     "verify:package:mac": "node scripts/verify-packaged-app.mjs darwin-arm64",
     "verify:package:windows": "node scripts/verify-packaged-app.mjs win32-x64",
-    "release:candidate": "bash scripts/release.sh",
-    "release:stage": "bash scripts/publish-spark-distribution.sh",
-    "release:promote": "bash scripts/promote-spark-distribution.sh",
+    "verify:release:identity": "bash scripts/verify-release-identity.sh",
     "verify:toolchain": "node scripts/verify-toolchain.mjs",
     "lint": "eslint --ext .ts,.tsx .",
     "typecheck": "tsc --noEmit",
@@ -40,14 +38,21 @@
     "local-first",
     "electron"
   ],
-  "author": {
-    "name": "memion01",
-    "email": "116808225+XtraSaltyDev@users.noreply.github.com"
-  },
+  "author": "XtraSaltyDev",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/XtraSaltyDev/sotto.git"
+  },
+  "bugs": {
+    "url": "https://github.com/XtraSaltyDev/sotto/issues"
+  },
+  "homepage": "https://github.com/XtraSaltyDev/sotto#readme",
   "overrides": {
     "tar": "7.5.22",
-    "tmp": "0.2.7"
+    "tmp": "0.2.7",
+    "uuid": "11.1.1",
+    "webpack-dev-server": "6.0.0"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",

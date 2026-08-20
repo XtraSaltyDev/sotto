@@ -52,7 +52,6 @@ describe('normalizeLocalAiBaseUrl', () => {
     ['http://localhost:11434', 'http://localhost:11434/v1'],
     ['http://127.0.0.1:11434/v1/', 'http://127.0.0.1:11434/v1'],
     ['http://10.1.2.3:8080', 'http://10.1.2.3:8080/v1'],
-    ['https://spark-01.local/openai/v1/', 'https://spark-01.local/openai/v1'],
   ])('normalizes %s', (input, expected) => {
     expect(normalizeLocalAiBaseUrl(input)).toBe(expected);
   });
@@ -62,6 +61,7 @@ describe('normalizeLocalAiBaseUrl', () => {
     'file:///tmp/models',
     'http://user:secret@localhost:11434/v1',
     'http://localhost:11434/v1?key=secret',
+    'https://model-server.local/v1',
   ])('rejects non-local or unsafe endpoint %s', (input) => {
     expect(() => normalizeLocalAiBaseUrl(input)).toThrow();
   });

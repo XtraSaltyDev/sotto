@@ -23,6 +23,8 @@ const api: SottoDesktopApi = Object.freeze({
   getAppVersion: () => ipcRenderer.invoke(IPC_CHANNELS.getAppVersion),
   importMedia: (expectedSpeakerCount: ExpectedSpeakerCount = null) =>
     ipcRenderer.invoke(IPC_CHANNELS.importMedia, expectedSpeakerCount),
+  authorizeDisplayCapture: () =>
+    ipcRenderer.sendSync(IPC_CHANNELS.authorizeDisplayCapture) === true,
   startLiveRecording: (kind: RecordingKind = 'meeting') =>
     ipcRenderer.invoke(IPC_CHANNELS.startLiveRecording, kind),
   appendLiveRecordingChunk: (recordingId: string, chunk: ArrayBuffer) =>

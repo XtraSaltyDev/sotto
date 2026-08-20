@@ -2,6 +2,7 @@ export const IPC_CHANNELS = {
   getAppState: 'sotto:state:get',
   getAppVersion: 'sotto:version:get',
   importMedia: 'sotto:media:import',
+  authorizeDisplayCapture: 'sotto:recording:display-capture:authorize',
   startLiveRecording: 'sotto:recording:start',
   appendLiveRecordingChunk: 'sotto:recording:chunk',
   setLiveRecordingPaused: 'sotto:recording:pause',
@@ -793,6 +794,7 @@ export interface SottoDesktopApi {
   importMedia(
     expectedSpeakerCount?: ExpectedSpeakerCount,
   ): Promise<ImportMediaResult>;
+  authorizeDisplayCapture(): boolean;
   startLiveRecording(kind?: RecordingKind): Promise<StartLiveRecordingResult>;
   appendLiveRecordingChunk(
     recordingId: string,

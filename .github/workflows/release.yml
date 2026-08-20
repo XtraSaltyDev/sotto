@@ -1,0 +1,175 @@
+name: Publish signed macOS release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag on main to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    environment: release
+    runs-on: macos-15
+    timeout-minutes: 180
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Validate requested tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'version=%s\n' "${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Verify release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          git tag --points-at HEAD | grep -Fxq "$RELEASE_TAG"
+          [[ "$(node -p "require('./package.json').version")" == "$RELEASE_VERSION" ]]
+          [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]]
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            printf 'GitHub Release %s already exists.\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Install and verify source
+        run: |
+          npm ci --ignore-scripts
+          npm audit --omit=dev --audit-level=high
+          npm run lint
+          npm run typecheck
+          npm test
+
+      - name: Provision pinned native runtime
+        run: |
+          if ! xcrun --sdk macosx --find metallib >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          npm run setup:runtime:mac
+          npm rebuild macos-alias fs-xattr
+
+      - name: Import Developer ID identity
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.SOTTO_MAC_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.SOTTO_MAC_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.SOTTO_CI_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [[ -n "$CERTIFICATE_P12_BASE64" && -n "$CERTIFICATE_PASSWORD" && -n "$KEYCHAIN_PASSWORD" ]]
+          certificate="$RUNNER_TEMP/sotto-release.p12"
+          keychain="$RUNNER_TEMP/sotto-release.keychain-db"
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -nE 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ "(Developer ID Application: .+)"$/\1/p')"
+          [[ -n "$identity" && "$(printf '%s\n' "$identity" | wc -l | tr -d ' ')" == '1' ]]
+          printf 'SOTTO_MAC_SIGNING_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
+          rm -f "$certificate"
+
+      - name: Configure Apple notarization
+        env:
+          APPLE_ID: ${{ secrets.SOTTO_APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.SOTTO_APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.SOTTO_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          [[ -n "$APPLE_ID" && -n "$APPLE_APP_PASSWORD" && -n "$APPLE_TEAM_ID" ]]
+          xcrun notarytool store-credentials sotto-ci \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+          printf 'SOTTO_MAC_NOTARY_KEYCHAIN_PROFILE=sotto-ci\n' >> "$GITHUB_ENV"
+
+      - name: Build, notarize, and verify release
+        env:
+          SOTTO_REQUIRE_CLEAN_SOURCE: '1'
+        run: |
+          npm run make:mac:release
+          bash scripts/verify-release-dmg.sh "${{ steps.release.outputs.version }}"
+
+      - name: Assemble release assets
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          dmg="out/make/Sotto-${RELEASE_VERSION}-arm64.dmg"
+          zip="$(find out/make -type f -name "Sotto-darwin-arm64-${RELEASE_VERSION}.zip" -print -quit)"
+          [[ -s "$dmg" && -n "$zip" && -s "$zip" ]]
+          cp "$dmg" "$zip" release-assets/
+          if find release-assets -type f -size +2147483647c -print -quit | grep -q .; then
+            printf "A release asset exceeds GitHub's 2 GiB limit.\n" >&2
+            exit 1
+          fi
+          (cd release-assets && shasum -a 256 Sotto-*) > release-assets/SHA256SUMS.txt
+
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: release-assets/*
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sotto-release-${{ inputs.tag }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: sotto-release-${{ inputs.tag }}
+          path: release-assets
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Sotto $RELEASE_TAG" \
+            --generate-notes \
+            --verify-tag

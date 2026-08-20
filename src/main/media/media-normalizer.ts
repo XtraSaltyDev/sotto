@@ -1,4 +1,4 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { createFfmpegProgressParser } from './ffmpeg-progress';
@@ -10,6 +10,13 @@ import {
 
 export const NORMALIZED_AUDIO_SAMPLE_RATE = 16_000;
 export const NORMALIZED_AUDIO_CHANNELS = 1;
+export const MAX_NORMALIZED_MEDIA_DURATION_SECONDS = 12 * 60 * 60;
+export const MAX_MEDIA_NORMALIZATION_WALL_TIME_MS = 30 * 60_000;
+const NORMALIZED_AUDIO_BYTES_PER_SECOND =
+  NORMALIZED_AUDIO_SAMPLE_RATE * NORMALIZED_AUDIO_CHANNELS * 2;
+export const MAX_NORMALIZED_AUDIO_BYTES =
+  MAX_NORMALIZED_MEDIA_DURATION_SECONDS * NORMALIZED_AUDIO_BYTES_PER_SECOND +
+  4 * 1024;
 
 export class MediaNormalizationError extends Error {
   readonly diagnostics: string;
@@ -81,7 +88,7 @@ const assertMediaPaths = (inputPath: string, outputPath: string): void => {
   }
 };
 
-const verifyNormalizedOutput = async (outputPath: string): Promise<void> => {
+const verifyNormalizedOutput = async (outputPath: string): Promise<number> => {
   let stats;
   try {
     stats = await lstat(outputPath);
@@ -96,6 +103,7 @@ const verifyNormalizedOutput = async (outputPath: string): Promise<void> => {
       'FFmpeg created an invalid or incomplete WAV output.',
     );
   }
+  return stats.size;
 };
 
 /** Normalizes the first audio stream to whisper.cpp's canonical PCM input. */
@@ -112,6 +120,14 @@ export const normalizeMediaToWav = async (
     (!Number.isFinite(options.durationSeconds) || options.durationSeconds <= 0)
   ) {
     throw new TypeError('durationSeconds must be positive or null.');
+  }
+  if (
+    options.durationSeconds !== null &&
+    options.durationSeconds > MAX_NORMALIZED_MEDIA_DURATION_SECONDS
+  ) {
+    throw new MediaNormalizationError(
+      'This recording is longer than Sotto\'s 12-hour processing limit.',
+    );
   }
 
   let lastProgress = -1;
@@ -141,50 +157,84 @@ export const normalizeMediaToWav = async (
 
   emitProgress(0);
   const runner = options.processRunner ?? runProcess;
-  const result = await runner({
-    executable: options.ffmpegPath,
-    args: [
-      '-nostdin',
-      '-hide_banner',
-      '-loglevel',
-      'error',
-      '-n',
-      '-protocol_whitelist',
-      'file,pipe',
-      '-i',
-      options.inputPath,
-      '-map',
-      '0:a:0',
-      '-vn',
-      '-sn',
-      '-dn',
-      '-map_metadata',
-      '-1',
-      '-map_chapters',
-      '-1',
-      '-ac',
-      String(NORMALIZED_AUDIO_CHANNELS),
-      '-ar',
-      String(NORMALIZED_AUDIO_SAMPLE_RATE),
-      '-c:a',
-      'pcm_s16le',
-      '-f',
-      'wav',
-      '-progress',
-      'pipe:1',
-      '-nostats',
-      options.outputPath,
-    ],
-    signal: options.signal,
-    onStdout: (chunk) => progressParser.push(chunk),
-  });
+  const deadlineController = new AbortController();
+  const deadline = setTimeout(
+    () => deadlineController.abort(),
+    MAX_MEDIA_NORMALIZATION_WALL_TIME_MS,
+  );
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, deadlineController.signal])
+    : deadlineController.signal;
+  let result: ProcessResult;
+  try {
+    result = await runner({
+      executable: options.ffmpegPath,
+      args: [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-n',
+        '-protocol_whitelist',
+        'file,pipe',
+        '-i',
+        options.inputPath,
+        '-map',
+        '0:a:0',
+        '-vn',
+        '-sn',
+        '-dn',
+        '-map_metadata',
+        '-1',
+        '-map_chapters',
+        '-1',
+        '-ac',
+        String(NORMALIZED_AUDIO_CHANNELS),
+        '-ar',
+        String(NORMALIZED_AUDIO_SAMPLE_RATE),
+        '-c:a',
+        'pcm_s16le',
+        '-f',
+        'wav',
+        '-t',
+        String(MAX_NORMALIZED_MEDIA_DURATION_SECONDS + 1),
+        '-progress',
+        'pipe:1',
+        '-nostats',
+        options.outputPath,
+      ],
+      signal,
+      onStdout: (chunk) => progressParser.push(chunk),
+    });
+  } catch (error) {
+    if (deadlineController.signal.aborted && !options.signal?.aborted) {
+      await rm(options.outputPath, { force: true });
+      throw new MediaNormalizationError(
+        'Media normalization exceeded Sotto\'s 30-minute processing limit.',
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(deadline);
+  }
   progressParser.end();
 
   if (result.exitCode !== 0) {
+    await rm(options.outputPath, { force: true });
     throw new MediaNormalizationError(result.stderr);
   }
 
-  await verifyNormalizedOutput(options.outputPath);
+  const outputBytes = await verifyNormalizedOutput(options.outputPath);
+  if (
+    (observedDurationSeconds !== null &&
+      observedDurationSeconds > MAX_NORMALIZED_MEDIA_DURATION_SECONDS) ||
+    outputBytes > MAX_NORMALIZED_AUDIO_BYTES
+  ) {
+    await rm(options.outputPath, { force: true });
+    throw new MediaNormalizationError(
+      'This recording is longer than Sotto\'s 12-hour processing limit.',
+    );
+  }
   emitProgress(1);
   return observedDurationSeconds;
 };

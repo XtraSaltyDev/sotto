@@ -63,6 +63,15 @@ typings/
 .env.*
 !.env.example
 
+# Local signing, notarization, and update credentials
+*.key
+*.pem
+*.p12
+*.pfx
+*.cer
+*.crt
+*.mobileprovision
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 
@@ -102,5 +111,6 @@ resources/diarization/*.onnx
 resources/speaker-runtime/
 resources/sidecars/*/ffmpeg
 resources/sidecars/*/whisper-cli
+resources/sidecars/*/runtime-manifest.json
 resources/sidecars/*/*.exe
 resources/sidecars/*/*.dll

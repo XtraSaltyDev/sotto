@@ -533,6 +533,10 @@ const config: ForgeConfig = {
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new WebpackPlugin({
+      devServer: {
+        allowedHosts: ['127.0.0.1', 'localhost'],
+        host: '127.0.0.1',
+      },
       devContentSecurityPolicy:
         "default-src 'self' 'unsafe-inline' data:; script-src 'self' 'unsafe-eval' 'unsafe-inline' data:; media-src 'self' sotto-media:;",
       mainConfig,

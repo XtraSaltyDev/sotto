@@ -373,6 +373,37 @@ subjectAltName=IP:127.0.0.1
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it('cancels an oversized manifest stream before buffering the full response', async () => {
+    let cancelled = false;
+    let pulls = 0;
+    const chunk = new Uint8Array(40 * 1024);
+    const fetcher = vi.fn(async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pulls += 1;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const service = serviceWith(
+      fetcher as typeof fetch,
+      await downloadsDirectory(),
+    );
+
+    await expect(service.checkForUpdates()).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'The update manifest is too large.',
+    });
+    expect(pulls).toBeLessThanOrEqual(3);
+    expect(cancelled).toBe(true);
+  });
+
   it('reports a newer published version as an available update', async () => {
     const artifact = Buffer.from('new-sotto-build');
     const fetcher = vi.fn(async () =>

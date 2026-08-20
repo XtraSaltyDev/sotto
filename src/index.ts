@@ -7,6 +7,7 @@ import {
   BrowserWindow,
   desktopCapturer,
   globalShortcut,
+  ipcMain,
   Menu,
   protocol,
   safeStorage,
@@ -35,6 +36,7 @@ import {
   resolveLiveRecordingCapability,
 } from './main/recording/desktop-audio-capture';
 import { requestMacScreenRecordingAccess } from './main/recording/macos-screen-recording-access';
+import { DisplayCaptureAuthorization } from './main/recording/display-capture-authorization';
 import { resolveEngineRuntime } from './main/runtime/engine-runtime';
 import {
   ManagedModelProvisioner,
@@ -77,8 +79,10 @@ let readyToQuit = false;
 let activityMode: ActivityMode | null = null;
 let activityDisplayId: number | null = null;
 let removeActivityDisplayListeners: (() => void) | null = null;
+let removeDisplayCaptureAuthorizationHandler: (() => void) | null = null;
 const DICTATION_ACCELERATOR = 'CommandOrControl+Shift+D';
 const ACTIVITY_WINDOW_SIZE = { height: 116, width: 520 } as const;
+const displayCaptureAuthorization = new DisplayCaptureAuthorization();
 
 if (started) app.quit();
 
@@ -160,6 +164,14 @@ const configureDesktopAudioCapture = (): void => {
   if (process.platform !== 'darwin' && process.platform !== 'win32') return;
 
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const expectedFrame =
+      mainWindow && !mainWindow.isDestroyed()
+        ? mainWindow.webContents.mainFrame
+        : null;
+    if (!displayCaptureAuthorization.consume(request, expectedFrame)) {
+      callback({});
+      return;
+    }
     void enumerateDesktopCaptureSources()
       .then((sources) => {
         const source = sources[0];
@@ -371,6 +383,24 @@ const requestDictationToggle = (): void => {
 };
 
 const initialize = async (): Promise<void> => {
+  const authorizeDisplayCapture = (event: Electron.IpcMainEvent): void => {
+    const trusted = isTrustedMediaRequester(event.sender) &&
+      event.senderFrame === event.sender.mainFrame;
+    if (trusted) {
+      displayCaptureAuthorization.authorize(event.senderFrame);
+    } else {
+      displayCaptureAuthorization.clear();
+    }
+    event.returnValue = trusted;
+  };
+  ipcMain.on(IPC_CHANNELS.authorizeDisplayCapture, authorizeDisplayCapture);
+  removeDisplayCaptureAuthorizationHandler = () => {
+    displayCaptureAuthorization.clear();
+    ipcMain.removeListener(
+      IPC_CHANNELS.authorizeDisplayCapture,
+      authorizeDisplayCapture,
+    );
+  };
   const repositionActivityWindow = (): void => {
     if (activityMode !== null && activityWindow && !activityWindow.isDestroyed()) {
       showActivityWindow();
@@ -777,6 +807,8 @@ const shutdown = async (): Promise<void> => {
   activityWindow = null;
   removeIpcHandlers?.();
   removeIpcHandlers = null;
+  removeDisplayCaptureAuthorizationHandler?.();
+  removeDisplayCaptureAuthorizationHandler = null;
   globalShortcut.unregister(DICTATION_ACCELERATOR);
   session.defaultSession.protocol.unhandle('sotto-media');
   await controller?.dispose();
