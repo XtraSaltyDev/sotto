@@ -629,11 +629,13 @@ export const TranscriptView = ({
   onUpdateSegment: (segmentIndex: number, text: string) => Promise<string | null>;
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const segmentRefs = useRef(new Map<number, HTMLDivElement>());
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocusRequest, setSearchFocusRequest] = useState(0);
   const [searchResultIndex, setSearchResultIndex] = useState(-1);
   const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null);
   const [segmentDraft, setSegmentDraft] = useState('');
@@ -741,6 +743,38 @@ export const TranscriptView = ({
   useEffect(() => {
     setSearchResultIndex(-1);
   }, [deferredSearchQuery, searchQuery, transcript?.segments]);
+
+  useEffect(() => {
+    if (!transcript?.id || loading) return undefined;
+    const focusTranscriptSearch = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented || event.isComposing || event.altKey || event.shiftKey ||
+        !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f'
+      ) return;
+      event.preventDefault();
+      setDetailMode('transcript');
+      setSearchFocusRequest((current) => current + 1);
+    };
+    window.addEventListener('keydown', focusTranscriptSearch);
+    return () => window.removeEventListener('keydown', focusTranscriptSearch);
+  }, [loading, transcript?.id]);
+
+  // Wait for the Transcript panel to mount when Find starts from Summary.
+  useEffect(() => {
+    if (searchFocusRequest === 0) return;
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  }, [searchFocusRequest]);
+
+  const finishSegmentEdit = (index: number) => {
+    setEditingSegmentIndex(null);
+    setSegmentDraft('');
+    setSegmentEditError(null);
+    requestAnimationFrame(() => {
+      segmentRefs.current.get(index)
+        ?.querySelector<HTMLButtonElement>('.segment__edit')?.focus();
+    });
+  };
 
   const moveToSearchResult = useCallback((direction: 1 | -1) => {
     const nextResultIndex = adjacentSearchResult(
@@ -1157,7 +1191,7 @@ export const TranscriptView = ({
         <section className="transcript-find" aria-labelledby="transcript-find-title">
           <div>
             <h2 id="transcript-find-title">Find in transcript</h2>
-            <p>Search this transcript and jump between matching segments.</p>
+            <p>Find a word or phrase with Command/Ctrl+F.</p>
           </div>
           <form
             className="transcript-find__form"
@@ -1174,7 +1208,19 @@ export const TranscriptView = ({
               aria-controls="transcript-segments"
               id="transcript-search"
               onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setSearchQuery('');
+                } else if (event.key === 'Enter' && event.shiftKey) {
+                  event.preventDefault();
+                  moveToSearchResult(-1);
+                }
+              }}
               placeholder="Search transcript"
+              ref={searchInputRef}
+              title="Enter: next match · Shift+Enter: previous match · Esc: clear"
               type="search"
               value={searchQuery}
             />
@@ -1284,6 +1330,11 @@ export const TranscriptView = ({
                       className="segment-editor"
                       onSubmit={(event) => {
                         event.preventDefault();
+                        if (
+                          savingSegmentIndex !== null ||
+                          segmentDraft.trim().length === 0 ||
+                          segmentDraft.trim() === segment.text
+                        ) return;
                         setSavingSegmentIndex(index);
                         setSegmentEditError(null);
                         void onUpdateSegment(index, segmentDraft)
@@ -1291,8 +1342,7 @@ export const TranscriptView = ({
                             setSavingSegmentIndex(null);
                             setSegmentEditError(reason);
                             if (!reason) {
-                              setEditingSegmentIndex(null);
-                              setSegmentDraft('');
+                              finishSegmentEdit(index);
                             }
                           })
                           .catch(() => {
@@ -1312,12 +1362,29 @@ export const TranscriptView = ({
                         id={`segment-text-${index}`}
                         maxLength={100_000}
                         onChange={(event) => setSegmentDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.nativeEvent.isComposing || savingSegmentIndex !== null) return;
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            finishSegmentEdit(index);
+                          } else if (
+                            event.key === 'Enter' && (event.metaKey || event.ctrlKey) &&
+                            !event.altKey && !event.shiftKey
+                          ) {
+                            event.preventDefault();
+                            event.currentTarget.form?.requestSubmit();
+                          }
+                        }}
                         rows={Math.max(3, Math.min(8, Math.ceil(segmentDraft.length / 72)))}
                         value={segmentDraft}
                       />
                       <p>
                         Timing and speaker stay attached. Correcting text removes old
                         word-level links for this segment.
+                      </p>
+                      <p>
+                        Save or cancel this correction before editing another segment.
+                        {' '}Command/Ctrl+Enter to save · Esc to cancel
                       </p>
                       <div className="segment-editor__actions">
                         <button
@@ -1332,11 +1399,7 @@ export const TranscriptView = ({
                         </button>
                         <button
                           disabled={savingSegmentIndex === index}
-                          onClick={() => {
-                            setEditingSegmentIndex(null);
-                            setSegmentDraft('');
-                            setSegmentEditError(null);
-                          }}
+                          onClick={() => finishSegmentEdit(index)}
                           type="button"
                         >
                           Cancel
@@ -1377,12 +1440,16 @@ export const TranscriptView = ({
                       </p>
                       <button
                         className="segment__edit"
+                        disabled={editingSegmentIndex !== null}
                         onClick={() => {
                           setEditingSegmentIndex(index);
                           setSegmentDraft(segment.text);
                           setSegmentEditError(null);
                           if (playbackAvailable) seekTo(segment.startMs);
                         }}
+                        title={editingSegmentIndex !== null
+                          ? 'Save or cancel the current correction first'
+                          : 'Correct this segment'}
                         type="button"
                       >
                         Edit segment

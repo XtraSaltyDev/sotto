@@ -4353,6 +4353,11 @@ textarea:focus-visible {
   color: var(--accent-dark);
 }
 
+.segment__edit:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 .segment-editor label {
   display: block;
   margin-bottom: 7px;
