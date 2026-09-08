@@ -16,6 +16,13 @@ On macOS 13 or newer and Windows 11 x64 it can also record a live Teams
 meeting's desktop audio and your microphone, then transcribe that capture when
 you stop.
 
+When reviewing a meeting, **Command/Ctrl+F** opens the Transcript tab and
+focuses Find. **Enter** moves to the next matching segment,
+**Shift+Enter** moves to the previous one, and **Esc** clears the search.
+While correcting a segment, **Command/Ctrl+Enter** saves and **Esc** cancels.
+Save or cancel the current correction before editing another segment so an
+unfinished draft cannot be replaced by opening a second editor.
+
 Nothing is uploaded. Sotto has no cloud service, accounts, analytics, or cloud
 capture. Its meeting-summary draft is extracted locally from the saved
 transcript and links every listed point back to its timestamp. The optional
